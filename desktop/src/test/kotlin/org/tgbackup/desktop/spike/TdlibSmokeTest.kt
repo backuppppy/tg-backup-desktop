@@ -14,6 +14,8 @@ class TdlibSmokeTest {
         try {
             val version = runBlocking { withTimeout(30_000) { tdlibVersion(dir) } }
             assertTrue(Regex("""\d+\.\d+\.\d+""").containsMatchIn(version), "unexpected version: $version")
+            val logFile = dir.resolve("tdlib.log")
+            assertTrue(Files.exists(logFile) && Files.size(logFile) > 0, "TDLib wrote nothing to $logFile")
         } finally {
             root.toFile().deleteRecursively()
         }
