@@ -19,6 +19,6 @@ object AppDirs {
                 ?: (home.trimEnd('\\', '/') + "\\AppData\\Local")
             return Paths.get(base.trimEnd('\\', '/') + "\\TGBackup")
         }
-        return Paths.get(home, ".tgbackup")
+        return Paths.get(home.trimEnd('/') + "/.tgbackup")
     }
 }
