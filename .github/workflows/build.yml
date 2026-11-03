@@ -27,10 +27,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Create data dir
         shell: bash
-        run: mkdir -p "$LOCALAPPDATA"
+        run: mkdir -p "$LOCALAPPDATA/tmp"
       - name: Desktop tests
         shell: bash
         run: ./gradlew :desktop:test
       - name: TDLib smoke
         shell: bash
+        env:
+          TEMP: ${{ runner.temp }}\תיקייה עם רווח\tmp
+          TMP: ${{ runner.temp }}\תיקייה עם רווח\tmp
         run: ./gradlew :desktop:tdlibSmoke
