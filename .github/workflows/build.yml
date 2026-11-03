@@ -91,9 +91,21 @@ jobs:
         shell: pwsh
         run: |
           $dir = "${{ runner.temp }}\inst"
-          $p = Start-Process -FilePath "desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe" `
-            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=`"$dir`"" -Wait -PassThru
+          $inst = "desktop/build/spike/${{ matrix.candidate }}/installer"
+          $kind = (Get-Content "$inst/installer-kind.txt").Trim()
+          Write-Host "INSTALLER_KIND $kind"
+          if ($kind -eq 'wix') {
+            # jpackage's exe wrapper forwards its arguments to msiexec.
+            $instArgs = '/quiet','/norestart',"INSTALLDIR=`"$dir`"",'/l*v',"`"${{ runner.temp }}\msi-install.log`""
+          } else {
+            $instArgs = '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=`"$dir`""
+          }
+          $p = Start-Process -FilePath "$inst/TGBackup-Setup.exe" -ArgumentList $instArgs -Wait -PassThru
           Write-Host "INSTALL_EXIT $($p.ExitCode)"
+          $msiLog = "${{ runner.temp }}\msi-install.log"
+          if (($p.ExitCode -ne 0 -or -not (Test-Path "$dir\TGBackup.exe")) -and (Test-Path $msiLog)) {
+            Get-Content $msiLog -Tail 60 | Where-Object { $_ -match 'error|fail|INSTALLDIR|Return value 3' } | Write-Host
+          }
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           if (-not (Test-Path "$dir\TGBackup.exe")) { Write-Error "TGBackup.exe not installed"; exit 1 }
           Get-ChildItem "$dir\app" -Directory | ForEach-Object { Write-Host "APP_DIR $($_.FullName)" }

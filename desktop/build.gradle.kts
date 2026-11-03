@@ -60,8 +60,9 @@ tasks.register<JavaExec>("tdlibSmoke") {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Embedded-view spike packaging (Windows only): app-image via jpackage, installer via Inno Setup
-// (WiX is not on windows-latest). Output: build/spike/<candidate>/installer/TGBackup-Setup.exe,
+// Embedded-view spike packaging (Windows only): app-image via jpackage, then the installer via
+// jpackage --type exe when WiX 3 (candle + light) is on PATH, otherwise via Inno Setup.
+// Output: build/spike/<candidate>/installer/TGBackup-Setup.exe (+ installer-kind.txt: wix|inno),
 // installing TGBackup.exe. All native libraries are placed inside the app dir at build time.
 // ---------------------------------------------------------------------------------------------
 
@@ -102,10 +103,12 @@ val spikeCandidates = listOf(
     ),
 )
 
-val innoCompiler: String by lazy {
+fun onPath(exe: String): String? =
     System.getenv("PATH").orEmpty().split(File.pathSeparator)
-        .map { File(it, "ISCC.exe") }.firstOrNull { it.isFile }?.path
-        ?: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
+        .map { File(it, exe) }.firstOrNull { it.isFile }?.path
+val wixAvailable: Boolean by lazy { onPath("candle.exe") != null && onPath("light.exe") != null }
+val innoCompiler: String by lazy {
+    onPath("ISCC.exe") ?: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
 }
 
 for (c in spikeCandidates) {
@@ -170,39 +173,66 @@ for (c in spikeCandidates) {
 
     tasks.register<Exec>("package${c.task}") {
         group = "spike"
-        description = "Builds TGBackup-Setup.exe (Inno Setup) for the ${c.task} candidate."
+        description = "Builds TGBackup-Setup.exe (jpackage+WiX, or Inno Setup) for the ${c.task} candidate."
         dependsOn(appImage)
         onlyIf { isWindowsHost }
         val iss = base.map { it.file("TGBackup.iss") }
         val out = base.map { it.dir("installer") }
+        val image = base.map { it.dir("image/TGBackup") }
+        val useWix = isWindowsHost && wixAvailable
         doFirst {
-            val image = base.get().dir("image/TGBackup").asFile
-            iss.get().asFile.writeText(
-                """
-                [Setup]
-                AppId=TGBackup-Spike-${c.id}
-                AppName=TG Backup
-                AppVersion=${project.version}
-                AppPublisher=TG Backup
-                DefaultDirName={autopf}\TGBackup
-                DisableProgramGroupPage=yes
-                OutputDir=${out.get().asFile.path}
-                OutputBaseFilename=TGBackup-Setup
-                Compression=lzma2
-                SolidCompression=yes
-                ArchitecturesAllowed=x64
-                ArchitecturesInstallIn64BitMode=x64
-                PrivilegesRequiredOverridesAllowed=dialog commandline
-                UninstallDisplayIcon={app}\TGBackup.exe
+            delete(out)
+            out.get().asFile.mkdirs()
+            if (!useWix) {
+                iss.get().asFile.writeText(
+                    """
+                    [Setup]
+                    AppId=TGBackup-Spike-${c.id}
+                    AppName=TG Backup
+                    AppVersion=${project.version}
+                    AppPublisher=TG Backup
+                    DefaultDirName={autopf}\TGBackup
+                    DisableProgramGroupPage=yes
+                    OutputDir=${out.get().asFile.path}
+                    OutputBaseFilename=TGBackup-Setup
+                    Compression=lzma2
+                    SolidCompression=yes
+                    ArchitecturesAllowed=x64
+                    ArchitecturesInstallIn64BitMode=x64
+                    PrivilegesRequiredOverridesAllowed=dialog commandline
+                    UninstallDisplayIcon={app}\TGBackup.exe
 
-                [Files]
-                Source: "${image.path}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+                    [Files]
+                    Source: "${image.get().asFile.path}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-                [Icons]
-                Name: "{autoprograms}\TG Backup"; Filename: "{app}\TGBackup.exe"
-                """.trimIndent() + "\n",
-            )
+                    [Icons]
+                    Name: "{autoprograms}\TG Backup"; Filename: "{app}\TGBackup.exe"
+                    """.trimIndent() + "\n",
+                )
+            }
         }
-        commandLine(innoCompiler, "/Q", iss.get().asFile.path)
+        if (useWix) {
+            commandLine(
+                spikeLauncher.get().metadata.installationPath.file("bin/jpackage.exe").asFile.path,
+                "--type", "exe",
+                "--app-image", image.get().asFile.path,
+                "--name", "TGBackup",
+                "--app-version", project.version.toString(),
+                "--vendor", "TG Backup",
+                "--win-menu",
+                "--dest", out.get().asFile.path,
+            )
+        } else {
+            commandLine(innoCompiler, "/Q", iss.get().asFile.path)
+        }
+        doLast {
+            val dir = out.get().asFile
+            if (useWix) {
+                File(dir, "TGBackup-${project.version}.exe").renameTo(File(dir, "TGBackup-Setup.exe"))
+            }
+            check(File(dir, "TGBackup-Setup.exe").isFile) { "TGBackup-Setup.exe was not produced" }
+            File(dir, "installer-kind.txt").writeText(if (useWix) "wix" else "inno")
+            println("INSTALLER_KIND ${if (useWix) "wix" else "inno"}")
+        }
     }
 }
