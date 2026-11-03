@@ -25,6 +25,8 @@ tasks.test {
     useJUnitPlatform()
     // Paths with Hebrew characters need a UTF-8 file-name encoding on POSIX hosts.
     environment("LC_ALL", "C.UTF-8")
+    // CI: run the program under a Hebrew+space data dir without touching Gradle's own env.
+    System.getenv("TGB_TEST_LOCALAPPDATA")?.let { environment("LOCALAPPDATA", it) }
 }
 
 tasks.register<JavaExec>("tdlibSmoke") {
@@ -33,4 +35,10 @@ tasks.register<JavaExec>("tdlibSmoke") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("org.tgbackup.desktop.spike.TdlibSmokeKt")
     environment("LC_ALL", "C.UTF-8")
+    System.getenv("TGB_TEST_LOCALAPPDATA")?.let {
+        environment("LOCALAPPDATA", it)
+        // TDLib's native DLL is extracted to java.io.tmpdir, which Windows derives from TEMP/TMP.
+        environment("TEMP", "$it\\tmp")
+        environment("TMP", "$it\\tmp")
+    }
 }

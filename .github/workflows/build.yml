@@ -24,19 +24,17 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Create data dir
-        shell: bash
+        shell: pwsh
         env:
-          LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
-        run: mkdir -p "$LOCALAPPDATA/tmp"
+          TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
+        run: New-Item -ItemType Directory -Force -Path "$env:TGB_TEST_LOCALAPPDATA\tmp" | Out-Null
       - name: Desktop tests
-        shell: bash
+        shell: pwsh
         env:
-          LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
-        run: ./gradlew :desktop:test
+          TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
+        run: ./gradlew.bat :desktop:test
       - name: TDLib smoke
-        shell: bash
+        shell: pwsh
         env:
-          LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
-          TEMP: ${{ runner.temp }}\תיקייה עם רווח\tmp
-          TMP: ${{ runner.temp }}\תיקייה עם רווח\tmp
-        run: ./gradlew :desktop:tdlibSmoke
+          TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
+        run: ./gradlew.bat :desktop:tdlibSmoke
