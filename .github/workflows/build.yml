@@ -44,3 +44,108 @@ jobs:
           $log = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter tdlib.log
           if (-not $log) { Write-Error "tdlib.log not created under Hebrew LOCALAPPDATA"; exit 1 }
           $log | ForEach-Object { Write-Host "TDLIB_LOG $($_.FullName)" }
+  windows-spike:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: webview2
+            task: WebView2
+          - candidate: jcef
+            task: Jcef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Probe runner (WiX, Inno Setup, WebView2 runtime)
+        shell: pwsh
+        run: |
+          foreach ($t in 'candle','light','wix','iscc') {
+            $found = where.exe $t 2>$null
+            if ($found) { Write-Host "PROBE_TOOL $t => $found" } else { Write-Host "PROBE_TOOL $t => (not found)" }
+          }
+          Write-Host "PROBE_INNO_DEFAULT $(Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')"
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (Test-Path $key) { Write-Host "WEBVIEW2_RUNTIME preinstalled=yes version=$((Get-ItemProperty $key).pv)" }
+          else { Write-Host "WEBVIEW2_RUNTIME preinstalled=no" }
+          exit 0
+      - name: Build installer
+        shell: pwsh
+        run: |
+          ./gradlew.bat ":desktop:package${{ matrix.task }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Installer size
+        shell: pwsh
+        run: |
+          $f = Get-Item "desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe"
+          Write-Host ("INSTALLER_SIZE_MB ${{ matrix.candidate }} {0:N1}" -f ($f.Length / 1MB))
+          $img = "desktop/build/spike/${{ matrix.candidate }}/image/TGBackup"
+          $sum = (Get-ChildItem -Recurse -File $img | Measure-Object -Sum Length).Sum
+          Write-Host ("APP_IMAGE_SIZE_MB ${{ matrix.candidate }} {0:N1}" -f ($sum / 1MB))
+      - name: Silent install
+        shell: pwsh
+        run: |
+          $dir = "${{ runner.temp }}\inst"
+          $p = Start-Process -FilePath "desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe" `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=`"$dir`"" -Wait -PassThru
+          Write-Host "INSTALL_EXIT $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          if (-not (Test-Path "$dir\TGBackup.exe")) { Write-Error "TGBackup.exe not installed"; exit 1 }
+          Get-ChildItem "$dir\app" -Directory | ForEach-Object { Write-Host "APP_DIR $($_.FullName)" }
+          Get-ChildItem -Recurse "$dir\app" -Filter *.dll | Select-Object -First 12 | ForEach-Object { Write-Host "NATIVE $($_.FullName)" }
+      - name: Smoke (offline proxy) + screenshot
+        shell: pwsh
+        env:
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+          TGB_FORCE_PROXY: 127.0.0.1:9
+        run: |
+          $shots = "${{ runner.temp }}\shots"
+          New-Item -ItemType Directory -Force -Path $shots | Out-Null
+          $out = "$shots\smoke-stdout.txt"
+          $err = "$shots\smoke-stderr.txt"
+          $p = Start-Process -FilePath "${{ runner.temp }}\inst\TGBackup.exe" -ArgumentList '--smoke' `
+            -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          $null = $p.Handle
+          $deadline = (Get-Date).AddSeconds(90)
+          $loaded = $false
+          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+            if ((Test-Path $out) -and (Select-String -Path $out -Pattern 'PAGE_LOADED' -Quiet)) { $loaded = $true; break }
+            Start-Sleep -Milliseconds 250
+          }
+          if ($loaded) {
+            Start-Sleep -Milliseconds 1500
+            try {
+              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $bmp.Save("$shots\screenshot-${{ matrix.candidate }}.png", [System.Drawing.Imaging.ImageFormat]::Png)
+              Write-Host "SCREENSHOT saved $($b.Width)x$($b.Height)"
+            } catch { Write-Host "SCREENSHOT_FAIL $_" }
+          }
+          if (-not $p.WaitForExit(30000)) { Stop-Process -Id $p.Id -Force; Write-Host "SMOKE_HUNG" }
+          Write-Host "--- stdout"; Get-Content $out
+          Write-Host "--- stderr"; Get-Content $err
+          Write-Host "SMOKE_EXIT $($p.ExitCode)"
+          if (-not (Select-String -Path $out -Pattern '^PAGE_LOADED' -Quiet)) { Write-Error "PAGE_LOADED not printed"; exit 1 }
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-${{ matrix.candidate }}
+          path: ${{ runner.temp }}\shots
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-${{ matrix.candidate }}
+          path: desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe
+          if-no-files-found: warn
+          compression-level: 0
