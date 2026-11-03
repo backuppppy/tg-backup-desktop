@@ -41,4 +41,9 @@ tasks.register<JavaExec>("tdlibSmoke") {
         environment("TEMP", "$it\\tmp")
         environment("TMP", "$it\\tmp")
     }
+    // The real app points java.io.tmpdir at its own ASCII directory so TDLib's DLLs can be loaded.
+    System.getenv("TGB_NATIVE_TMP")?.let {
+        doFirst { file(it).mkdirs() }
+        jvmArgs("-Djava.io.tmpdir=$it")
+    }
 }

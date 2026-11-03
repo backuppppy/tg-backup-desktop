@@ -37,4 +37,10 @@ jobs:
         shell: pwsh
         env:
           TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
-        run: ./gradlew.bat :desktop:tdlibSmoke
+          TGB_NATIVE_TMP: ${{ runner.temp }}\natives
+        run: |
+          ./gradlew.bat :desktop:tdlibSmoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter tdlib.log
+          if (-not $log) { Write-Error "tdlib.log not created under Hebrew LOCALAPPDATA"; exit 1 }
+          $log | ForEach-Object { Write-Host "TDLIB_LOG $($_.FullName)" }
