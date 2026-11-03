@@ -34,6 +34,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cio:3.6.1")
     // Embedded-view spike candidates.
     implementation("net.java.dev.jna:jna:5.19.1")
+    implementation("net.java.dev.jna:jna-platform:5.19.1")
     implementation("me.friwi:jcefmaven:152.0.6")
     testImplementation(kotlin("test"))
     webviewNatives("com.github.webview:webview_java:1.3.0") { isTransitive = false }
@@ -64,11 +65,9 @@ tasks.register<JavaExec>("tdlibSmoke") {
         environment("TEMP", "$it\\tmp")
         environment("TMP", "$it\\tmp")
     }
-    // The real app points java.io.tmpdir at its own ASCII directory so TDLib's DLLs can be loaded.
-    System.getenv("TGB_NATIVE_TMP")?.let {
-        doFirst { file(it).mkdirs() }
-        jvmArgs("-Djava.io.tmpdir=$it")
-    }
+    // The program itself moves java.io.tmpdir to an ASCII dir (NativeTmp); TGB_NATIVE_TMP_OFF=1 disables
+    // that so CI can probe the library's behaviour with the Hebrew TEMP above.
+    System.getenv("TGB_NATIVE_TMP_OFF")?.let { environment("TGB_NATIVE_TMP_OFF", it) }
 }
 
 // ---------------------------------------------------------------------------------------------

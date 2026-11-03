@@ -8,6 +8,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.tgbackup.desktop.AppDirs
+import org.tgbackup.desktop.NativeTmp
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.system.exitProcess
@@ -34,6 +35,8 @@ suspend fun tdlibVersion(dbDir: Path): String {
 }
 
 fun main() {
+    if (System.getenv("TGB_NATIVE_TMP_OFF") != "1") println("NATIVE_TMP ${NativeTmp.apply() ?: "default"}")
+    println("JAVA_TMPDIR ${System.getProperty("java.io.tmpdir")}")
     try {
         val v = runBlocking { withTimeout(30_000) { tdlibVersion(AppDirs.dataDir().resolve("tdlib-smoke")) } }
         println("TDLIB_OK $v")

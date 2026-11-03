@@ -6,7 +6,14 @@ import com.sun.jna.Native
 import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import com.sun.jna.WString
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef.HWND
+import com.sun.jna.platform.win32.WinDef.RECT
+import com.sun.jna.platform.win32.WinUser
 import org.tgbackup.desktop.AppDirs
+import org.tgbackup.desktop.NativeTmp
+import org.tgbackup.desktop.ScreenRect
+import org.tgbackup.desktop.WindowFit
 import java.io.File
 
 /**
@@ -17,6 +24,7 @@ import java.io.File
 internal interface WebviewLib : Library {
     fun webview_create(debug: Int, window: Pointer?): Pointer?
     fun webview_destroy(w: Pointer)
+    fun webview_get_window(w: Pointer): Pointer?
     fun webview_run(w: Pointer)
     fun webview_terminate(w: Pointer)
     fun webview_dispatch(w: Pointer, fn: DispatchFn, arg: Pointer?)
@@ -40,11 +48,14 @@ private interface Kernel32Env : Library {
 }
 
 private const val WEBVIEW_HINT_NONE = 0
+private const val SWP_NOZORDER = 0x0004
+private const val SWP_NOACTIVATE = 0x0010
 
 /** Strong references so JNA callbacks are not collected while native code holds them. */
 private val keepAlive = mutableListOf<Any>()
 
 fun main(args: Array<String>) {
+    NativeTmp.apply()
     val smoke = SpikeSmoke("--smoke" in args)
     smoke.startWatchdog()
     try {
@@ -80,9 +91,11 @@ private fun run(smoke: SpikeSmoke) {
 
     val w = lib.webview_create(0, null)
         ?: return smoke.fail("webview_create returned null (WebView2 runtime missing?)")
+    val hwnd = lib.webview_get_window(w)?.let(::HWND)
     val terminate = DispatchFn { view, _ -> view?.let(lib::webview_terminate) }
     val onLoad = BindFn { _, req, _ ->
         if (req != null && req.contains("127.0.0.1")) {
+            hwnd?.let(::reportPlacement)
             smoke.loaded { lib.webview_dispatch(w, terminate, null) }
         }
     }
@@ -90,6 +103,7 @@ private fun run(smoke: SpikeSmoke) {
 
     lib.webview_set_title(w, WINDOW_TITLE)
     lib.webview_set_size(w, WINDOW_WIDTH, WINDOW_HEIGHT, WEBVIEW_HINT_NONE)
+    hwnd?.let(::centreOnScreen) ?: println("WINDOW_FIT skipped (no HWND)")
     lib.webview_bind(w, "tgbLoaded", onLoad, null)
     lib.webview_init(
         w,
@@ -99,4 +113,42 @@ private fun run(smoke: SpikeSmoke) {
     lib.webview_run(w)
     lib.webview_destroy(w)
     server.stop()
+}
+
+private fun workAreaOf(hwnd: HWND): ScreenRect {
+    val monitor = User32.INSTANCE.MonitorFromWindow(hwnd, WinUser.MONITOR_DEFAULTTONEAREST)
+    val info = WinUser.MONITORINFO()
+    check(User32.INSTANCE.GetMonitorInfo(monitor, info).booleanValue()) { "GetMonitorInfo failed" }
+    return info.rcWork.toScreenRect()
+}
+
+private fun windowRectOf(hwnd: HWND): ScreenRect {
+    val r = RECT()
+    check(User32.INSTANCE.GetWindowRect(hwnd, r)) { "GetWindowRect failed" }
+    return r.toScreenRect()
+}
+
+private fun RECT.toScreenRect() = ScreenRect(left, top, right, bottom)
+
+/**
+ * webview_set_size only sizes the window; Windows picks its position, so on a small screen part of the
+ * window can end up off screen. Uses the real outer size (borders, DPI scaling) and the work area of
+ * the monitor the window is on, then centres it there, shrinking a side that does not fit.
+ */
+private fun centreOnScreen(hwnd: HWND) {
+    val work = workAreaOf(hwnd)
+    val current = windowRectOf(hwnd)
+    val target = WindowFit.fit(work, current.width, current.height)
+    User32.INSTANCE.SetWindowPos(
+        hwnd, null, target.left, target.top, target.width, target.height, SWP_NOZORDER or SWP_NOACTIVATE,
+    )
+    println("WINDOW_FIT work=$work from=$current to=$target")
+}
+
+/** Smoke evidence: where the window really is once the page has loaded. */
+private fun reportPlacement(hwnd: HWND) {
+    val work = workAreaOf(hwnd)
+    val rect = windowRectOf(hwnd)
+    println("WINDOW_RECT $rect WORK_AREA $work")
+    println("WINDOW_INSIDE ${if (rect.isInside(work)) "yes" else "no"}")
 }

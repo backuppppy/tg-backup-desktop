@@ -33,14 +33,35 @@ jobs:
         env:
           TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
         run: ./gradlew.bat :desktop:test
+      - name: TDLib probe without NativeTmp (Hebrew TEMP, evidence only)
+        shell: pwsh
+        env:
+          TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
+          TGB_NATIVE_TMP_OFF: '1'
+        run: |
+          # Records whether the library itself can load its DLLs from a Hebrew java.io.tmpdir.
+          # The result is printed, not asserted: the program never runs this way.
+          $out = ./gradlew.bat :desktop:tdlibSmoke 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $out -split "`n" | Select-String -Pattern 'TDLIB_|JAVA_TMPDIR|Exception|UnsatisfiedLink|Caused by' |
+            Select-Object -First 20 | ForEach-Object { Write-Host "HEBREW_TMP_PROBE_LINE $($_.Line.Trim())" }
+          Write-Host "HEBREW_TMP_PROBE exit=$code"
+          exit 0
       - name: TDLib smoke
         shell: pwsh
         env:
           TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
-          TGB_NATIVE_TMP: ${{ runner.temp }}\natives
         run: |
-          ./gradlew.bat :desktop:tdlibSmoke
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Same Hebrew LOCALAPPDATA and TEMP; the program must move java.io.tmpdir to ASCII by itself.
+          $out = ./gradlew.bat :desktop:tdlibSmoke 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0) { exit $code }
+          $line = ($out -split "`n" | Select-String -Pattern '^NATIVE_TMP ' | Select-Object -First 1).Line
+          if (-not $line) { Write-Error "NATIVE_TMP not printed"; exit 1 }
+          $dir = $line.Substring(11).Trim()
+          if ($dir -eq 'default' -or $dir -match '[^\x20-\x7E]') { Write-Error "native tmp dir is not ASCII: $dir"; exit 1 }
+          Write-Host "NATIVE_TMP_OK $dir"
           $log = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter tdlib.log
           if (-not $log) { Write-Error "tdlib.log not created under Hebrew LOCALAPPDATA"; exit 1 }
           $log | ForEach-Object { Write-Host "TDLIB_LOG $($_.FullName)" }
@@ -152,6 +173,9 @@ jobs:
           Write-Host "SMOKE_EXIT $($p.ExitCode)"
           if (-not (Select-String -Path $out -Pattern '^PAGE_LOADED' -Quiet)) { Write-Error "PAGE_LOADED not printed"; exit 1 }
           if ($p.ExitCode -ne 0) { exit 1 }
+          if ('${{ matrix.candidate }}' -eq 'webview2' -and -not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
+            Write-Error "window is not fully inside the screen work area"; exit 1
+          }
           $profileName = if ('${{ matrix.candidate }}' -eq 'jcef') { 'cef' } else { 'webview2' }
           $profileDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup\$profileName"
           $entries = @(Get-ChildItem -Force -Path $profileDir -ErrorAction SilentlyContinue)
