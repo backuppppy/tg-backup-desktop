@@ -46,13 +46,13 @@
 - Produces: `object AppDirs { fun dataDir(env: Map<String,String> = System.getenv(), home: String = System.getProperty("user.home"), os: String = System.getProperty("os.name")): java.nio.file.Path }`. Windows → `%LOCALAPPDATA%\TGBackup`. If `LOCALAPPDATA` is missing → `<home>\AppData\Local\TGBackup`. Others → `<home>/.tgbackup`.
 - Produces: Gradle projects `:export-core` and `:desktop`. The wrapper pins Gradle 8.14.3.
 
-- [ ] **Step 1:** Copy export-core via `git archive` (Global Constraints). Confirm no `*LiveTest*` files: `find export-core -name '*LiveTest*'` must print nothing.
-- [ ] **Step 2:** Write `AppDirsTest` with these cases: `windows LOCALAPPDATA → C:\Users\משה כהן\AppData\Local\TGBackup`; `windows without LOCALAPPDATA → <home>\AppData\Local\TGBackup`; `linux → /home/u/.tgbackup`. Compare paths as strings.
-- [ ] **Step 3:** Run `./gradlew :desktop:test`. Expected: FAIL, unresolved `AppDirs`.
-- [ ] **Step 4:** Implement `AppDirs.dataDir`. Write `Main.kt` that prints `TGBackup <version>` and the data dir.
-- [ ] **Step 5:** Run `./gradlew test`. Expected: PASS for export-core's existing tests and `AppDirsTest`.
-- [ ] **Step 6:** Write `build.yml` job `linux` (ubuntu-latest, Temurin 17, `./gradlew test`), triggered on push and pull_request.
-- [ ] **Step 7:** Commit and push. Confirm the `linux` job is green with `gh run watch`.
+- [x] **Step 1:** Copy export-core via `git archive` (Global Constraints). Confirm no `*LiveTest*` files: `find export-core -name '*LiveTest*'` must print nothing.
+- [x] **Step 2:** Write `AppDirsTest` with these cases: `windows LOCALAPPDATA → C:\Users\משה כהן\AppData\Local\TGBackup`; `windows without LOCALAPPDATA → <home>\AppData\Local\TGBackup`; `linux → /home/u/.tgbackup`. Compare paths as strings.
+- [x] **Step 3:** Run `./gradlew :desktop:test`. Expected: FAIL, unresolved `AppDirs`.
+- [x] **Step 4:** Implement `AppDirs.dataDir`. Write `Main.kt` that prints `TGBackup <version>` and the data dir.
+- [x] **Step 5:** Run `./gradlew test`. Expected: PASS for export-core's existing tests and `AppDirsTest`.
+- [x] **Step 6:** Write `build.yml` job `linux` (ubuntu-latest, Temurin 17, `./gradlew test`), triggered on push and pull_request.
+- [x] **Step 7:** Commit and push. Confirm the `linux` job is green with `gh run watch`.
 
 ### Task 2: TDLib loads and answers on the JVM (Linux)
 
@@ -65,11 +65,11 @@
 - Consumes: `AppDirs.dataDir()`.
 - Produces: `suspend fun tdlibVersion(dbDir: java.nio.file.Path): String`, which returns TDLib's `version` option without logging in. Also a `main` that prints `TDLIB_OK <version>` and exits 0, or prints `TDLIB_FAIL <reason>` and exits 1. Follow the client creation pattern in `/root/tg-backup-apk/app/src/main/java/org/tgbackup/app/tg/AccountClient.kt`. Check the JVM API in the library's sources jar.
 
-- [ ] **Step 1:** Write `TdlibSmokeTest.tdlibReportsAVersion`: `tdlibVersion(tempDir resolved under "תיקייה עם רווח")` matches `Regex("""\d+\.\d+\.\d+""")` within 30 s.
-- [ ] **Step 2:** Run `./gradlew :desktop:test --tests '*TdlibSmokeTest*'`. Expected: FAIL, unresolved `tdlibVersion`.
-- [ ] **Step 3:** Implement it. Close the client in `finally`.
-- [ ] **Step 4:** Run the test. Expected: PASS on linux/arm64 here. A native load failure is a finding: record it, do not work around it silently.
-- [ ] **Step 5:** Commit.
+- [x] **Step 1:** Write `TdlibSmokeTest.tdlibReportsAVersion`: `tdlibVersion(tempDir resolved under "תיקייה עם רווח")` matches `Regex("""\d+\.\d+\.\d+""")` within 30 s.
+- [x] **Step 2:** Run `./gradlew :desktop:test --tests '*TdlibSmokeTest*'`. Expected: FAIL, unresolved `tdlibVersion`.
+- [x] **Step 3:** Implement it. Close the client in `finally`.
+- [x] **Step 4:** Run the test. Expected: PASS on linux/arm64 here. A native load failure is a finding: record it, do not work around it silently.
+- [x] **Step 5:** Commit.
 
 ### Task 3: Windows CI — TDLib smoke on windows-latest
 
@@ -79,9 +79,9 @@
 **Interfaces:**
 - Consumes: the `tdlibSmoke` Gradle task from Task 2.
 
-- [ ] **Step 1:** Add job `windows` (windows-latest, Temurin 17): `./gradlew :desktop:test` and `./gradlew :desktop:tdlibSmoke`, with env `LOCALAPPDATA=${{ runner.temp }}\תיקייה עם רווח` so the data dir path holds Hebrew and a space.
-- [ ] **Step 2:** Push. Expected: the log contains `TDLIB_OK` and the job is green. If red, keep the log as evidence for the result doc. Do not mask failures with `continue-on-error`.
-- [ ] **Step 3:** Commit.
+- [x] **Step 1:** Add job `windows` (windows-latest, Temurin 17): `./gradlew :desktop:test` and `./gradlew :desktop:tdlibSmoke`, with env `LOCALAPPDATA=${{ runner.temp }}\תיקייה עם רווח` so the data dir path holds Hebrew and a space.
+- [x] **Step 2:** Push. Expected: the log contains `TDLIB_OK` and the job is green. If red, keep the log as evidence for the result doc. Do not mask failures with `continue-on-error`.
+- [x] **Step 3:** Commit.
 
 ### Task 4: Embedded view spike — two candidates, measured
 
@@ -96,13 +96,13 @@
 - Produces: `class LocalPageServer { fun start(): Int /* bound port, 127.0.0.1, port 0 */; fun stop() }`. It serves `GET /` with a Hebrew RTL page `<html dir="rtl" lang="he"><title>TG Backup</title>…שלום…</html>` and `GET /health` → `ok`.
 - Produces: for each candidate, `main(args)` with `--smoke`. It starts `LocalPageServer`, opens a window titled `TG Backup` at 1100×750 loading `http://127.0.0.1:<port>/`, waits for the page's load event, prints `PAGE_LOADED`, holds the window for 5 s, then exits 0. On failure or a 60 s timeout it prints `PAGE_FAIL <reason>` and exits 1.
 
-- [ ] **Step 1:** Write `LocalPageServerTest`: `start()` returns a port > 0; `GET /health` returns `ok`; `GET /` contains `dir="rtl"` and `שלום`; two servers started at once get different ports.
-- [ ] **Step 2:** Run it. Expected: FAIL (unresolved).
-- [ ] **Step 3:** Implement `LocalPageServer` with Ktor, bound to 127.0.0.1, port 0.
-- [ ] **Step 4:** Run it. Expected: PASS.
-- [ ] **Step 5:** Implement both candidate windows.
-- [ ] **Step 6:** Add jpackage tasks producing `TGBackup-Setup.exe` per candidate, on Windows only. Use jpackage `--type exe` when WiX is available on the runner; otherwise build an app-image and an Inno Setup installer (Inno Setup is preinstalled on windows-latest). Record which path was used.
-- [ ] **Step 7:** CI job `windows-spike`, run for each candidate:
+- [x] **Step 1:** Write `LocalPageServerTest`: `start()` returns a port > 0; `GET /health` returns `ok`; `GET /` contains `dir="rtl"` and `שלום`; two servers started at once get different ports.
+- [x] **Step 2:** Run it. Expected: FAIL (unresolved).
+- [x] **Step 3:** Implement `LocalPageServer` with Ktor, bound to 127.0.0.1, port 0.
+- [x] **Step 4:** Run it. Expected: PASS.
+- [x] **Step 5:** Implement both candidate windows.
+- [x] **Step 6:** Add jpackage tasks producing `TGBackup-Setup.exe` per candidate, on Windows only. Use jpackage `--type exe` when WiX is available on the runner; otherwise build an app-image and an Inno Setup installer (Inno Setup is preinstalled on windows-latest). Record which path was used.
+- [x] **Step 7:** CI job `windows-spike`, run for each candidate:
   - Build the installer.
   - Print its size in MB.
   - Install it silently into `${{ runner.temp }}\inst`.
@@ -110,18 +110,18 @@
   - Assert `PAGE_LOADED`.
   - Take a PowerShell screenshot while the window is open and upload it plus the installers as artifacts.
   - Record whether the WebView2 runtime was preinstalled (registry key `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`).
-- [ ] **Step 8:** Commit and push. Collect the run id, sizes, smoke results and screenshot artifact names.
+- [x] **Step 8:** Commit and push. Collect the run id, sizes, smoke results and screenshot artifact names.
 
 ### Task 5: Spike results and decision record
 
 **Files:**
 - Create: `docs/superpowers/specs/2026-11-03-spike-results.md`
 
-- [ ] **Step 1:** Write the results with evidence (CI run ids, log lines, sizes):
+- [x] **Step 1:** Write the results with evidence (CI run ids, log lines, sizes):
   - TDLib on Linux and Windows.
   - Per candidate: installer size, offline smoke, screenshot, Hebrew-path behaviour, and the WebView2 runtime finding.
   - A recommended component with a one-line reason, and the fallback for a missing WebView2 runtime if it is chosen.
-- [ ] **Step 2:** Commit and push.
+- [x] **Step 2:** Commit and push.
 
 ---
 
