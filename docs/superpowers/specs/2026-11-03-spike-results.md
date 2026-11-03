@@ -13,7 +13,9 @@ Evidence run: GitHub Actions run `41669134311` on commit `a807487` (all four job
 
 Findings:
 - `tdl-coroutines-jvm:15.0.0` loads `tdjsonjava.dll` from its JAR on Windows with no extra setup. TDLib version 1.8.67.
-- The green run uses an ASCII `java.io.tmpdir` (`TGB_NATIVE_TMP`, commit `51054a0`) for the native DLL extraction; the run before it, with a Hebrew `TEMP`, failed (run `41653524803`, log no longer available, so the cause is not proven). **The real program must not depend on this:** set `java.io.tmpdir` (or the library's extract dir) to an ASCII path, e.g. `C:\ProgramData\TGBackup\natives` or a dir next to `TGBackup.exe`, before TDLib loads, because a Hebrew Windows user name puts `%TEMP%` under a Hebrew path. The TDLib database dir itself works under a Hebrew path.
+- **A Hebrew temp dir breaks TDLib (proven).** The library extracts its DLLs into a new dir under `java.io.tmpdir` on every start and loads them from there. With a Hebrew `TEMP` it fails: `UnsatisfiedLinkError: ...\tmp\windows-x64...\libcrypto-3-x64.dll: Can't find dependent libraries` (probe step in runs `41725414413` and `41726724213`). The TDLib database dir itself works under a Hebrew path.
+- Setting `java.io.tmpdir` from `main` does not help, because Java 17 fixes it when the JVM starts (run `41725414413`: property changed, extraction still went to the Hebrew dir).
+- **Fix: `NativeTmp.ensureAsciiTmpdir`**, the first call in `main`. When the temp dir is not ASCII, the program restarts itself once with `TEMP`/`TMP` set to `<data dir>\tmp` (if ASCII) or `%ProgramData%\TGBackup-<user hash>\tmp`, and cleans leftover DLL dirs older than an hour. Verified in run `41726724213`: `NATIVE_TMP_RELAUNCH C:\ProgramData\TGBackup-c368a648\tmp` then `TDLIB_OK 1.8.67`. The installed `TGBackup.exe` with a Hebrew `TEMP` also restarts this way and loads the page.
 
 ## 2. Embedded view — two candidates
 
@@ -32,7 +34,7 @@ Both installers were built with jpackage `--type exe` (WiX 3.14 is on the runner
 WebView2 runtime on the runner: `preinstalled=yes version=156.0.4314.50`.
 
 Notes:
-- In the WebView2 screenshot the 1100×750 window is placed off-centre and clipped on the runner's 1024×768 screen. Not a rendering problem: the real window must be centred and clamped to the screen work area (next plan).
+- **Window placement (fixed).** The first WebView2 run placed the 1100×750 window off-centre and clipped on the runner's 1024×768 screen. Now `WindowFit` centres the window in the work area of its monitor and shrinks a side that does not fit. Run `41726724213`: `WINDOW_RECT (0,0,1024,720) WORK_AREA (0,0,1024,720)`, `WINDOW_INSIDE yes`, and CI fails if the window is not fully inside the screen.
 - The jitpack `webview` DLLs are pinned by SHA-256 in the build (commit `a807487`).
 
 ## 3. Decision
@@ -50,7 +52,7 @@ JCEF is kept as the documented alternative if WebView2 turns out unstable on the
 
 ## 4. Review-focus answers
 
-1. Hebrew/space user name: data dirs, TDLib db and view profile all work under a Hebrew path. Native extraction temp dir must be ASCII (see §1).
+1. Hebrew/space user name: data dirs, TDLib db and view profile all work under a Hebrew path. A Hebrew temp dir breaks TDLib, and `NativeTmp` handles it with a restart (see §1).
 2. Offline first run: both candidates load the local page with an unreachable proxy.
 3. Port in use: `LocalPageServer` binds `127.0.0.1:0` and reports the chosen port (tested, two servers get different ports).
 4. Second launch: owned by the next plan (single instance).
@@ -58,4 +60,4 @@ JCEF is kept as the documented alternative if WebView2 turns out unstable on the
 
 ## 5. Next plan
 
-Delete `org.tgbackup.desktop.spike` except what is reused (`LocalPageServer` pattern, WebView2 window, ASCII native tmp dir), drop the JCEF package task, and write plan 2: engine port (`engine`, `data`, `tg`, `export` from the Android app).
+Delete `org.tgbackup.desktop.spike` except what is reused (`LocalPageServer` pattern, WebView2 window; `WindowFit` and `NativeTmp` already live outside the spike package), drop the JCEF package task, and write plan 2: engine port (`engine`, `data`, `tg`, `export` from the Android app).
