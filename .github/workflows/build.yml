@@ -61,6 +61,7 @@ jobs:
           if (-not $line) { Write-Error "NATIVE_TMP not printed"; exit 1 }
           $dir = $line.Substring(11).Trim()
           if ($dir -eq 'default' -or $dir -match '[^\x20-\x7E]') { Write-Error "native tmp dir is not ASCII: $dir"; exit 1 }
+          if (-not ($out -match 'NATIVE_TMP_RELAUNCH ')) { Write-Error "expected a relaunch with an ASCII TEMP"; exit 1 }
           Write-Host "NATIVE_TMP_OK $dir"
           $log = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter tdlib.log
           if (-not $log) { Write-Error "tdlib.log not created under Hebrew LOCALAPPDATA"; exit 1 }
@@ -142,6 +143,11 @@ jobs:
           # Hebrew+space data dir for the installed program only (this step runs no Gradle).
           New-Item -ItemType Directory -Force -Path $env:TGB_HEB_LOCALAPPDATA | Out-Null
           $env:LOCALAPPDATA = $env:TGB_HEB_LOCALAPPDATA
+          # A Hebrew TEMP as well, as for a Hebrew Windows user name: the program must restart itself
+          # with an ASCII TEMP (NativeTmp) and still show the page.
+          New-Item -ItemType Directory -Force -Path "$env:TGB_HEB_LOCALAPPDATA\tmp" | Out-Null
+          $env:TEMP = "$env:TGB_HEB_LOCALAPPDATA\tmp"
+          $env:TMP = "$env:TGB_HEB_LOCALAPPDATA\tmp"
           $shots = "${{ runner.temp }}\shots"
           New-Item -ItemType Directory -Force -Path $shots | Out-Null
           $out = "$shots\smoke-stdout.txt"
@@ -175,6 +181,9 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
           if ('${{ matrix.candidate }}' -eq 'webview2' -and -not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
             Write-Error "window is not fully inside the screen work area"; exit 1
+          }
+          if ('${{ matrix.candidate }}' -eq 'webview2' -and -not (Select-String -Path $out -Pattern '^NATIVE_TMP_RELAUNCH ' -Quiet)) {
+            Write-Error "TGBackup.exe did not restart with an ASCII TEMP"; exit 1
           }
           $profileName = if ('${{ matrix.candidate }}' -eq 'jcef') { 'cef' } else { 'webview2' }
           $profileDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup\$profileName"

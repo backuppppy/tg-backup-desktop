@@ -55,7 +55,7 @@ private const val SWP_NOACTIVATE = 0x0010
 private val keepAlive = mutableListOf<Any>()
 
 fun main(args: Array<String>) {
-    NativeTmp.apply()
+    NativeTmp.ensureAsciiTmpdir("org.tgbackup.desktop.spike.WebView2WindowKt", args)
     val smoke = SpikeSmoke("--smoke" in args)
     smoke.startWatchdog()
     try {

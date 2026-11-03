@@ -103,4 +103,48 @@ class NativeTmpTest {
         assertFalse(old.exists())
         assertTrue(fresh.exists())
     }
+
+    @Test
+    fun relaunchOnlyForANonAsciiTmpdirOnWindows() {
+        assertTrue(NativeTmp.needsRelaunch("C:\\Users\\משה כהן\\AppData\\Local\\Temp\\", "Windows 11", emptyMap()))
+        assertFalse(NativeTmp.needsRelaunch("C:\\Users\\moshe\\AppData\\Local\\Temp\\", "Windows 11", emptyMap()))
+        assertFalse(NativeTmp.needsRelaunch("/tmp/משה", "Linux", emptyMap()))
+    }
+
+    @Test
+    fun relaunchHappensOnlyOnce() {
+        assertFalse(
+            NativeTmp.needsRelaunch("C:\\Users\\משה\\Temp", "Windows 11", mapOf(NativeTmp.RELAUNCHED_ENV to "1")),
+        )
+    }
+
+    @Test
+    fun relaunchOfTheInstalledExeRepeatsOnlyTheProgramArgs() {
+        val cmd = NativeTmp.relaunchCommand(
+            command = "C:\\Program Files\\TGBackup\\TGBackup.exe",
+            jvmArgs = listOf("-Dtgb.natives=C:\\Program Files\\TGBackup\\app\\natives"),
+            classPath = "ignored.jar",
+            mainClass = "org.tgbackup.desktop.MainKt",
+            args = listOf("--smoke"),
+        )
+        assertEquals(listOf("C:\\Program Files\\TGBackup\\TGBackup.exe", "--smoke"), cmd)
+    }
+
+    @Test
+    fun relaunchOfAPlainJavaKeepsJvmArgsAndClasspath() {
+        val cmd = NativeTmp.relaunchCommand(
+            command = "C:\\jdk\\bin\\java.exe",
+            jvmArgs = listOf("-Dfile.encoding=UTF-8", "-Xmx512m"),
+            classPath = "a.jar;b.jar",
+            mainClass = "org.tgbackup.desktop.spike.TdlibSmokeKt",
+            args = listOf("x"),
+        )
+        assertEquals(
+            listOf(
+                "C:\\jdk\\bin\\java.exe", "-Dfile.encoding=UTF-8", "-Xmx512m",
+                "-cp", "a.jar;b.jar", "org.tgbackup.desktop.spike.TdlibSmokeKt", "x",
+            ),
+            cmd,
+        )
+    }
 }

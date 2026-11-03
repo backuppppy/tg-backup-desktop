@@ -34,8 +34,8 @@ suspend fun tdlibVersion(dbDir: Path): String {
     }
 }
 
-fun main() {
-    if (System.getenv("TGB_NATIVE_TMP_OFF") != "1") println("NATIVE_TMP ${NativeTmp.apply() ?: "default"}")
+fun main(args: Array<String>) {
+    if (System.getenv("TGB_NATIVE_TMP_OFF") != "1") NativeTmp.ensureAsciiTmpdir("org.tgbackup.desktop.spike.TdlibSmokeKt", args)
     println("JAVA_TMPDIR ${System.getProperty("java.io.tmpdir")}")
     try {
         val v = runBlocking { withTimeout(30_000) { tdlibVersion(AppDirs.dataDir().resolve("tdlib-smoke")) } }
