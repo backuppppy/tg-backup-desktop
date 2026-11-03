@@ -14,6 +14,7 @@ dependencies {
     implementation(project(":export-core"))
     implementation("dev.g000sha256:tdl-coroutines-jvm:15.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("io.ktor:ktor-server-cio:3.6.1")
     testImplementation(kotlin("test"))
 }
 
