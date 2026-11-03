@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     kotlin("jvm")
     application
@@ -12,6 +14,16 @@ kotlin {
 
 /** Must match the jcef-api version that jcefmaven 152.0.6 depends on. */
 val JCEF_NATIVES = "jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83"
+/**
+ * Hashes of the DLLs taken from com.github.webview:webview_java:1.3.0 (jitpack; jar SHA-256
+ * 9d5a09fe1a470a4d862dcac67d0ee1f1533b251c747a275574ca6fb34bb1b0e6), computed from the files that
+ * :desktop:stageWebView2 staged from that jar (the same build that fed green CI run 41665060301).
+ * A changed artifact behind the tag fails the build.
+ */
+val WEBVIEW_DLL_SHA256 = mapOf(
+    "webview.dll" to "92e1ce93eb671e4c5120d0fb6a739e31173cf4fc7f7f08f6365b115d8d4d82ca",
+    "WebView2Loader.dll" to "fb82ac089963e1dee932acce2f86ba34c128770cec4b60bcfd86f95d29e971ab",
+)
 val webviewNatives: Configuration by configurations.creating
 val jcefNatives: Configuration by configurations.creating
 
@@ -134,6 +146,20 @@ for (c in spikeCandidates) {
                 }
                 eachFile { path = "natives/$name" }
                 includeEmptyDirs = false
+            }
+            // jitpack builds from a movable tag: pin the DLLs we ship to known SHA-256 hashes.
+            doLast {
+                val dir = base.get().dir("input/natives").asFile
+                for ((dll, expected) in WEBVIEW_DLL_SHA256) {
+                    val f = File(dir, dll)
+                    check(f.isFile) { "$dll missing from ${dir.path}" }
+                    val actual = MessageDigest.getInstance("SHA-256")
+                        .digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+                    check(actual == expected) {
+                        "SHA-256 mismatch for $dll: expected $expected, got $actual"
+                    }
+                    println("SHA256_OK $dll $actual")
+                }
             }
         } else {
             into("jcef") {

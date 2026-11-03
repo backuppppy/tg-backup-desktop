@@ -116,7 +116,11 @@ jobs:
           HTTPS_PROXY: http://127.0.0.1:9
           HTTP_PROXY: http://127.0.0.1:9
           TGB_FORCE_PROXY: 127.0.0.1:9
+          TGB_HEB_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
         run: |
+          # Hebrew+space data dir for the installed program only (this step runs no Gradle).
+          New-Item -ItemType Directory -Force -Path $env:TGB_HEB_LOCALAPPDATA | Out-Null
+          $env:LOCALAPPDATA = $env:TGB_HEB_LOCALAPPDATA
           $shots = "${{ runner.temp }}\shots"
           New-Item -ItemType Directory -Force -Path $shots | Out-Null
           $out = "$shots\smoke-stdout.txt"
@@ -148,6 +152,12 @@ jobs:
           Write-Host "SMOKE_EXIT $($p.ExitCode)"
           if (-not (Select-String -Path $out -Pattern '^PAGE_LOADED' -Quiet)) { Write-Error "PAGE_LOADED not printed"; exit 1 }
           if ($p.ExitCode -ne 0) { exit 1 }
+          $profileName = if ('${{ matrix.candidate }}' -eq 'jcef') { 'cef' } else { 'webview2' }
+          $profileDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup\$profileName"
+          $entries = @(Get-ChildItem -Force -Path $profileDir -ErrorAction SilentlyContinue)
+          Write-Host "PROFILE_DIR $profileDir exists=$(Test-Path $profileDir) entries=$($entries.Count)"
+          $entries | Select-Object -First 8 | ForEach-Object { Write-Host "PROFILE_ENTRY $($_.Name)" }
+          if ($entries.Count -eq 0) { Write-Error "profile dir missing or empty under Hebrew LOCALAPPDATA"; exit 1 }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
