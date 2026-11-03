@@ -1,5 +1,6 @@
 package org.tgbackup.desktop
 
+import java.nio.file.Paths
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -23,6 +24,7 @@ class AppDirsTest {
     @Test
     fun linuxUsesDotDirInHome() {
         val p = AppDirs.dataDir(env = emptyMap(), home = "/home/u", os = "Linux")
-        assertEquals("/home/u/.tgbackup", p.toString())
+        // Compare as a Path: Windows hosts normalize "/" to "\\", so the string form is host-dependent.
+        assertEquals(Paths.get("/home/u/.tgbackup"), p)
     }
 }
