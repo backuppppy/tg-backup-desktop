@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "tg-backup-desktop"
-include(":export-core", ":desktop")
+include(":export-core", ":engine", ":desktop")
