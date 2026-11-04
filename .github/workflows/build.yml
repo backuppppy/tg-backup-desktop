@@ -66,7 +66,7 @@ jobs:
           $log = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter tdlib.log
           if (-not $log) { Write-Error "tdlib.log not created under Hebrew LOCALAPPDATA"; exit 1 }
           $log | ForEach-Object { Write-Host "TDLIB_LOG $($_.FullName)" }
-  windows-spike:
+  windows-package:
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
@@ -75,8 +75,6 @@ jobs:
         include:
           - candidate: webview2
             task: WebView2
-          - candidate: jcef
-            task: Jcef
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -179,14 +177,13 @@ jobs:
           Write-Host "SMOKE_EXIT $($p.ExitCode)"
           if (-not (Select-String -Path $out -Pattern '^PAGE_LOADED' -Quiet)) { Write-Error "PAGE_LOADED not printed"; exit 1 }
           if ($p.ExitCode -ne 0) { exit 1 }
-          if ('${{ matrix.candidate }}' -eq 'webview2' -and -not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
+          if (-not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
             Write-Error "window is not fully inside the screen work area"; exit 1
           }
-          if ('${{ matrix.candidate }}' -eq 'webview2' -and -not (Select-String -Path $out -Pattern '^NATIVE_TMP_RELAUNCH ' -Quiet)) {
+          if (-not (Select-String -Path $out -Pattern '^NATIVE_TMP_RELAUNCH ' -Quiet)) {
             Write-Error "TGBackup.exe did not restart with an ASCII TEMP"; exit 1
           }
-          $profileName = if ('${{ matrix.candidate }}' -eq 'jcef') { 'cef' } else { 'webview2' }
-          $profileDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup\$profileName"
+          $profileDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup\webview2"
           $entries = @(Get-ChildItem -Force -Path $profileDir -ErrorAction SilentlyContinue)
           Write-Host "PROFILE_DIR $profileDir exists=$(Test-Path $profileDir) entries=$($entries.Count)"
           $entries | Select-Object -First 8 | ForEach-Object { Write-Host "PROFILE_ENTRY $($_.Name)" }

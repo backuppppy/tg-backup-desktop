@@ -12,8 +12,6 @@ kotlin {
     jvmToolchain(17)
 }
 
-/** Must match the jcef-api version that jcefmaven 152.0.6 depends on. */
-val JCEF_NATIVES = "jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83"
 /**
  * Hashes of the DLLs taken from com.github.webview:webview_java:1.3.0 (jitpack; jar SHA-256
  * 9d5a09fe1a470a4d862dcac67d0ee1f1533b251c747a275574ca6fb34bb1b0e6), computed from the files that
@@ -25,20 +23,17 @@ val WEBVIEW_DLL_SHA256 = mapOf(
     "WebView2Loader.dll" to "fb82ac089963e1dee932acce2f86ba34c128770cec4b60bcfd86f95d29e971ab",
 )
 val webviewNatives: Configuration by configurations.creating
-val jcefNatives: Configuration by configurations.creating
 
 dependencies {
     implementation(project(":export-core"))
     implementation("dev.g000sha256:tdl-coroutines-jvm:15.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("io.ktor:ktor-server-cio:3.6.1")
-    // Embedded-view spike candidates.
+    // Embedded view (WebView2).
     implementation("net.java.dev.jna:jna:5.19.1")
     implementation("net.java.dev.jna:jna-platform:5.19.1")
-    implementation("me.friwi:jcefmaven:152.0.6")
     testImplementation(kotlin("test"))
     webviewNatives("com.github.webview:webview_java:1.3.0") { isTransitive = false }
-    jcefNatives("me.friwi:jcef-natives-windows-amd64:$JCEF_NATIVES") { isTransitive = false }
 }
 
 application {
@@ -97,20 +92,13 @@ val spikeCandidates = listOf(
         id = "webview2",
         task = "WebView2",
         mainClass = "org.tgbackup.desktop.spike.WebView2WindowKt",
-        excludeJars = listOf("jcef", "commons-", "gson", "gluegen", "jogl"),
+        excludeJars = listOf("commons-", "gson", "gluegen", "jogl"),
         javaOptions = listOf(
             "-Dtgb.natives=\$APPDIR\\natives",
             "-Djna.boot.library.path=\$APPDIR\\natives",
             "-Djna.nounpack=true",
             "-Djna.nosys=true",
         ),
-    ),
-    SpikeCandidate(
-        id = "jcef",
-        task = "Jcef",
-        mainClass = "org.tgbackup.desktop.spike.JcefWindowKt",
-        excludeJars = listOf("jna-"),
-        javaOptions = listOf("-Dtgb.jcef=\$APPDIR\\jcef"),
     ),
 )
 
@@ -133,7 +121,7 @@ for (c in spikeCandidates) {
         from(configurations.runtimeClasspath.map { cp ->
             cp.filter { f -> c.excludeJars.none { f.name.startsWith(it) } }
         })
-        if (c.id == "webview2") {
+        run {
             into("natives") {
                 from({ webviewNatives.map { zipTree(it) } }) {
                     include("natives/amd64/windows/*.dll")
@@ -160,15 +148,6 @@ for (c in spikeCandidates) {
                     println("SHA256_OK $dll $actual")
                 }
             }
-        } else {
-            into("jcef") {
-                from({
-                    val inner = zipTree(jcefNatives.singleFile).matching { include("*.tar.gz") }.singleFile
-                    tarTree(resources.gzip(inner))
-                })
-            }
-            // jcefmaven only reads this marker when installation is not skipped; keep it for parity.
-            doLast { base.get().file("input/jcef/install.lock").asFile.writeText("") }
         }
     }
 
