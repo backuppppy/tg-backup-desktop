@@ -82,9 +82,10 @@ test('modeHiddenWithOneAccount: the mode radios show only with two accounts chec
   await open(page);
   await page.getByRole('button', { name: '➕ הוסף משימה' }).click();
   const dialog = page.getByRole('dialog', { name: 'משימה חדשה' });
-  await expect(dialog.getByText('מצב עבודה', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('מצב עבודה', { exact: true })).toBeHidden();
   await dialog.getByRole('checkbox', { name: a1, exact: true }).check();
-  await expect(dialog.getByRole('radio', { name: MODE_ORDERED })).toHaveCount(0);
+  await expect(dialog.getByText('מצב עבודה', { exact: true })).toBeHidden();
+  await expect(dialog.getByRole('radio', { name: MODE_ORDERED })).toBeHidden();
   await dialog.getByRole('checkbox', { name: a2, exact: true }).check();
   await expect(dialog.getByText('מצב עבודה', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('radio', { name: MODE_ORDERED })).toBeChecked();
@@ -313,7 +314,7 @@ test('the dialog with no accounts shows the warning, and via-takeout shows its h
   const dialog = page.getByRole('dialog', { name: 'משימה חדשה' });
   await expect(dialog.getByText("אין חשבונות — הוסף בלשונית 'חשבונות'")).toBeVisible();
   const help = 'עובד גם בערוצים מוגנים וחסומים. בפעם הראשונה טלגרם עשוי לבקש לאשר את הייצוא בהודעת שירות.';
-  await expect(dialog.getByText(help)).toHaveCount(0);
+  await expect(dialog.getByText(help)).toBeHidden();
   await dialog.getByRole('switch', { name: '📡 העתקה בלי הורדה (דרך סשן הייצוא)' }).click();
   await expect(dialog.getByText(help)).toBeVisible();
   await expect(dialog.getByText('סוג תוכן', { exact: true })).toBeVisible();
