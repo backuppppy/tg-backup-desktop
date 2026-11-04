@@ -94,7 +94,7 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
         // so every route below needs it. Later tasks install their routes here:
         //   fooRoutes(app)   // fun Route.fooRoutes(app: DesktopApp) in its own file
         // Origin is checked only on non-GET requests: never add a GET route that changes state.
-        stateRoutes(events)
+        stateRoutes(app, events)
         jobRoutes(app, locks)
         accountRoutes(app, locks)
         exportRoutes(app, events, ChatHandles())
