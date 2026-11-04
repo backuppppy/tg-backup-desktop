@@ -14,6 +14,29 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew
       - run: ./gradlew test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-tests/package-lock.json
+      - name: Install UI test tools
+        working-directory: web-tests
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: UI unit tests
+        run: node --test web-tests/unit/*.test.mjs
+      - name: UI tests (Playwright against devServer)
+        working-directory: web-tests
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web-tests/playwright-report
+            web-tests/test-results
+          if-no-files-found: ignore
   windows:
     runs-on: windows-latest
     steps:
