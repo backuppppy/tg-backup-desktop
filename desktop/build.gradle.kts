@@ -66,6 +66,23 @@ tasks.register<JavaExec>("tdlibSmoke") {
     System.getenv("TGB_NATIVE_TMP_OFF")?.let { environment("TGB_NATIVE_TMP_OFF", it) }
 }
 
+tasks.register<JavaExec>("engineSmoke") {
+    group = "verification"
+    description = "Starts DesktopApp with a dummy account and waits for TDLib to answer."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("org.tgbackup.desktop.EngineSmokeKt")
+    environment("LC_ALL", "C.UTF-8")
+    System.getenv("TGB_TEST_LOCALAPPDATA")?.let {
+        environment("LOCALAPPDATA", it)
+        // TDLib's native DLL is extracted to java.io.tmpdir, which Windows derives from TEMP/TMP.
+        environment("TEMP", "$it\\tmp")
+        environment("TMP", "$it\\tmp")
+    }
+    // The program itself moves java.io.tmpdir to an ASCII dir (NativeTmp); TGB_NATIVE_TMP_OFF=1 disables
+    // that so CI can probe the library's behaviour with the Hebrew TEMP above.
+    System.getenv("TGB_NATIVE_TMP_OFF")?.let { environment("TGB_NATIVE_TMP_OFF", it) }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Embedded-view spike packaging (Windows only): app-image via jpackage, then the installer via
 // jpackage --type exe when WiX 3 (candle + light) is on PATH, otherwise via Inno Setup.

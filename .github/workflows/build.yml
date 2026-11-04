@@ -66,6 +66,21 @@ jobs:
           $log = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter tdlib.log
           if (-not $log) { Write-Error "tdlib.log not created under Hebrew LOCALAPPDATA"; exit 1 }
           $log | ForEach-Object { Write-Host "TDLIB_LOG $($_.FullName)" }
+      - name: Engine smoke
+        shell: pwsh
+        env:
+          TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
+        run: |
+          # The real DesktopApp with a dummy account: TDLib must start through the engine under a Hebrew path.
+          $out = ./gradlew.bat :desktop:engineSmoke 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0) { exit $code }
+          if (-not ($out -match 'ENGINE_OK ')) { Write-Error "ENGINE_OK not printed"; exit 1 }
+          if (-not ($out -match 'NATIVE_TMP_RELAUNCH ')) { Write-Error "expected a relaunch with an ASCII TEMP"; exit 1 }
+          $cfg = Get-ChildItem -Recurse -Path $env:TGB_TEST_LOCALAPPDATA -Filter config_v2.json
+          if (-not $cfg) { Write-Error "config_v2.json not created under Hebrew LOCALAPPDATA"; exit 1 }
+          $cfg | ForEach-Object { Write-Host "ENGINE_CONFIG $($_.FullName)" }
   windows-package:
     runs-on: windows-latest
     timeout-minutes: 60
