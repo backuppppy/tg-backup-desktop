@@ -191,6 +191,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   padding: 12px 16px;
   border-radius: 6px;
   box-shadow: 0 3px 10px rgba(0, 0, 0, .4);
+  white-space: pre-line;
 }
 .toast[hidden] { display: none; }
 
@@ -218,3 +219,43 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .dialog .text { margin: 0 0 14px; white-space: pre-line; line-height: 1.5; }
 .dialog .body { display: flex; flex-direction: column; gap: 10px; }
 .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+[hidden] { display: none !important; }
+.pre { white-space: pre-wrap; }
+.small { font-size: 13px; line-height: 1.45; }
+.error-text { color: var(--error); margin: 0; }
+button.full { width: 100%; }
+button.text.danger { color: var(--error); }
+
+/* Jobs screen */
+.jobs { display: flex; flex-direction: column; gap: 10px; }
+.jobs .card { margin: 0; }
+.jobs-header { display: flex; flex-direction: column; gap: 6px; }
+.jobs-summary { font-size: 14px; font-weight: 500; }
+.job-card { display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.job-card.running { background: var(--surface-variant); }
+.job-title { margin: 0; font-size: 16px; font-weight: 500; }
+.job-card hr { width: 100%; margin: 2px 0; border: 0; border-top: 1px solid #3A4A5A; }
+.job-card .phase { color: var(--primary); }
+.job-card .link { color: var(--primary); text-decoration: underline; }
+
+/* Dialog fields */
+.dialog .field { display: flex; flex-direction: column; gap: 4px; }
+.dialog .field-label { font-size: 12px; color: var(--on-surface-dim); }
+.dialog .section { display: flex; flex-direction: column; gap: 2px; }
+.dialog .section-label { font-size: 14px; font-weight: 500; margin: 4px 0; }
+.dialog .radio-row, .dialog .check-row, .dialog .switch-row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; overflow-wrap: anywhere;
+}
+.dialog .check-row.taken { opacity: .4; cursor: default; }
+.dialog input[type="radio"], .dialog input[type="checkbox"] { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--primary); }
+.dialog input[role="switch"] {
+  appearance: none; width: 40px; height: 22px; border-radius: 11px; background: #3A4A5A; position: relative; cursor: pointer;
+}
+.dialog input[role="switch"]::after {
+  content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--on-surface-dim); transition: inset-inline-start .15s;
+}
+.dialog input[role="switch"]:checked { background: var(--primary); }
+.dialog input[role="switch"]:checked::after { inset-inline-start: 21px; background: var(--on-primary); }
+.dialog .switch-row .pre { white-space: pre-wrap; }

@@ -54,10 +54,11 @@ function nextToast() {
 
 /**
  * A modal dialog. `content` is extra nodes under the text (fields). `onOk` may return false (or a Promise of it)
- * to keep the dialog open. Clicking outside or Escape counts as cancel.
- * Returns `{ result: Promise<boolean>, close(ok) }`.
+ * to keep the dialog open. Clicking outside or Escape counts as cancel. `okClass` styles the OK button (default `text`);
+ * while `okButton.disabled` is set, OK (and Enter) does nothing.
+ * Returns `{ result: Promise<boolean>, close(ok), okButton }`.
  */
-export function formDialog({ title, text, content = [], okText = 'אישור', cancelText = 'ביטול', onOk }) {
+export function formDialog({ title, text, content = [], okText = 'אישור', cancelText = 'ביטול', okClass = 'text', onOk }) {
   let settle;
   const result = new Promise((resolve) => { settle = resolve; });
   let done = false;
@@ -70,6 +71,7 @@ export function formDialog({ title, text, content = [], okText = 'אישור', c
     settle(ok);
   };
   const ok = async () => {
+    if (okButton.disabled) return;
     if (onOk && (await onOk()) === false) return;
     close(true);
   };
@@ -77,6 +79,7 @@ export function formDialog({ title, text, content = [], okText = 'אישור', c
     if (e.key === 'Escape') close(false);
   };
 
+  const okButton = h('button', { type: 'button', class: okClass, onclick: () => ok() }, okText);
   const dialog = h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
     title ? h('h2', {}, title) : null,
     text ? h('p', { class: 'text' }, text) : null,
@@ -87,14 +90,14 @@ export function formDialog({ title, text, content = [], okText = 'אישור', c
     ),
     h('div', { class: 'actions' },
       cancelText ? h('button', { type: 'button', class: 'text', onclick: () => close(false) }, cancelText) : null,
-      h('button', { type: 'button', class: 'text', onclick: ok }, okText),
+      okButton,
     ),
   );
   const overlay = h('div', { class: 'overlay', onclick: (e) => { if (e.target === overlay) close(false); } }, dialog);
   document.body.append(overlay);
   document.addEventListener('keydown', onKey);
   (dialog.querySelector('input, select, textarea') ?? dialog.querySelector('.actions button:last-child'))?.focus();
-  return { result, close };
+  return { result, close, okButton };
 }
 
 /** Asks a yes/no question with `אישור` / `ביטול`. */
