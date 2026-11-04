@@ -40,6 +40,7 @@ dependencies {
     implementation("net.java.dev.jna:jna-platform:5.19.1")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host:3.6.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     webviewNatives("com.github.webview:webview_java:1.3.0") { isTransitive = false }
 }
 

@@ -40,6 +40,9 @@ val EventsKey = AttributeKey<Events>("tgb.events")
 /** How often a running export's mutable progress is sampled for the `export` event. */
 internal const val PROCESSING_SAMPLE_MS = 300L
 
+/** Published events kept per connection (both while the snapshot is sent and later); the oldest are dropped. */
+private const val HELD_CAPACITY = 256
+
 /**
  * Builds [SnapshotDto] and the per-connection SSE stream. Each [stream] collector is one connection: it gets
  * `snapshot` first, then only changes against what it was sent. Collection stops when the connection does.
@@ -47,7 +50,7 @@ internal const val PROCESSING_SAMPLE_MS = 300L
 @OptIn(ExperimentalCoroutinesApi::class)
 class Events(private val app: DesktopApp) {
     private val published = MutableSharedFlow<ServerSentEvent>(
-        extraBufferCapacity = 256,
+        extraBufferCapacity = HELD_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
@@ -124,26 +127,16 @@ class Events(private val app: DesktopApp) {
         if (running == null) flowOf(null) else exportOf(running)
     }
 
-    private fun exportOf(running: RunningExport): Flow<RunningExportDto> = running.controller.state.flatMapLatest { st ->
-        if (st is ExportState.Processing) {
-            flow {
-                while (true) {
-                    emit(running.toDto(st))
-                    delay(PROCESSING_SAMPLE_MS)
-                }
-            }
-        } else {
-            flowOf(running.toDto(st))
-        }
-    }
+    private fun exportOf(running: RunningExport): Flow<RunningExportDto> =
+        sampledExportStates(running.controller.state).map { RunningExportDto(running.accountId, running.title, it) }
 
     private val passwords: Flow<PasswordRequestDto?> = app.exports.password.map { it.toDto() }
 
     /** One SSE connection: `snapshot`, then changes. Cancelled with the collector (the connection). */
     fun stream(): Flow<ServerSentEvent> = channelFlow {
         // Subscribe to published events before the snapshot is taken, and hold them until it is sent.
-        val held = Channel<ServerSentEvent>(Channel.UNLIMITED)
-        launch(start = CoroutineStart.UNDISPATCHED) { published.collect { held.send(it) } }
+        val held = Channel<ServerSentEvent>(HELD_CAPACITY, BufferOverflow.DROP_OLDEST)
+        launch(start = CoroutineStart.UNDISPATCHED) { published.collect { held.trySend(it) } }
 
         val snap = snapshot()
         send(event("snapshot", SnapshotDto.serializer(), snap))
@@ -177,6 +170,10 @@ class Events(private val app: DesktopApp) {
  * The `log` event for [entries], given the newest seq already sent. A clear is detected when that entry is gone
  * (seq keeps growing across [org.tgbackup.app.engine.LogBus.clear]); it resends the whole current list.
  * Returns null when there is nothing new.
+ *
+ * If more than LogBus's MAX (500) lines arrive between two collector runs (StateFlow conflates), the last-sent
+ * entry has also fallen out of the window: that reads as a clear too, and the full current list goes out with
+ * `cleared:true`. That is correct, since the client ends with exactly LogBus's list.
  */
 internal fun logUpdate(lastSentSeq: Long?, entries: List<LogEntry>): LogEventDto? {
     if (lastSentSeq != null && entries.none { it.seq == lastSentSeq }) {
@@ -188,3 +185,31 @@ internal fun logUpdate(lastSentSeq: Long?, entries: List<LogEntry>): LogEventDto
 
 /** Values of this flow that differ from [sent] and from each other. */
 private fun <T> Flow<T>.changesSince(sent: T): Flow<T> = onStart { emit(sent) }.distinctUntilChanged().drop(1)
+
+/**
+ * The `export` state of one controller. The Controller publishes a new [ExportState.Processing] instance on every
+ * progress tick (and mutates [org.tgbackup.export.ProcessingState] in place), so Processing -> Processing counts as
+ * the same state: while it lasts, [ExportState] is sampled every [periodMs] and sent only when the snapshot changed.
+ * Any change to another variant is sent at once.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun sampledExportStates(
+    states: StateFlow<ExportState>,
+    periodMs: Long = PROCESSING_SAMPLE_MS,
+): Flow<ExportStateDto> = states
+    .distinctUntilChanged { a, b -> a is ExportState.Processing && b is ExportState.Processing }
+    .flatMapLatest { st ->
+        if (st is ExportState.Processing) {
+            flow {
+                while (true) {
+                    // A newer non-Processing value restarts this flow upstream; never send a stale Processing then.
+                    val now = states.value as? ExportState.Processing ?: break
+                    emit(now.toDto())
+                    delay(periodMs)
+                }
+            }
+        } else {
+            flowOf(st.toDto())
+        }
+    }
+    .distinctUntilChanged()
