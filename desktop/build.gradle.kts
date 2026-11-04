@@ -90,6 +90,21 @@ tasks.register<JavaExec>("engineSmoke") {
     System.getenv("TGB_NATIVE_TMP_OFF")?.let { environment("TGB_NATIVE_TMP_OFF", it) }
 }
 
+tasks.register<JavaExec>("devServer") {
+    group = "application"
+    description = "Runs the engine and the server on 127.0.0.1:8765 (TGB_DEV_PORT) without a window; prints DEV_URL."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("org.tgbackup.desktop.DevServerKt")
+    environment("LC_ALL", "C.UTF-8")
+    System.getenv("TGB_TEST_LOCALAPPDATA")?.let {
+        environment("LOCALAPPDATA", it)
+        // TDLib's native DLL is extracted to java.io.tmpdir, which Windows derives from TEMP/TMP.
+        environment("TEMP", "$it\\tmp")
+        environment("TMP", "$it\\tmp")
+    }
+    System.getenv("TGB_NATIVE_TMP_OFF")?.let { environment("TGB_NATIVE_TMP_OFF", it) }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Embedded-view spike packaging (Windows only): app-image via jpackage, then the installer via
 // jpackage --type exe when WiX 3 (candle + light) is on PATH, otherwise via Inno Setup.
