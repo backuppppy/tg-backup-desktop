@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileSystemException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
@@ -13,7 +14,7 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
  */
 object AtomicFiles {
     private const val ATTEMPTS = 5
-    private const val RETRY_DELAY_MS = 100L
+    private const val FIRST_DELAY_MS = 100L
 
     fun replace(tmp: File, target: File) {
         var attempt = 1
@@ -21,11 +22,14 @@ object AtomicFiles {
             try {
                 move(tmp, target)
                 return
+            } catch (e: NoSuchFileException) {
+                throw e
             } catch (e: FileSystemException) {
                 // AccessDeniedException is a FileSystemException: antivirus/indexer locks are brief.
                 if (attempt >= ATTEMPTS) throw e
+                // Backoff 100, 200, 400, 800 ms: about 1.5 s in total.
+                Thread.sleep(FIRST_DELAY_MS shl (attempt - 1))
                 attempt++
-                Thread.sleep(RETRY_DELAY_MS)
             }
         }
     }

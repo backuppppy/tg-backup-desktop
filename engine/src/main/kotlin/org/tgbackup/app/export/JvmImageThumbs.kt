@@ -14,6 +14,11 @@ import javax.imageio.ImageWriteParam
  * quality of Qt is 75. ImageIO cannot write WebP, so that format returns false.
  */
 class JvmImageThumbs : ImageThumbs {
+    init {
+        // No ImageIO cache files under java.io.tmpdir.
+        ImageIO.setUseCache(false)
+    }
+
     override fun size(path: String): Pair<Int, Int>? = try {
         withReader(path) { reader, _ ->
             val w = reader.getWidth(0)

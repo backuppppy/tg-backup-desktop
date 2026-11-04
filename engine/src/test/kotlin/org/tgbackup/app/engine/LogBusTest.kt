@@ -17,4 +17,16 @@ class LogBusTest {
         assertNotEquals("old", old.readText())
         assertTrue(log.length() < 1_000, "log.txt is ${log.length()} bytes")
     }
+
+    @Test
+    fun lineIsStillAppendedWhenRotationFails() {
+        val dir = Files.createTempDirectory("logbus").toFile()
+        val old = dir.resolve("log.old.txt").apply { mkdirs() }
+        old.resolve("keep").writeText("x")
+        val log = dir.resolve("log.txt").apply { writeText("x".repeat(1_000_001)) }
+
+        LogBus(dir).info("still-here")
+
+        assertTrue(log.readText().contains("still-here"))
+    }
 }

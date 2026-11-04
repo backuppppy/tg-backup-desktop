@@ -28,7 +28,7 @@ dependencies {
     implementation(project(":export-core"))
     implementation(project(":engine"))
     implementation("dev.g000sha256:tdl-coroutines-jvm:15.0.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("io.ktor:ktor-server-cio:3.6.1")
     // Embedded view (WebView2).
     implementation("net.java.dev.jna:jna:5.19.1")

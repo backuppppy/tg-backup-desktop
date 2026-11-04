@@ -6,14 +6,14 @@ plugins {
 }
 
 group = "org.tgbackup"
-version = "1.0"
+version = providers.gradleProperty("tgbVersion").get()
 
 kotlin {
     jvmToolchain(17)
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     testImplementation(kotlin("test"))
 }
 

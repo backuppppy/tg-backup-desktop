@@ -19,7 +19,7 @@ per file and fails when an `EDITED` file is not listed here.
   - import of `org.tgbackup.app.platform.DownloadsDir` added.
   - `defaultPath()`: `android.os.Environment` replaced by `File(DownloadsDir.resolve(), "AyuGram Desktop")` (Windows Known Folder, fallback `<home>/Downloads`); same folder name as Android.
 - `data/Store.kt`: `writeConfig` and `saveProgress` use `AtomicFiles.replace` instead of `File.renameTo`. On Windows `renameTo` returns `false` when the target exists, so every save after the first was silently lost.
-- `engine/LogBus.kt`: rotation to `log.old.txt` uses `Files.move(..., REPLACE_EXISTING)`. With `renameTo` the second rotation failed on Windows and `log.txt` grew without limit.
+- `engine/LogBus.kt`: rotation to `log.old.txt` uses `Files.move(..., REPLACE_EXISTING)` in its own runCatching, so a failed rotation never stops the append. With `renameTo` the second rotation failed on Windows and `log.txt` grew without limit.
 
 ## New files (not in the Android app)
 

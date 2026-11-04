@@ -47,8 +47,11 @@ class LogBus(dir: File) {
             }
             Sentry.addBreadcrumb(crumb)
         }
+        // Rotation failing must not stop the append.
         runCatching {
             if (file.length() > 1_000_000) Files.move(file.toPath(), File(file.parentFile, "log.old.txt").toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+        runCatching {
             file.appendText("${entry.time} ${level.name} $msg\n")
         }
     }
