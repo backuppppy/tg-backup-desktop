@@ -45,5 +45,28 @@ export-core is shared with the Android app but lives in this repo as its own cop
 
 ## Back to Android
 
-The `AtomicFiles` fix (Store, LogBus, MtpStorage) should also go to the Android repo. It is harmless there:
-`renameTo` already replaces on Android, and `Files.move` with `REPLACE_EXISTING` behaves the same.
+The `AtomicFiles` fix (Store, LogBus, MtpStorage) should also go to the Android repo. It needs care there: `java.nio.file.Files` requires Android API 26, and the app's minSdk is 23.
+Port `AtomicFiles` with an API-level guard: `Files.move` with `REPLACE_EXISTING` when `Build.VERSION.SDK_INT >= 26`,
+and a `File.renameTo` fallback below that (on Android `renameTo` already replaces an existing file).
+
+## Verified
+
+- Branch `engine-port`: final CI run `41763832454` is green on `linux`, `windows` (runs `gradlew.bat test` for all projects) and `windows-package`.
+- Engine smoke on windows-latest:
+  - `ENGINE_OK NeedPhone`
+  - `NATIVE_TMP_RELAUNCH C:\ProgramData\TGBackup-c368a648\tmp`
+  - `ENGINE_CONFIG D:\a\_temp\תיקייה עם רווח\TGBackup\engine-smoke\config_v2.json`
+- Local Linux engine smoke prints `ENGINE_OK NeedPhone` and creates `tdlib/smoke/db`.
+- Test counts (`./gradlew test`, local):
+  - export-core: 37 tests, 0 failures
+  - engine: 17 tests, 0 failures
+  - desktop: 35 tests, 0 failures
+- Finding: `File.renameTo` does not replace an existing file on Windows. Before `AtomicFiles`, every save after the first was silently lost in:
+  - `Store` config and progress
+  - `LogBus` rotation
+  - export-core `MtpStorage` session
+
+  The Windows test job proves the fix.
+- Backport: `java.nio.file.Files` needs Android API 26 (app minSdk is 23), so the Android port of `AtomicFiles` needs an API-level guard with a `renameTo` fallback.
+- Upstream bug (verbatim `Store.kt`, Android too): `migratedFromLegacy` is declared after `_config = MutableStateFlow(loadConfig())`, so its initializer resets the flag to false after `loadConfig()` sets it. Not fixed here, because the file stays verbatim.
+- Task 8 (live read-only check): skipped. It needs the user's login code and will be done with the user.
