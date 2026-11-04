@@ -4,10 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TG Backup</title>
-<style>
-  html, body { margin: 0; background: #0F1720; color: #E6EDF3; font-family: "Segoe UI", system-ui, sans-serif; }
-</style>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
 </head>
 <body>
+<header class="topbar"><h1 id="title">TG Backup</h1></header>
+<div id="banner" class="banner" role="status" hidden>מתחבר מחדש…</div>
+<main id="screen"></main>
+<nav class="tabs" aria-label="ניווט">
+  <a href="#jobs"><span>משימות</span></a>
+  <a href="#export"><span>ייצוא</span></a>
+  <a href="#accounts"><span>חשבונות</span></a>
+  <a href="#log"><span>לוג</span></a>
+  <a href="#settings"><span>הגדרות</span></a>
+</nav>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
