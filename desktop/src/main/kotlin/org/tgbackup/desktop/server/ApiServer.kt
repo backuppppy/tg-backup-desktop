@@ -84,6 +84,7 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
     install(ContentNegotiation) { json(TgbJson) }
     install(SSE)
     val events = Events(app).also { attributes.put(EventsKey, it) }
+    val locks = CommandLocks()
 
     routing {
         // Public: the only route that needs no session cookie (see installSecurity).
@@ -94,6 +95,8 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
         //   fooRoutes(app)   // fun Route.fooRoutes(app: DesktopApp) in its own file
         // Origin is checked only on non-GET requests: never add a GET route that changes state.
         stateRoutes(events)
+        jobRoutes(app, locks)
+        accountRoutes(app, locks)
         webRoutes()
     }
 }
