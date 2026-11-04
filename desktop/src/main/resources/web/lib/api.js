@@ -1,4 +1,5 @@
 // One call to the server API. Resolves with the JSON body; a `{"error": "..."}` answer rejects with Error(error).
+// The rejected error carries the HTTP status as `err.status`.
 
 export async function api(method, path, body) {
   const init = { method, headers: {} };
@@ -13,7 +14,10 @@ export async function api(method, path, body) {
   } catch {
     data = null;
   }
-  if (data && typeof data.error === 'string') throw new Error(data.error);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if ((data && typeof data.error === 'string') || !res.ok) {
+    const err = new Error(data && typeof data.error === 'string' ? data.error : `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data ?? {};
 }

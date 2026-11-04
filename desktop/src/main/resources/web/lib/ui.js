@@ -1,15 +1,18 @@
 // Small DOM helpers shared by the screens: h(), toast(), dialogs.
 
 /**
- * Creates an element. `attrs` keys: `class`, `on<event>` (listener), `hidden`/`disabled`/... (booleans),
+ * Creates an element. `attrs` keys: `class`, `on<event>` (listener; anything but a function throws), `hidden`/`disabled`/... (booleans),
  * anything else as an attribute. Children may be strings, nodes, arrays, or null/false (skipped).
  */
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs ?? {})) {
     if (v === null || v === undefined || v === false) continue;
-    if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k === 'class') el.className = v;
+    if (k.startsWith('on')) {
+      // Never an inline handler: an `on*` value must be a function.
+      if (typeof v !== 'function') throw new TypeError(`h(): ${k} must be a function`);
+      el.addEventListener(k.slice(2).toLowerCase(), v);
+    } else if (k === 'class') el.className = v;
     else if (k === 'value') el.value = v;
     else el.setAttribute(k, v === true ? '' : String(v));
   }

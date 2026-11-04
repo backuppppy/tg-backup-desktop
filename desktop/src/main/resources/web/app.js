@@ -55,17 +55,21 @@ function onState(next) {
 }
 
 // The export session asks for the account's 2FA password; the answer (or null = cancel) goes back by id.
+// An answered id never opens again: the request stays in the state until the server's `password: null` arrives.
 let open = null;
+const answered = new Set();
 
 function passwordDialog(request) {
   if (open && (!request || request.id !== open.id)) {
     open.dialog.close(false);
     open = null;
   }
-  if (!request || open) return;
+  if (!request || open || answered.has(request.id)) return;
   const { id, hint } = request;
   const field = h('input', { type: 'password', autocomplete: 'off', 'aria-label': 'סיסמה' });
-  const answer = (password) => api('POST', '/api/export/password', { id, password }).catch((e) => toast(e.message));
+  // 409: the request was already answered or is gone (another window, or it timed out); nothing to tell.
+  const answer = (password) => api('POST', '/api/export/password', { id, password })
+    .catch((e) => { if (e.status !== 409) toast(e.message); });
   const dialog = formDialog({
     title: 'סיסמת אימות דו-שלבי',
     text: 'סשן הייצוא צריך את הסיסמה של החשבון.' + (hint && hint.trim() ? `\nרמז: ${hint}` : ''),
@@ -76,6 +80,7 @@ function passwordDialog(request) {
     // Closed by us because the request went away: nothing to answer.
     if (open?.id !== id) return;
     open = null;
+    answered.add(id);
     answer(ok ? field.value : null);
   });
 }

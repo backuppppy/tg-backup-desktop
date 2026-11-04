@@ -32,6 +32,32 @@ test('the five tabs appear in order from right to left', async ({ page }) => {
   for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeLessThan(xs[i - 1]);
 });
 
+test('every tab has an icon above its label', async ({ page }) => {
+  await open(page);
+  const tabs = page.locator('nav.tabs a');
+  for (let i = 0; i < TABS.length; i++) {
+    const icon = tabs.nth(i).locator('svg');
+    await expect(icon).toHaveCount(1);
+    const iconBox = await icon.boundingBox();
+    const labelBox = await tabs.nth(i).locator('.label').boundingBox();
+    expect(iconBox.y + iconBox.height).toBeLessThanOrEqual(labelBox.y + 1);
+  }
+});
+
+test('h() refuses an on* attribute that is not a function', async ({ page }) => {
+  await open(page);
+  const result = await page.evaluate(async () => {
+    const { h } = await import('/lib/ui.js');
+    try {
+      const el = h('div', { onclick: 'window.__x = 1' });
+      return el.hasAttribute('onclick') ? 'inline handler' : 'ignored';
+    } catch (e) {
+      return 'threw';
+    }
+  });
+  expect(result).toBe('threw');
+});
+
 test('the default tab is jobs and the active tab follows the hash', async ({ page }) => {
   await open(page);
   await expect(page).toHaveURL(/#jobs$/);
@@ -126,4 +152,64 @@ test('cancelling the 2FA dialog sends null', async ({ page }) => {
   await expect(dialog).not.toContainText('רמז');
   await dialog.getByRole('button', { name: 'ביטול' }).click();
   await expect.poll(() => answers).toEqual([{ id: 'p2', password: null }]);
+});
+
+test('an answered 2FA request does not reopen on later events', async ({ page }) => {
+  const real = await (await page.request.get('/api/state')).json();
+  const snapshot = { ...real, log: [], password: { id: 'p3', hint: '' } };
+  let release;
+  const answeredGate = new Promise((r) => { release = r; });
+  let calls = 0;
+  await page.route('**/api/events', async (route) => {
+    calls += 1;
+    if (calls === 1) {
+      // The stream ends after the snapshot; the browser reconnects after `retry` ms.
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+        body: `retry: 300\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+      });
+    }
+    if (calls > 2) return; // left pending: no more events
+    await answeredGate;
+    // Only a log event: the state still holds password p3 (the server has not sent password:null yet).
+    const log = { entries: [{ seq: 99999, time: '12:00:00', level: 'INFO', msg: 'אחרי התשובה' }], cleared: false };
+    return route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+      body: `retry: 600000\nevent: log\ndata: ${JSON.stringify(log)}\n\n`,
+    });
+  });
+  const answers = [];
+  await page.route('**/api/export/password', async (route) => {
+    answers.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  await page.goto('/#log');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await expect(dialog).toBeVisible();
+  await dialog.locator('input').fill('secret');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect.poll(() => answers).toEqual([{ id: 'p3', password: 'secret' }]);
+  release();
+  await expect(page.getByText('אחרי התשובה')).toBeVisible();
+  await expect(dialog).toBeHidden();
+  await page.waitForTimeout(500);
+  await expect(dialog).toHaveCount(0);
+});
+
+test('a 409 answer to the 2FA request shows no toast', async ({ page }) => {
+  await fakeStream(page, { password: { id: 'p4', hint: '' } });
+  await page.unroute('**/api/export/password');
+  await page.route('**/api/export/password', (route) => route.fulfill({
+    status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'הבקשה כבר טופלה' }),
+  }));
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await dialog.locator('input').fill('x');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(dialog).toBeHidden();
+  await page.waitForTimeout(800);
+  expect(await page.evaluate(() => [document.getElementById('toast').hidden, document.getElementById('toast').textContent]))
+    .toEqual([true, '']);
 });
