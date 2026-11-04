@@ -12,6 +12,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.tgbackup.app.data.Job
 import org.tgbackup.app.data.JobMode
 import org.tgbackup.app.data.MediaType
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -85,7 +93,38 @@ class JobRoutesTest : RouteTestBase() {
     fun editUnknownJobIs404() = withServer { client ->
         seed()
         client.putJson("/api/jobs/zz", """{"source":"@s","target":"@t","accountIds":["a1"]}""")
-            .assertError(HttpStatusCode.NotFound, "המשימה לא נמצאה")
+            .assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+        for (path in listOf("zz/start", "zz/stop", "zz/pause", "zz/resume", "zz/reset", "all")) {
+            client.postJson("/api/jobs/$path").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+        }
+    }
+
+    @Test
+    fun createIgnoresBodyId() = withServer { client ->
+        seed(j1)
+        client.postJson("/api/jobs", """{"id":"../x","source":"@s","target":"@t","accountIds":["a2"]}""").assertOk()
+        client.postJson("/api/jobs", """{"id":"j1","source":"@s2","target":"@t2","accountIds":[]}""")
+            .assertError(HttpStatusCode.BadRequest, "לא נבחרו חשבונות למשימה")
+        val ids = app.store.config.value.jobs.map { it.id }
+        assertEquals(2, ids.size)
+        assertEquals("j1", ids[0])
+        assertTrue(Regex("[0-9a-f-]{8}").matches(ids[1]), ids[1])
+        assertEquals("@src", app.store.config.value.jobs[0].source) // j1 was not replaced
+    }
+
+    @Test
+    fun traversalIdsAre404() = withServer { client ->
+        seed(j1)
+        val sentinel = dataDir.parent.resolve("sentinel.json")
+        java.nio.file.Files.writeString(sentinel, "keep")
+        java.nio.file.Files.writeString(dataDir.resolve("sentinel.json"), "keep")
+        for (raw in listOf("%2E%2E", "..%2F..", "..%2Fsentinel", "a%2F..%2F..%2Fsentinel", "x".repeat(33))) {
+            client.del("/api/jobs/$raw").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+            client.postJson("/api/jobs/$raw/reset").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+        }
+        assertTrue(java.nio.file.Files.exists(sentinel))
+        assertTrue(java.nio.file.Files.exists(dataDir.resolve("sentinel.json")))
+        assertEquals(listOf("j1"), app.store.config.value.jobs.map { it.id })
     }
 
     @Test
@@ -102,11 +141,46 @@ class JobRoutesTest : RouteTestBase() {
         assertFalse(app.jobs.isRunning("j1"))
     }
 
+    /**
+     * The same race on a real server, whose CIO engine handles the two requests on different threads (testApplication
+     * may run them one after the other). Each round fires both starts after a latch.
+     */
+    @Test
+    fun parallelStartOnRealServer() {
+        seed(j1)
+        val server = ApiServer(app)
+        val port = server.start()
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()
+            val entry = http.send(HttpRequest.newBuilder(URI(server.entryUrl())).build(), HttpResponse.BodyHandlers.discarding())
+            val cookie = entry.headers().firstValue("Set-Cookie").get().substringBefore(';')
+            fun post(path: String) = http.send(
+                HttpRequest.newBuilder(URI("http://127.0.0.1:$port$path")).header("Cookie", cookie)
+                    .POST(HttpRequest.BodyPublishers.noBody()).build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+            repeat(25) { round ->
+                val go = CountDownLatch(1)
+                val calls = List(2) { pool.submit(Callable { go.await(); post("/api/jobs/j1/start") }) }
+                go.countDown()
+                val replies = calls.map { it.get(30, TimeUnit.SECONDS) }
+                assertEquals(listOf(200, 409), replies.map { it.statusCode() }.sorted(), "round $round: ${replies.map { it.body() }}")
+                assertTrue(replies.first { it.statusCode() == 409 }.body().contains("המשימה כבר פועלת"))
+                assertEquals(200, post("/api/jobs/j1/stop").statusCode())
+                assertFalse(app.jobs.isRunning("j1"))
+            }
+        } finally {
+            pool.shutdownNow()
+            server.stop()
+        }
+    }
+
     @Test
     fun startErrorIs409WithEngineText() = withServer { client ->
         seed(j1.copy(accountIds = emptyList()))
         client.postJson("/api/jobs/j1/start").assertError(HttpStatusCode.Conflict, "לא נבחרו חשבונות למשימה")
-        client.postJson("/api/jobs/zz/start").assertError(HttpStatusCode.Conflict, "המשימה לא נמצאה")
+        client.postJson("/api/jobs/zz/start").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
     }
 
     @Test
@@ -135,7 +209,7 @@ class JobRoutesTest : RouteTestBase() {
         client.del("/api/jobs/j1").assertOk()
         assertTrue(app.store.config.value.jobs.isEmpty())
         assertFalse("j1" in app.jobs.statuses.value)
-        client.del("/api/jobs/j1").assertError(HttpStatusCode.NotFound, "המשימה לא נמצאה")
+        client.del("/api/jobs/j1").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
     }
 
     @Test

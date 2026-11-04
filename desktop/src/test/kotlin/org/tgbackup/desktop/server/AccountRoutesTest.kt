@@ -35,6 +35,31 @@ class AccountRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun createIgnoresBodyId() = withServer { client ->
+        client.postJson("/api/accounts", """{"id":"../..","apiId":"5","apiHash":"$hash","phone":"+1"}""").assertOk()
+        val id = app.store.config.value.accounts.single().id
+        assertTrue(Regex("[0-9a-f-]{8}").matches(id), id)
+    }
+
+    @Test
+    fun traversalIdsAre404() = withServer { client ->
+        app.store.updateConfig { it.copy(accounts = listOf(Account(id = "a1", apiId = 0, apiHash = hash, phone = "+1"))) }
+        val sentinel = dataDir.parent.resolve("sentinel.txt")
+        Files.writeString(sentinel, "keep")
+        val inside = Files.createDirectories(dataDir.resolve("export/keep")).resolve("f.txt")
+        Files.writeString(inside, "keep")
+        for (raw in listOf("..%2F..", "%2E%2E", "..%2Fexport%2Fkeep", "x".repeat(33))) {
+            client.del("/api/accounts/$raw").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+            client.postJson("/api/accounts/$raw/logout").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+            client.putJson("/api/accounts/$raw", """{"apiId":"6","apiHash":"$hash","phone":"+2"}""")
+                .assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+        }
+        assertTrue(Files.exists(sentinel))
+        assertTrue(Files.exists(inside))
+        assertEquals(listOf("a1"), app.store.config.value.accounts.map { it.id })
+    }
+
+    @Test
     fun badAccountIs400() = withServer { client ->
         val bad = "פרטי החשבון לא תקינים"
         client.postJson("/api/accounts", """{"apiId":"1","apiHash":"0123456789","phone":"+1"}""")

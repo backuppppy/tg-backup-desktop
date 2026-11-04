@@ -27,7 +27,11 @@ const val MASKED_HASH = "••••"
 /** How long a delete waits for the TDLib logout and the export-session wipe before it answers. */
 internal val PURGE_TIMEOUT = 20.seconds
 
-/** The AccountDialog's fields. `apiId` may be a number or the text field's digits. */
+/** How long a login action waits for TDLib before it answers 504 [MSG_TG_TIMEOUT]. */
+internal val LOGIN_TIMEOUT = 60.seconds
+internal const val MSG_TG_TIMEOUT = "טלגרם לא ענה בזמן, נסה שוב"
+
+/** The AccountDialog's fields. `apiId` may be a number or the text field's digits. `id` is ignored: the server makes ids. */
 @Serializable
 data class AccountInput(
     val id: String = "",
@@ -67,9 +71,15 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
         return app.accounts[id] ?: throw Refusal(HttpStatusCode.BadRequest, MSG_NO_CLIENT)
     }
 
-    /** A login action's result: null is success, anything else is TDLib's error text. Never logged here. */
-    fun check(error: String?) {
-        if (error != null) throw Refusal(HttpStatusCode.BadRequest, "שגיאה: $error")
+    /**
+     * Runs a login action, bounded by [LOGIN_TIMEOUT]. Its result is null on success, else TDLib's error text.
+     * Neither the input nor the result is logged here.
+     */
+    suspend fun login(action: suspend () -> String?) {
+        var error: String? = null
+        withTimeoutOrNull(LOGIN_TIMEOUT) { error = action() }
+            ?: throw Refusal(HttpStatusCode.GatewayTimeout, MSG_TG_TIMEOUT)
+        error?.let { throw Refusal(HttpStatusCode.BadRequest, "שגיאה: $it") }
     }
 
     fun Config.withAccount(acc: Account): Config =
@@ -81,18 +91,16 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
             val input = call.receive<AccountInput>()
             command {
                 locks.config {
-                    val cfg = store.config.value
-                    val id = input.id.trim().ifBlank { newAccountId(cfg) }
-                    val acc = input.toAccount(id, storedHash = null)
+                    val acc = input.toAccount(newAccountId(store.config.value), storedHash = null)
                     store.updateConfig { it.withAccount(acc) }
                 }
             }
         }
 
         put("{id}") {
-            val id = idParam()
-            val input = call.receive<AccountInput>()
             command {
+                val id = idParam()
+                val input = call.receive<AccountInput>()
                 locks.config {
                     val acc = input.toAccount(id, storedHash = find(id).apiHash)
                     store.updateConfig { it.withAccount(acc) }
@@ -101,39 +109,38 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
         }
 
         delete("{id}") {
-            val id = idParam()
-            command {
-                deleteAccount(app, locks, id)
-            }
+            command { deleteAccount(app, locks, idParam()) }
         }
 
         post("{id}/phone") {
-            val id = idParam()
-            command { check(clientOf(id).sendPhone()) }
+            command {
+                val client = clientOf(idParam())
+                login { client.sendPhone() }
+            }
         }
         post("{id}/code") {
-            val id = idParam()
-            val code = call.receive<CodeInput>().code
             command {
-                val client = clientOf(id)
+                val client = clientOf(idParam())
+                val code = call.receive<CodeInput>().code
                 if (code.isBlank()) throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_REQUEST)
-                check(client.sendCode(code))
+                login { client.sendCode(code) }
             }
         }
         post("{id}/password") {
-            val id = idParam()
-            val password = call.receive<PasswordInput>().password
             command {
-                val client = clientOf(id)
+                val client = clientOf(idParam())
+                val password = call.receive<PasswordInput>().password
                 if (password.isBlank()) throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_REQUEST)
-                check(client.sendPassword(password))
+                login { client.sendPassword(password) }
             }
         }
         post("{id}/logout") {
-            val id = idParam()
             command {
+                val id = idParam()
                 clientOf(id)
-                app.accounts.logout(id)
+                // In the app scope: a timeout must not cancel logout halfway (between the wipe and the fresh client).
+                val logout = app.scope.async { app.accounts.logout(id) }
+                login { logout.await(); null }
             }
         }
     }

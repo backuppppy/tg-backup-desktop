@@ -21,12 +21,11 @@ import org.tgbackup.app.data.JobMode
 import org.tgbackup.app.data.MediaType
 import org.tgbackup.desktop.DesktopApp
 
-internal const val MSG_JOB_NOT_FOUND = "המשימה לא נמצאה"
 internal const val MSG_JOB_RUNNING = "לא ניתן לשנות משימה בזמן שהיא פועלת"
 internal const val MSG_NO_SOURCE_OR_TARGET = "חסר מקור או יעד"
 internal const val MSG_NO_ACCOUNTS = "לא נבחרו חשבונות למשימה"
 
-/** The JobDialog's fields. Missing fields take the dialog's defaults; `id` is ignored on PUT. */
+/** The JobDialog's fields. Missing fields take the dialog's defaults. `id` is always ignored: the server makes ids. */
 @Serializable
 data class JobInput(
     val id: String = "",
@@ -57,8 +56,6 @@ internal suspend fun RoutingContext.command(block: suspend () -> Unit) {
     }
     call.respondOk()
 }
-
-internal fun RoutingContext.idParam(): String = checkNotNull(call.parameters["id"])
 
 /** The dialog's save: trimmed texts, the selected accounts in config order, `startFromId` 0 when not set. */
 internal fun JobInput.toJob(id: String, cfg: Config): Job {
@@ -102,13 +99,13 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
 
     fun exists(id: String) = store.config.value.jobs.any { it.id == id }
     fun requireJob(id: String) {
-        if (!exists(id)) throw Refusal(HttpStatusCode.NotFound, MSG_JOB_NOT_FOUND)
+        if (!exists(id)) throw Refusal(HttpStatusCode.NotFound, MSG_NOT_FOUND)
     }
     fun requireStopped(id: String) {
         if (jobs.isRunning(id)) throw Refusal(HttpStatusCode.Conflict, MSG_JOB_RUNNING)
     }
 
-    /** Saves [input] as job [id]: replace by id, or append when [create]. */
+    /** Saves [input] as job [id]: replace the existing job, or append a new one when [create]. */
     suspend fun save(id: String, input: JobInput, create: Boolean) = locks.job(id) {
         requireStopped(id)
         locks.config {
@@ -126,10 +123,7 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
     route("/api/jobs") {
         post {
             val input = call.receive<JobInput>()
-            command {
-                val id = input.id.trim().ifBlank { newJobId(store.config.value) }
-                save(id, input, create = true)
-            }
+            command { save(newJobId(store.config.value), input, create = true) }
         }
 
         // "all" is a fixed segment, so it wins over {id}.
@@ -137,7 +131,8 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
             // startAll()'s list, with each start under its job's lock.
             val errors = store.config.value.jobs.mapNotNull { j ->
                 locks.job(j.id) {
-                    if (jobs.isRunning(j.id)) null else jobs.start(j.id)?.let { "${j.name.ifBlank { j.id }}: $it" }
+                    if (jobs.isRunning(j.id)) null
+                    else locks.start { jobs.start(j.id) }?.let { "${j.name.ifBlank { j.id }}: $it" }
                 }
             }
             call.respondText(
@@ -147,18 +142,26 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
         }
         post("all/pause") { command { jobs.pauseAll() } }
         post("all/resume") { command { jobs.resumeAll() } }
-        post("all/stop") { command { jobs.stopAll() } }
+        // stopAll(), with each stop under its job's lock so it cannot interleave with a start or an edit.
+        post("all/stop") {
+            command {
+                store.config.value.jobs.forEach { j -> locks.job(j.id) { if (jobs.isRunning(j.id)) jobs.stop(j.id) } }
+            }
+        }
 
         put("{id}") {
-            val id = idParam()
-            val input = call.receive<JobInput>()
-            command { save(id, input, create = false) }
+            command {
+                val id = idParam()
+                val input = call.receive<JobInput>()
+                save(id, input, create = false)
+            }
         }
 
         delete("{id}") {
-            val id = idParam()
             command {
+                val id = idParam()
                 locks.job(id) {
+                    requireJob(id)
                     requireStopped(id)
                     locks.config {
                         requireJob(id)
@@ -170,26 +173,26 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
         }
 
         post("{id}/start") {
-            val id = idParam()
             command {
-                locks.job(id) { jobs.start(id)?.let { throw Refusal(HttpStatusCode.Conflict, it) } }
+                val id = idParam()
+                locks.job(id) {
+                    requireJob(id)
+                    locks.start { jobs.start(id) }?.let { throw Refusal(HttpStatusCode.Conflict, it) }
+                }
             }
         }
         post("{id}/stop") {
-            val id = idParam()
-            command { locks.job(id) { requireJob(id); jobs.stop(id) } }
+            command { val id = idParam(); locks.job(id) { requireJob(id); jobs.stop(id) } }
         }
         post("{id}/pause") {
-            val id = idParam()
-            command { requireJob(id); jobs.pause(id) }
+            command { val id = idParam(); locks.job(id) { requireJob(id); jobs.pause(id) } }
         }
         post("{id}/resume") {
-            val id = idParam()
-            command { requireJob(id); jobs.resume(id) }
+            command { val id = idParam(); locks.job(id) { requireJob(id); jobs.resume(id) } }
         }
         post("{id}/reset") {
-            val id = idParam()
             command {
+                val id = idParam()
                 locks.job(id) {
                     requireJob(id)
                     requireStopped(id)

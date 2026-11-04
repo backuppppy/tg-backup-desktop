@@ -26,11 +26,12 @@ suspend fun ApplicationCall.respondOk() {
  * - [config] is held around every read-check-write of the accounts and jobs lists (the "account already used by
  *   another job" rule reads every job, so per-job locks alone cannot cover it).
  *
- * Lock order is always job locks (sorted by id) first, then [config]. Locks are not reentrant.
+ * Lock order is always job locks (sorted by id) first, then [config] or [start]. Locks are not reentrant.
  */
 class CommandLocks {
     private val perJob = ConcurrentHashMap<String, Mutex>()
     private val config = Mutex()
+    private val start = Mutex()
 
     suspend fun <T> job(id: String, block: suspend () -> T): T = jobs(listOf(id), block)
 
@@ -41,6 +42,25 @@ class CommandLocks {
 
     suspend fun <T> config(block: suspend () -> T): T = config.withLock { block() }
 
+    /**
+     * Held around every `jobs.start`, so the engine's "account busy in another running job" check and the start
+     * are one step across jobs (legacy configs can have two jobs that share an account).
+     */
+    suspend fun <T> start(block: suspend () -> T): T = start.withLock { block() }
+
     private suspend fun <T> lockAll(locks: List<Mutex>, i: Int, block: suspend () -> T): T =
         if (i == locks.size) block() else locks[i].withLock { lockAll(locks, i + 1, block) }
+}
+
+/** What a path id may look like: generated ids are 8 characters of a UUID. Keeps `..` and `/` out of file paths. */
+private val PathId = Regex("[A-Za-z0-9_-]{1,32}")
+
+/**
+ * The `{id}` path parameter, refused as 404 [MSG_NOT_FOUND] unless it has the [PathId] shape. Routes must still check
+ * that the id is in the config before any engine call that touches files.
+ */
+internal fun io.ktor.server.routing.RoutingContext.idParam(): String {
+    val id = call.parameters["id"]
+    if (id == null || !PathId.matches(id)) throw Refusal(io.ktor.http.HttpStatusCode.NotFound, MSG_NOT_FOUND)
+    return id
 }
