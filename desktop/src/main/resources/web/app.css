@@ -207,21 +207,27 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   padding: 16px;
 }
 .dialog {
+  display: flex;
+  flex-direction: column;
   background: var(--surface-variant);
   border-radius: 28px;
   padding: 24px;
   width: 100%;
   max-width: 480px;
   max-height: calc(100vh - 32px);
-  overflow-y: auto;
+  overflow: hidden;
 }
 .dialog h2 { margin: 0 0 14px; font-size: 22px; font-weight: 400; }
-.dialog .text { margin: 0 0 14px; white-space: pre-line; line-height: 1.5; }
-.dialog .body { display: flex; flex-direction: column; gap: 10px; }
-.dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.dialog p.text { margin: 0 0 14px; white-space: pre-line; line-height: 1.5; }
+.dialog .body { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 0; flex: 0 1 auto; }
+/* As in Android's AlertDialog, the fields scroll and the title and buttons stay. */
+.dialog h2, .dialog p.text, .dialog .actions { flex: none; }
+.dialog .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 [hidden] { display: none !important; }
 .pre { white-space: pre-wrap; }
+/* Lines with ids or links take their direction from the content, but keep the screen's alignment. */
+.bidi { text-align: right; }
 .small { font-size: 13px; line-height: 1.45; }
 .error-text { color: var(--error); margin: 0; }
 button.full { width: 100%; }
@@ -259,3 +265,5 @@ button.text.danger { color: var(--error); }
 .dialog input[role="switch"]:checked { background: var(--primary); }
 .dialog input[role="switch"]:checked::after { inset-inline-start: 21px; background: var(--on-primary); }
 .dialog .switch-row .pre { white-space: pre-wrap; }
+/* Lines with ids or links take their direction from the content, but keep the screen's alignment. */
+.bidi { text-align: right; }

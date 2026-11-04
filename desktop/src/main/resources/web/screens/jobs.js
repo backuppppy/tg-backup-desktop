@@ -108,7 +108,7 @@ function jobCard(job, status, accounts, state) {
 
   return h('section', { class: `card job-card${running ? ' running' : ''}`, 'data-job-id': job.id },
     h('h3', { class: 'job-title' }, `${icon} ${blank(job.name) ? `משימה ${job.id}` : job.name}`),
-    h('div', { class: 'small pre' }, `${blank(status.sourceTitle) ? job.source : status.sourceTitle}  ←  ${job.target}`),
+    h('div', { class: 'small pre bidi', dir: 'auto' }, `${blank(status.sourceTitle) ? job.source : status.sourceTitle}  ←  ${job.target}`),
     h('div', { class: 'small' }, details),
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
@@ -130,7 +130,7 @@ const digitsOnly = (input) => input.addEventListener('input', () => {
 });
 
 const textField = (label, value, attrs = {}) => {
-  const input = h('input', { type: 'text', value, autocomplete: 'off', ...attrs });
+  const input = h('input', { type: 'text', value, autocomplete: 'off', dir: 'auto', ...attrs });
   return { input, row: h('label', { class: 'field' }, h('span', { class: 'field-label' }, label), input) };
 };
 
