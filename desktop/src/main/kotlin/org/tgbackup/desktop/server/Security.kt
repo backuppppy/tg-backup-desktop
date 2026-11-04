@@ -23,6 +23,7 @@ import io.ktor.server.response.ApplicationSendPipeline
 import io.ktor.server.request.path
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
+import io.ktor.util.cio.ChannelWriteException
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -108,6 +109,8 @@ internal fun Application.installSecurity(token: String, allowedHosts: Set<String
             proceed()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            // The client went away mid-response (a closed page, a dropped event stream): nothing to answer or log.
+            if (e is ChannelWriteException) return@intercept
             val (status, message) = when (e) {
                 is BadRequestException, is ContentTransformationException ->
                     HttpStatusCode.BadRequest to MSG_BAD_REQUEST

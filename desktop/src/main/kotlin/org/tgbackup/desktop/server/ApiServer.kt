@@ -17,6 +17,7 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
+import io.ktor.server.sse.SSE
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.tgbackup.desktop.DesktopApp
@@ -68,6 +69,9 @@ class ApiServer(
         server = null
     }
 
+    /** The running module's [Events], for publishers outside the routes. */
+    fun events(): Events = checkNotNull(server) { "not started" }.application.attributes[EventsKey]
+
     fun entryUrl(): String {
         check(boundPort > 0) { "not started" }
         return "http://127.0.0.1:$boundPort/?t=$sessionToken"
@@ -78,6 +82,8 @@ class ApiServer(
 fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<String>) {
     installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
+    install(SSE)
+    val events = Events(app).also { attributes.put(EventsKey, it) }
 
     routing {
         // Public: the only route that needs no session cookie (see installSecurity).
@@ -87,6 +93,7 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
         // so every route below needs it. Later tasks install their routes here:
         //   fooRoutes(app)   // fun Route.fooRoutes(app: DesktopApp) in its own file
         // Origin is checked only on non-GET requests: never add a GET route that changes state.
+        stateRoutes(events)
         webRoutes()
     }
 }
