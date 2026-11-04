@@ -33,18 +33,36 @@ class JvmImageThumbs : ImageThumbs {
                 "jpg", "jpeg", "image/jpeg" -> "jpg"
                 else -> return false
             }
-            val source = ImageIO.read(File(path)) ?: return false
+            val source = decodeSubsampled(path, width, height) ?: return false
             var scaled = scale(source, width, height, argb = fmt == "png")
             if (fmt == "jpg") scaled = flattenOnWhite(scaled)
             val out = File(target)
             out.parentFile?.mkdirs()
-            val ok = if (fmt == "jpg") writeJpeg(scaled, out, if (quality < 0) 75 else quality) else ImageIO.write(scaled, "png", out)
+            val ok = try {
+                if (fmt == "jpg") writeJpeg(scaled, out, if (quality < 0) 75 else quality) else ImageIO.write(scaled, "png", out)
+            } catch (e: Exception) {
+                false
+            }
             if (!ok) out.delete()
             ok
         } catch (e: Exception) {
             false
+        } catch (e: OutOfMemoryError) {
+            File(target).delete()
+            false
         }
     }
+
+    /** Decodes with the largest power-of-two subsampling that keeps the image at least the target size. */
+    private fun decodeSubsampled(path: String, width: Int, height: Int): BufferedImage? =
+        withReader(path) { reader, _ ->
+            val w = reader.getWidth(0)
+            val h = reader.getHeight(0)
+            var s = 1
+            while (w / (s * 2) >= width && h / (s * 2) >= height) s *= 2
+            val param = reader.defaultReadParam.apply { setSourceSubsampling(s, s, 0, 0) }
+            reader.read(0, param)
+        }
 
     private fun <T> withReader(path: String, block: (javax.imageio.ImageReader, Unit) -> T): T? {
         ImageIO.createImageInputStream(File(path)).use { stream ->

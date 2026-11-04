@@ -72,4 +72,23 @@ class JvmImageThumbsTest {
         val f = File(dir, "bad.png").also { it.writeText("not an image") }
         assertFalse(thumbs.scaleAndSave(f.path, 10, 10, File(dir, "x.png").path, "png", -1))
     }
+
+    @Test
+    fun scalesLargeSourceToExactSize() {
+        val src = File(dir, "big.png").also { ImageIO.write(BufferedImage(4000, 3000, BufferedImage.TYPE_INT_RGB), "png", it) }
+        val target = File(dir, "big.jpg")
+        assertTrue(thumbs.scaleAndSave(src.path, 100, 75, target.path, "jpg", -1))
+        val out = assertNotNull(ImageIO.read(target))
+        assertEquals(100, out.width)
+        assertEquals(75, out.height)
+    }
+
+    @Test
+    fun failedWriteLeavesNoTarget() {
+        val src = png("a.png", 100, 100)
+        val blocker = File(dir, "blocker").also { it.writeText("x") }
+        val target = File(blocker, "t.jpg")
+        assertFalse(thumbs.scaleAndSave(src.path, 50, 50, target.path, "jpg", -1))
+        assertFalse(target.exists())
+    }
 }
