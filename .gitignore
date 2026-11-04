@@ -7,3 +7,7 @@ local.properties
 .superpowers/
 *.session
 session.properties
+web-tests/node_modules/
+web-tests/.auth/
+web-tests/test-results/
+web-tests/playwright-report/

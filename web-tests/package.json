@@ -1,0 +1,12 @@
+{
+  "name": "tg-backup-web-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "unit": "node --test unit/*.test.mjs",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}
