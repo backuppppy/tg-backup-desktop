@@ -3,6 +3,7 @@ package org.tgbackup.desktop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -10,7 +11,9 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
@@ -62,17 +65,13 @@ class DesktopApp(
         }
 
         // Keep the PC awake while a job or an export runs. `exports.running` keeps a finished export until it
-        // is dismissed, so also re-emit when its job completes. Power calls can block (up to 5 s) or throw:
+        // is dismissed, so the signal follows the export job's completion (activeWhileRunning). Power calls can block (up to 5 s) or throw:
         // they run on IO and never break the collector.
         val exportActive = exports.running.flatMapLatest { running ->
             if (running == null) {
                 flowOf(false)
             } else {
-                flow {
-                    emit(running.job.isActive)
-                    running.job.join()
-                    emit(false)
-                }
+                activeWhileRunning(running.job)
             }
         }
         scope.launch(Dispatchers.IO) {
@@ -93,7 +92,11 @@ class DesktopApp(
             if (withTimeoutOrNull(10.seconds) { scope.coroutineContext.job.cancelAndJoin() } == null) {
                 log.warn("חלק מהמשימות לא נעצרו תוך 10 שניות")
             }
-            withTimeoutOrNull(5.seconds) { exports.running.value?.job?.join() }
+            exports.running.value?.job?.let { export ->
+                // join() would start a still-lazy export: cancel one that has not started, then wait.
+                if (!export.isActive && !export.isCompleted) export.cancel()
+                withTimeoutOrNull(5.seconds) { export.join() }
+            }
             val clients = accounts.clients.value.values
             val done = withTimeoutOrNull(15.seconds) {
                 clients.map { c ->
@@ -111,4 +114,18 @@ class DesktopApp(
         runCatching { sleepGuard.update(active) }
             .onFailure { log.warn("בקשת מניעת שינה נכשלה: ${it.message}") }
     }
+}
+
+/**
+ * `true` until [job] completes, then `false`. A lazy job that has not started yet counts as active (ExportManager
+ * publishes the export before `job.start()`). Completion is observed through [Job.invokeOnCompletion], never
+ * through `join()`, so collecting never starts a lazy job: only ExportManager starts it.
+ */
+internal fun activeWhileRunning(job: Job): Flow<Boolean> = callbackFlow {
+    trySend(!job.isCompleted)
+    val handle = job.invokeOnCompletion {
+        trySend(false)
+        channel.close()
+    }
+    awaitClose { handle.dispose() }
 }
