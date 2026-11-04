@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.tgbackup"
-version = "0.1.0"
+version = providers.gradleProperty("tgbVersion").get()
 
 kotlin {
     jvmToolchain(17)
@@ -26,6 +26,7 @@ val webviewNatives: Configuration by configurations.creating
 
 dependencies {
     implementation(project(":export-core"))
+    implementation(project(":engine"))
     implementation("dev.g000sha256:tdl-coroutines-jvm:15.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("io.ktor:ktor-server-cio:3.6.1")
@@ -92,7 +93,7 @@ val spikeCandidates = listOf(
         id = "webview2",
         task = "WebView2",
         mainClass = "org.tgbackup.desktop.spike.WebView2WindowKt",
-        excludeJars = listOf("commons-", "gson", "gluegen", "jogl"),
+        excludeJars = emptyList(),
         javaOptions = listOf(
             "-Dtgb.natives=\$APPDIR\\natives",
             "-Djna.boot.library.path=\$APPDIR\\natives",

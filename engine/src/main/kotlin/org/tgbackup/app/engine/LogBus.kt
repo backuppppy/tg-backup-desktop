@@ -8,6 +8,8 @@ import io.sentry.Breadcrumb
 import io.sentry.Sentry
 import io.sentry.SentryLevel
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -46,7 +48,7 @@ class LogBus(dir: File) {
             Sentry.addBreadcrumb(crumb)
         }
         runCatching {
-            if (file.length() > 1_000_000) file.renameTo(File(file.parentFile, "log.old.txt"))
+            if (file.length() > 1_000_000) Files.move(file.toPath(), File(file.parentFile, "log.old.txt").toPath(), StandardCopyOption.REPLACE_EXISTING)
             file.appendText("${entry.time} ${level.name} $msg\n")
         }
     }

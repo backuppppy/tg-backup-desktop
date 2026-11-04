@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import org.tgbackup.io.AtomicFiles
 import java.io.File
 
 class Store(private val dir: File) {
@@ -44,7 +45,7 @@ class Store(private val dir: File) {
     private fun writeConfig(cfg: Config) {
         val tmp = File(dir, "config_v2.json.tmp")
         tmp.writeText(json.encodeToString(Config.serializer(), cfg))
-        tmp.renameTo(configFile)
+        AtomicFiles.replace(tmp, configFile)
     }
 
     fun updateConfig(transform: (Config) -> Config) {
@@ -64,7 +65,7 @@ class Store(private val dir: File) {
         val next = transform(progress(jobId))
         val tmp = File(progressDir, "$jobId.json.tmp")
         tmp.writeText(json.encodeToString(Progress.serializer(), next))
-        tmp.renameTo(File(progressDir, "$jobId.json"))
+        AtomicFiles.replace(tmp, File(progressDir, "$jobId.json"))
     }
 
     fun clearProgress(jobId: String) = synchronized(lock) {

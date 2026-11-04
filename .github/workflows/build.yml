@@ -28,11 +28,11 @@ jobs:
         env:
           TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
         run: New-Item -ItemType Directory -Force -Path "$env:TGB_TEST_LOCALAPPDATA\tmp" | Out-Null
-      - name: Desktop tests
+      - name: Tests (all projects)
         shell: pwsh
         env:
           TGB_TEST_LOCALAPPDATA: ${{ runner.temp }}\תיקייה עם רווח
-        run: ./gradlew.bat :desktop:test
+        run: ./gradlew.bat test
       - name: TDLib probe without NativeTmp (Hebrew TEMP, evidence only)
         shell: pwsh
         env:

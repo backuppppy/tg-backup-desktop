@@ -1,7 +1,6 @@
 package org.tgbackup.app.export
 
-import android.os.Build
-import android.os.Environment as AndroidEnvironment
+import org.tgbackup.app.platform.DeviceInfo
 import dev.g000sha256.tdl.TdlResult
 import io.sentry.SentryLevel
 import kotlinx.coroutines.CompletableDeferred
@@ -102,7 +101,7 @@ class ExportManager(
 
     /** Desktop's default: Downloads/<AppName>. */
     fun defaultPath(): String =
-        File(AndroidEnvironment.getExternalStoragePublicDirectory(AndroidEnvironment.DIRECTORY_DOWNLOADS), "AyuGram Desktop").absolutePath
+        File(System.getProperty("user.home"), "Downloads/AyuGram Desktop").absolutePath
 
     fun exportPath(): String = _prefs.value.path.ifBlank { defaultPath() }
 
@@ -130,8 +129,8 @@ class ExportManager(
         val storage = MtpStorage(File(rootDir, "export/${account.id}/session.properties"))
         val app = AppInfo(
             apiId = account.apiId,
-            deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
-            systemVersion = "Android ${Build.VERSION.RELEASE}",
+            deviceModel = DeviceInfo.deviceModel,
+            systemVersion = DeviceInfo.systemVersion,
             appVersion = "${BuildConfig.VERSION_NAME} (export)",
         )
         val client = MtpClient(
@@ -223,7 +222,7 @@ class ExportManager(
             val c = client(account)
             val controller = Controller(
                 client = c,
-                thumbs = AndroidImageThumbs(),
+                thumbs = JvmImageThumbs(),
                 topicRootId = topic?.id ?: 0,
                 topicPeerId = if (topic != null) chat.peerId else 0,
                 topicTitle = topic?.title ?: "",

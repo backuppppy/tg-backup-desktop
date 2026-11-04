@@ -1,6 +1,6 @@
 package org.tgbackup.app.tg
 
-import android.os.Build
+import org.tgbackup.app.platform.DeviceInfo
 import dev.g000sha256.tdl.TdlClient
 import dev.g000sha256.tdl.TdlResult
 import dev.g000sha256.tdl.dto.AuthorizationState
@@ -146,8 +146,8 @@ class AccountClient(
             apiId = account.apiId,
             apiHash = account.apiHash,
             systemLanguageCode = "he",
-            deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
-            systemVersion = "Android ${Build.VERSION.RELEASE}",
+            deviceModel = DeviceInfo.deviceModel,
+            systemVersion = DeviceInfo.systemVersion,
             applicationVersion = BuildConfig.VERSION_NAME,
         )
         r.errorText()?.let {

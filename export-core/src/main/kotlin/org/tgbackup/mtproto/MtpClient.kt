@@ -31,7 +31,7 @@ class MtpStorage(private val file: File) {
         file.parentFile?.mkdirs()
         val tmp = File(file.path + ".tmp")
         tmp.outputStream().use { props.store(it, null) }
-        tmp.renameTo(file)
+        org.tgbackup.io.AtomicFiles.replace(tmp, file)
     }
 
     var mainDc: Int

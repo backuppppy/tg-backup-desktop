@@ -1,6 +1,8 @@
 package org.tgbackup.desktop
 
-const val VERSION = "0.1.0"
+import org.tgbackup.app.BuildConfig
+
+const val VERSION = BuildConfig.VERSION_NAME
 
 fun main(args: Array<String>) {
     // First: TDLib extracts its DLLs to java.io.tmpdir, which must be ASCII.
