@@ -1,5 +1,6 @@
 package org.tgbackup.app.export
 
+import org.tgbackup.app.platform.DownloadsDir
 import org.tgbackup.app.platform.DeviceInfo
 import dev.g000sha256.tdl.TdlResult
 import io.sentry.SentryLevel
@@ -101,7 +102,7 @@ class ExportManager(
 
     /** Desktop's default: Downloads/<AppName>. */
     fun defaultPath(): String =
-        File(System.getProperty("user.home"), "Downloads/AyuGram Desktop").absolutePath
+        File(DownloadsDir.resolve(), "AyuGram Desktop").absolutePath
 
     fun exportPath(): String = _prefs.value.path.ifBlank { defaultPath() }
 
