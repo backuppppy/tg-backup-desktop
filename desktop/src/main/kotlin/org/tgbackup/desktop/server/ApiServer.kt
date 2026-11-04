@@ -76,7 +76,7 @@ class ApiServer(
 
 /** Everything the server does, installable on its own with `testApplication`. */
 fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<String>) {
-    installSecurity(token, allowedHosts)
+    installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
 
     routing {
@@ -86,6 +86,7 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
         // Authenticated: installSecurity rejects any call without the session cookie before routing,
         // so every route below needs it. Later tasks install their routes here:
         //   fooRoutes(app)   // fun Route.fooRoutes(app: DesktopApp) in its own file
+        // Origin is checked only on non-GET requests: never add a GET route that changes state.
         webRoutes()
     }
 }

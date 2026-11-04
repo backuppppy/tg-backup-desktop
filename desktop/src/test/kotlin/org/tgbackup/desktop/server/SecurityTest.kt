@@ -9,7 +9,17 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.client.request.setBody
+import io.ktor.http.contentType
+import io.ktor.server.request.receive
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
+import kotlinx.serialization.Serializable
+import org.tgbackup.app.engine.Level
 import io.ktor.server.testing.testApplication
 import org.tgbackup.desktop.DesktopApp
 import org.tgbackup.desktop.PowerRequests
@@ -27,6 +37,15 @@ private val DefaultHost = createClientPlugin("DefaultHost") {
     }
 }
 
+@Serializable
+private data class Probe(val name: String)
+
+/** Routes that exist only in tests, installed after tgbModule (the security guard covers them too). */
+private fun Route.testOnlyRoutes() {
+    post("/test/echo") { call.respondText(call.receive<Probe>().name) }
+    get("/test/boom") { throw IllegalStateException("boom secret-2fa-123") }
+}
+
 class SecurityTest {
     /** Data dir with a Hebrew name and a space; no-op power requests. */
     private val app = DesktopApp(
@@ -38,7 +57,10 @@ class SecurityTest {
     fun closeApp() = app.close()
 
     private fun withServer(block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
-        application { tgbModule(app = app, token = "t1", allowedHosts = setOf("localhost:80")) }
+        application {
+            tgbModule(app = app, token = "t1", allowedHosts = setOf("localhost:80"))
+            routing { testOnlyRoutes() }
+        }
         block(
             createClient {
                 followRedirects = false
@@ -175,6 +197,66 @@ class SecurityTest {
             val index = get("http://127.0.0.1:$port/", cookie)
             assertEquals(200, index.statusCode())
             assertTrue(index.body().contains("<title>TG Backup</title>"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun malformedJsonIs400() = withServer { client ->
+        val r = client.post("/test/echo") {
+            header(HttpHeaders.Cookie, "tgb_session=t1")
+            contentType(ContentType.Application.Json)
+            setBody("{\"name\": \"secret-code-5555\"")
+        }
+        assertEquals(HttpStatusCode.BadRequest, r.status)
+        assertTrue(r.bodyAsText().contains("בקשה שגויה"), r.bodyAsText())
+        assertTrue(app.log.entries.value.none { it.msg.contains("secret-code-5555") })
+    }
+
+    @Test
+    fun wellFormedJsonReachesTheRoute() = withServer { client ->
+        val r = client.post("/test/echo") {
+            header(HttpHeaders.Cookie, "tgb_session=t1")
+            contentType(ContentType.Application.Json)
+            setBody("{\"name\": \"x\"}")
+        }
+        assertEquals(HttpStatusCode.OK, r.status)
+        assertEquals("x", r.bodyAsText())
+    }
+
+    @Test
+    fun unexpectedExceptionIs500AndLogged() = withServer { client ->
+        val r = client.get("/test/boom") { header(HttpHeaders.Cookie, "tgb_session=t1") }
+        assertEquals(HttpStatusCode.InternalServerError, r.status)
+        assertTrue(r.bodyAsText().contains("שגיאה פנימית"), r.bodyAsText())
+        val errors = app.log.entries.value.filter { it.level == Level.ERROR }
+        assertTrue(errors.any { it.msg.contains("IllegalStateException") && it.msg.contains("/test/boom") }, errors.toString())
+        assertTrue(errors.none { it.msg.contains("secret-2fa-123") }, "exception messages must not reach the log")
+    }
+
+    @Test
+    fun realServerAcceptsSameOriginPost() {
+        val server = ApiServer(app)
+        val port = server.start()
+        try {
+            val http = java.net.http.HttpClient.newBuilder()
+                .followRedirects(java.net.http.HttpClient.Redirect.NEVER).build()
+            val entry = http.send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI(server.entryUrl())).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString(),
+            )
+            val cookie = entry.headers().firstValue("Set-Cookie").get().substringBefore(';')
+            fun post(origin: String) = http.send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI("http://127.0.0.1:$port/api/no-such-route"))
+                    .header("Cookie", cookie).header("Origin", origin)
+                    .POST(java.net.http.HttpRequest.BodyPublishers.noBody()).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString(),
+            )
+            val same = post("http://127.0.0.1:$port")
+            assertEquals(404, same.statusCode(), same.body())
+            assertTrue(same.body().contains("\"error\""), same.body())
+            assertEquals(403, post("http://evil.example").statusCode())
         } finally {
             server.stop()
         }
