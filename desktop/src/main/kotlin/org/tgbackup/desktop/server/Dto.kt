@@ -196,7 +196,31 @@ data class SnapshotDto(
     val runningExport: RunningExportDto? = null,
     val password: PasswordRequestDto? = null,
     val log: List<LogEntryDto>,
+    /** Accounts whose chats are loading, with the count so far (a page that reconnects mid-load needs it). */
+    val chatsLoading: Map<String, Int> = emptyMap(),
 )
+
+/** One loaded chat. `type` is the `DialogInfo.Type` name; the MTP input peer stays on the server ([ChatHandles]). */
+@Serializable
+data class ChatDto(
+    val peerId: Long,
+    val title: String,
+    val username: String,
+    val type: String,
+    val isForum: Boolean,
+    val archived: Boolean,
+)
+
+fun org.tgbackup.export.ChatEntry.toDto() = ChatDto(peerId, title, username, type.name, isForum, archived)
+
+@Serializable
+data class TopicDto(val id: Int, val title: String)
+
+fun org.tgbackup.export.TopicEntry.toDto() = TopicDto(id, title)
+
+/** The `chatsProgress` event: [count] chats so far; [done] is true once the load ended (the entry is gone). */
+@Serializable
+data class ChatsProgressDto(val accountId: String, val count: Int, val done: Boolean = false)
 
 /** TDLib version of the bundled tdl-coroutines build; read from a constant, no TDLib client needed. */
 val TdlibVersion: String = dev.g000sha256.tdl.TdlClient.TDL_VERSION

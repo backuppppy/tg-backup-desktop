@@ -62,6 +62,20 @@ class Events(private val app: DesktopApp) {
         published.tryEmit(ServerSentEvent(data = data.toString(), event = event))
     }
 
+    private val chatsLoading = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** A chats load of [accountId] has [count] chats so far: kept for the snapshot and sent as `chatsProgress`. */
+    fun chatsProgress(accountId: String, count: Int) {
+        chatsLoading[accountId] = count
+        publish("chatsProgress", TgbJson.encodeToJsonElement(ChatsProgressDto.serializer(), ChatsProgressDto(accountId, count)))
+    }
+
+    /** The chats load of [accountId] ended (either way). */
+    fun chatsDone(accountId: String) {
+        val last = chatsLoading.remove(accountId) ?: 0
+        publish("chatsProgress", TgbJson.encodeToJsonElement(ChatsProgressDto.serializer(), ChatsProgressDto(accountId, last, done = true)))
+    }
+
     private var passwordRequest: PasswordRequest? = null
     private var passwordRequestId = ""
 
@@ -92,6 +106,7 @@ class Events(private val app: DesktopApp) {
             runningExport = app.exports.running.value?.toDto(),
             password = app.exports.password.value.toDto(),
             log = app.log.entries.value.map { it.toDto() },
+            chatsLoading = HashMap(chatsLoading),
         )
     }
 

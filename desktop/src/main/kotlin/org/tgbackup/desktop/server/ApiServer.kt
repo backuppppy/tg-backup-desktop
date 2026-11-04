@@ -97,6 +97,7 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
         stateRoutes(events)
         jobRoutes(app, locks)
         accountRoutes(app, locks)
+        exportRoutes(app, events, ChatHandles())
         webRoutes()
     }
 }

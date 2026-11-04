@@ -56,11 +56,13 @@ class CommandLocks {
 private val PathId = Regex("[A-Za-z0-9_-]{1,32}")
 
 /**
- * The `{id}` path parameter, refused as 404 [MSG_NOT_FOUND] unless it has the [PathId] shape. Routes must still check
+ * The `{id}` (or [name]) path parameter, refused as 404 [MSG_NOT_FOUND] unless it has the [PathId] shape. Routes must still check
  * that the id is in the config before any engine call that touches files.
  */
-internal fun io.ktor.server.routing.RoutingContext.idParam(): String {
-    val id = call.parameters["id"]
+internal fun io.ktor.server.routing.RoutingContext.idParam(name: String = "id"): String = checkedId(call.parameters[name])
+
+/** [id] if it has the [PathId] shape, else 404 [MSG_NOT_FOUND]. Also for ids that arrive in a request body. */
+internal fun checkedId(id: String?): String {
     if (id == null || !PathId.matches(id)) throw Refusal(io.ktor.http.HttpStatusCode.NotFound, MSG_NOT_FOUND)
     return id
 }
