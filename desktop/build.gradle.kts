@@ -2,6 +2,7 @@ import java.security.MessageDigest
 
 plugins {
     kotlin("jvm")
+    kotlin("plugin.serialization") version "2.4.21"
     application
 }
 
@@ -30,10 +31,15 @@ dependencies {
     implementation("dev.g000sha256:tdl-coroutines-jvm:15.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("io.ktor:ktor-server-cio:3.6.1")
+    implementation("io.ktor:ktor-server-content-negotiation:3.6.1")
+    implementation("io.ktor:ktor-server-sse:3.6.1")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     // Embedded view (WebView2).
     implementation("net.java.dev.jna:jna:5.19.1")
     implementation("net.java.dev.jna:jna-platform:5.19.1")
     testImplementation(kotlin("test"))
+    testImplementation("io.ktor:ktor-server-test-host:3.6.1")
     webviewNatives("com.github.webview:webview_java:1.3.0") { isTransitive = false }
 }
 
