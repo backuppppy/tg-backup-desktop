@@ -323,3 +323,40 @@ test('the dialog with no accounts shows the warning, and via-takeout shows its h
   }
   await expect(dialog.getByText('חשבונות (חשבון אחד — למשימה אחת בלבד)')).toBeVisible();
 });
+
+async function sourceRightOfTarget(c) {
+  const src = await c.locator('.job-source').boundingBox();
+  const dst = await c.locator('.job-target').boundingBox();
+  expect(src.x).toBeGreaterThan(dst.x);
+}
+
+test('the source sits right of the target, with a Latin source and with a Hebrew source title', async ({ page }) => {
+  await fakeStream(page, {
+    jobs: [
+      job({ id: 'b1', name: 'לטינית', source: '@src_x', target: '@dst_y' }),
+      job({ id: 'b2', name: 'עברית', source: '@src_z', target: 'https://t.me/c/200/1' }),
+    ],
+    statuses: { b2: status({ sourceTitle: 'ערוץ המקור' }) },
+  });
+  await page.goto('/#jobs');
+  const latin = card(page, 'לטינית');
+  await expect(latin).toContainText('@src_x  ←  @dst_y');
+  await expect(latin.locator('.job-source')).toHaveText('@src_x');
+  await sourceRightOfTarget(latin);
+  const hebrew = card(page, 'עברית');
+  await expect(hebrew.locator('.job-source')).toHaveText('ערוץ המקור');
+  await sourceRightOfTarget(hebrew);
+});
+
+test('a link that is not http(s) is shown as plain text', async ({ page }) => {
+  await fakeStream(page, {
+    jobs: [job({ id: 'j1', name: 'סכמה' })],
+    statuses: { j1: status({ running: true, phase: 'שלב', lastId: 5, lastLink: 'javascript:alert(1)', lastTargetLink: 'JavaScript:alert(2)' }) },
+  });
+  await page.goto('/#jobs');
+  const c = card(page, 'סכמה');
+  await expect(c.getByText('הודעה אחרונה שטופלה: 5')).toBeVisible();
+  await expect(c.getByText('שלב')).toBeVisible();
+  await expect(page.locator('a[href^="javascript" i]')).toHaveCount(0);
+  await expect(c.getByRole('link')).toHaveCount(0);
+});

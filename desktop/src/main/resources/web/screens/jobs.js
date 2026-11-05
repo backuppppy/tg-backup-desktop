@@ -65,9 +65,12 @@ function header(statuses) {
   );
 }
 
-/** A link that opens in a new window (Task 9 routes it to the system browser), or plain text without a URL. */
+/**
+ * A link that opens in a new window (Task 9 routes it to the system browser), or plain text when there is no URL
+ * or it is not http(s).
+ */
 function maybeLink(cls, url, text) {
-  return url
+  return typeof url === 'string' && /^https?:\/\//i.test(url)
     ? h('a', { class: `${cls} link`, href: url, target: '_blank', rel: 'noopener' }, text)
     : h('div', { class: cls }, text);
 }
@@ -108,7 +111,11 @@ function jobCard(job, status, accounts, state) {
 
   return h('section', { class: `card job-card${running ? ' running' : ''}`, 'data-job-id': job.id },
     h('h3', { class: 'job-title' }, `${icon} ${blank(job.name) ? `משימה ${job.id}` : job.name}`),
-    h('div', { class: 'small pre bidi', dir: 'auto' }, `${blank(status.sourceTitle) ? job.source : status.sourceTitle}  ←  ${job.target}`),
+    // RTL as in Android: source on the right, the arrow toward the target; each id keeps its own direction.
+    h('div', { class: 'small pre', dir: 'rtl' },
+      h('bdi', { class: 'job-source' }, blank(status.sourceTitle) ? job.source : status.sourceTitle),
+      '  ←  ',
+      h('bdi', { class: 'job-target' }, job.target)),
     h('div', { class: 'small' }, details),
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),

@@ -226,8 +226,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 [hidden] { display: none !important; }
 .pre { white-space: pre-wrap; }
-/* Lines with ids or links take their direction from the content, but keep the screen's alignment. */
-.bidi { text-align: right; }
 .small { font-size: 13px; line-height: 1.45; }
 .error-text { color: var(--error); margin: 0; }
 button.full { width: 100%; }
@@ -265,5 +263,3 @@ button.text.danger { color: var(--error); }
 .dialog input[role="switch"]:checked { background: var(--primary); }
 .dialog input[role="switch"]:checked::after { inset-inline-start: 21px; background: var(--on-primary); }
 .dialog .switch-row .pre { white-space: pre-wrap; }
-/* Lines with ids or links take their direction from the content, but keep the screen's alignment. */
-.bidi { text-align: right; }
