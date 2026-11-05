@@ -32,23 +32,113 @@ class ExternalLinksTest {
         }
     }
 
+    private val origin = "http://127.0.0.1:5000"
+
     @Test
-    fun theBindingArgumentIsTheFirstStringOfTheJsonArray() {
-        assertEquals("https://x.org/", ExternalLinks.urlFromBindArgs("[\"https://x.org/\"]"))
-        assertNull(ExternalLinks.urlFromBindArgs("[]"))
-        assertNull(ExternalLinks.urlFromBindArgs("[1]"))
-        assertNull(ExternalLinks.urlFromBindArgs("not json"))
-        assertNull(ExternalLinks.urlFromBindArgs(null))
+    fun aRequestFromOurOriginWithAnHttpsUrlOpens() {
+        assertEquals(
+            LinkDecision.Open("https://x.org/"),
+            ExternalLinks.decide("[\"$origin\",\"https://x.org/\"]", origin),
+        )
     }
 
     @Test
-    fun theInitScriptHooksClicksAndWindowOpen() {
-        val js = ExternalLinks.INIT_SCRIPT
+    fun aRequestFromAnotherOriginIsRefusedWhateverTheUrl() {
+        for (other in listOf("https://evil.example", "http://127.0.0.1:5001", "http://localhost:5000", "null", "")) {
+            assertEquals(LinkDecision.WrongOrigin, ExternalLinks.decide("[\"$other\",\"https://x.org/\"]", origin), other)
+        }
+        // The old one-argument form carries no origin.
+        assertEquals(LinkDecision.WrongOrigin, ExternalLinks.decide("[\"https://x.org/\"]", origin))
+    }
+
+    @Test
+    fun aNonHttpUrlFromOurOriginIsRejected() {
+        assertEquals(LinkDecision.Rejected, ExternalLinks.decide("[\"$origin\",\"file:///C:/x\"]", origin))
+        assertEquals(LinkDecision.Rejected, ExternalLinks.decide("[\"$origin\",1]", origin))
+    }
+
+    @Test
+    fun malformedArgumentsAreRefused() {
+        for (req in listOf(null, "", "not json", "[]", "{}", "[1,2]")) {
+            assertEquals(LinkDecision.WrongOrigin, ExternalLinks.decide(req, origin), req.toString())
+        }
+    }
+
+    @Test
+    fun theOriginOfTheEntryUrl() {
+        assertEquals(origin, ExternalLinks.originOf("http://127.0.0.1:5000/?t=abc"))
+        assertEquals("https://t.me:443", ExternalLinks.originOf("HTTPS://T.ME/x"))
+        assertNull(ExternalLinks.originOf("about:blank"))
+        assertNull(ExternalLinks.originOf("not a url"))
+    }
+
+    @Test
+    fun ourPagesStayInTheWindow() {
+        for (href in listOf("$origin/", "$origin/#jobs", "$origin/?t=abc", "about:blank")) {
+            assertEquals(PageAction.Stay, ExternalLinks.onPage(href, origin), href)
+        }
+    }
+
+    @Test
+    fun aForeignPageSendsTheWindowHomeAndOpensItInTheBrowser() {
+        assertEquals(PageAction.GoHome("https://t.me/x"), ExternalLinks.onPage("https://t.me/x", origin))
+        // Same host, another port: not ours.
+        assertEquals(PageAction.GoHome("http://127.0.0.1:50001/"), ExternalLinks.onPage("http://127.0.0.1:50001/", origin))
+        // Not http(s): back home, but nothing is opened.
+        assertEquals(PageAction.GoHome(null), ExternalLinks.onPage("file:///C:/Windows/", origin))
+        assertEquals(PageAction.GoHome(null), ExternalLinks.onPage("data:text/html,hi", origin))
+    }
+
+    @Test
+    fun theInitScriptIsBoundToOurOriginAndHooksClicksFormsAndWindowOpen() {
+        val js = ExternalLinks.initScript(origin)
+        assertTrue("var ORIGIN = \"$origin\";" in js)
+        assertTrue("location.origin !== ORIGIN" in js)
         assertTrue("addEventListener('click'" in js)
-        assertTrue("auxclick" in js)
+        assertTrue("addEventListener('auxclick'" in js)
+        assertTrue("addEventListener('submit'" in js)
         assertTrue("window.open =" in js)
-        assertTrue("tgbOpenExternal" in js)
-        assertTrue("_blank" in js)
+        assertTrue("window.${ExternalLinks.BINDING}(ORIGIN, u)" in js)
+        assertTrue("window.${ExternalLinks.PAGE_BINDING}(location.href)" in js)
+        // A quote in the origin cannot break out of the string.
+        assertTrue("var ORIGIN = \"a\\\"b\";" in ExternalLinks.initScript("a\"b"))
+    }
+}
+
+class WindowLifecycleTest {
+    @Test
+    fun aWindowThatOpenedAndClosedShutsDownAndExitsZero() {
+        val calls = mutableListOf<String>()
+        val code = WindowLifecycle.run({ calls += "open"; WindowOutcome.CLOSED }, { calls += "shutdown" }, { calls += "message" })
+        assertEquals(0, code)
+        assertEquals(listOf("open", "shutdown"), calls)
+    }
+
+    @Test
+    fun aThrowingOpenStillShutsTheEngineDown() {
+        val calls = mutableListOf<String>()
+        val code = WindowLifecycle.run({ error("no dll") }, { calls += "shutdown" }, { calls += "message" })
+        assertEquals(1, code)
+        assertEquals(listOf("shutdown"), calls)
+    }
+
+    @Test
+    fun aMissingWebView2ShutsDownThenTellsTheUser() {
+        val calls = mutableListOf<String>()
+        val code = WindowLifecycle.run({ WindowOutcome.NO_WEBVIEW }, { calls += "shutdown" }, { calls += "message" })
+        assertEquals(2, code)
+        assertEquals(listOf("shutdown", "message"), calls)
+    }
+
+    @Test
+    fun aFailingMessageDoesNotChangeTheExitCode() {
+        val code = WindowLifecycle.run({ WindowOutcome.NO_WEBVIEW }, { }, { error("headless") })
+        assertEquals(2, code)
+    }
+
+    @Test
+    fun theMissingWebView2TextIsHebrew() {
+        assertEquals("לא ניתן לפתוח את החלון: רכיב WebView2 חסר במחשב.", MSG_NO_WEBVIEW)
     }
 }
 
