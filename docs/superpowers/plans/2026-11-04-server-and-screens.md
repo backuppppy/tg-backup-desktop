@@ -414,6 +414,49 @@
 - [ ] **Step 2:** Update the CI smoke assertions to `PAGE_LOADED`, `API_OK`, `WINDOW_INSIDE yes` and `NATIVE_TMP_RELAUNCH`. Keep the screenshot artifact, which now shows the real Jobs screen. Push with the PAT. Expected: CI green.
 - [ ] **Step 3:** Download the screenshot artifact and look at it. It must be the dark RTL Jobs screen with the bottom nav. Commit.
 
+### Task 10a: Desktop layout (added 2026-11-05 at the user's request)
+
+The user: the screens must also be comfortable on a PC screen, not only phone-like. The phone layout (under 900 px) stays exactly as it is.
+
+**Files:**
+- Modify: `desktop/src/main/resources/web/app.css`, `index.html`, `app.js`, `screens/*.js` (only where the layout needs it)
+- Test: `web-tests/desktop-layout.spec.mjs`
+
+**Interfaces:**
+- `≥ 900px` wide:
+  - A **navigation rail** on the right side (RTL start) replaces the bottom bar. It is about 96 px wide, with the same five icons and labels and the same order from top to bottom. It is fixed while the content scrolls.
+  - The top bar stays.
+- The content area has `max-width: 1200px` and is centred.
+- **Cards and lists:**
+  - Job cards and account cards sit in a responsive grid: 2 columns from 900 px and 3 from 1500 px, using `grid-template-columns: repeat(auto-fill, minmax(420px, 1fr))`.
+  - The add buttons (`➕ הוסף משימה` / `➕ הוסף חשבון`) fit the grid and are not full-window width.
+  - The all-jobs header row stays on one line.
+- **Export screen:** two columns at ≥ 1100 px.
+  - The setup or chat picker goes on the right.
+  - The options card goes on the left.
+  - The progress panel stays a single centred column of at most 720 px.
+- **Log screen:** full content width, monospace.
+- **Settings screen:** the cards have a max width of 720 px.
+- **Dialogs:** centred, `width: min(560px, 92vw)`, with the action buttons kept visible while the fields scroll.
+- **Pointer and keyboard:**
+  - Buttons, cards with actions, links and nav items get `:hover` and `:focus-visible` styles (a visible ring in primary colour).
+  - Keyboard: Tab reaches every control in order. Enter submits a dialog when `שמור` or `אישור` is enabled, and Esc cancels it.
+  - The cursor is `pointer` on clickable items.
+- **Sizes:** text sizes and click targets stay at least as large as on the phone (body 15–16 px, controls at least 40 px tall).
+
+- [ ] **Step 1: Write the failing spec** `desktop-layout.spec.mjs`, at viewports `1100x750` and `1920x1040`, using the same seed data as the jobs and accounts specs:
+  - The nav rail is visible on the right: its bounding box `x + width` is close to the viewport width, and it is taller than it is wide. The bottom bar is not visible.
+  - With 3 jobs seeded, at least 2 cards share the same `top` (grid), and no card is wider than 700 px.
+  - The content width is at most 1200 px.
+  - A dialog is no wider than 560 px and is centred within 10 px.
+  - Hover over `▶ הפעל` changes its background, and Tab focus shows an outline.
+  - Esc closes the JobDialog, and Enter saves it when `שמור` is enabled.
+  - At `390x844` the bottom bar is still there and the rail is not, so the phone layout is unchanged.
+- [ ] **Step 2:** Run the spec. Expected: FAIL.
+- [ ] **Step 3:** Implement with CSS media queries first. Change JS only where the structure needs it, e.g. a wrapper element for the grid.
+- [ ] **Step 4:** Run the whole Playwright suite. Expected: PASS, and the existing phone specs are unchanged.
+- [ ] **Step 5:** Save screenshots of every tab at `1100x750` and of the Jobs tab at `1920x1040` (deviceScaleFactor 2) to the workspace dir. Commit and push. Expected: CI green. The Windows CI screenshot then shows the rail.
+
 ### Task 10: Phone width, long names, and the results
 
 **Files:**
