@@ -334,6 +334,9 @@ button.chat-card:hover { background: var(--surface-variant); }
   :root { --rail-width: 96px; }
   body { padding-inline-start: var(--rail-width); }
   main { max-width: 1200px; padding: 16px 16px 32px; }
+  /* The title lines up with the content column. */
+  .topbar { padding: 14px 0; }
+  .topbar h1 { max-width: 1200px; margin-inline: auto; padding-inline: 16px; }
 
   /* The same nav, as a rail: fixed full height, the five tabs top to bottom, the active pill kept. */
   .tabs {
