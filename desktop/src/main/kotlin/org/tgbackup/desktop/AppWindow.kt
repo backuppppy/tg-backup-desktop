@@ -40,9 +40,15 @@ internal fun interface DispatchFn : Callback {
     fun invoke(w: Pointer?, arg: Pointer?)
 }
 
+/**
+ * The library's UTF-8 option does not cover callback arguments (JNA decodes those with the platform charset,
+ * cp1252 on an English Windows), so they arrive as raw pointers and are read as UTF-8 by [utf8].
+ */
 internal fun interface BindFn : Callback {
-    fun invoke(seq: String?, req: String?, arg: Pointer?)
+    fun invoke(seq: Pointer?, req: Pointer?, arg: Pointer?)
 }
+
+private fun Pointer?.utf8(): String? = this?.getString(0, "UTF-8")
 
 private interface Kernel32Env : Library {
     fun SetEnvironmentVariableW(name: WString, value: WString?): Boolean
@@ -89,8 +95,9 @@ object AppWindow {
             ?: return smoke.fail("webview_create returned null (WebView2 runtime missing?)")
         val hwnd = lib.webview_get_window(w)?.let(::HWND)
         val terminate = DispatchFn { view, _ -> view?.let(lib::webview_terminate) }
-        val openExternal = BindFn { seq, req, _ ->
-            val target = ExternalLinks.urlFromBindArgs(req)
+        val openExternal = BindFn { seqPtr, reqPtr, _ ->
+            val seq = seqPtr.utf8()
+            val target = ExternalLinks.urlFromBindArgs(reqPtr.utf8())
             if (target != null && ExternalLinks.allowed(target)) {
                 browse(target)
             } else {
@@ -99,9 +106,9 @@ object AppWindow {
             }
             if (seq != null) lib.webview_return(w, seq, 0, "null")
         }
-        val onLoad = BindFn { seq, req, _ ->
-            if (seq != null) lib.webview_return(w, seq, 0, "null")
-            val problem = SmokePage.problem(req)
+        val onLoad = BindFn { seqPtr, reqPtr, _ ->
+            seqPtr.utf8()?.let { lib.webview_return(w, it, 0, "null") }
+            val problem = SmokePage.problem(reqPtr.utf8())
             if (problem != null) return@BindFn smoke.fail(problem)
             hwnd?.let(::reportPlacement)
             smoke.loaded { lib.webview_dispatch(w, terminate, null) }
