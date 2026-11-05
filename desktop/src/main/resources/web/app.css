@@ -326,3 +326,33 @@ button.chat-card:hover { background: var(--surface-variant); }
 .export progress::-webkit-progress-bar { background: var(--surface-variant); border-radius: 2px; }
 .export progress::-webkit-progress-value { background: var(--primary); border-radius: 2px; }
 .export progress::-moz-progress-bar { background: var(--primary); }
+
+/* ---------------------------------------------------------------- desktop (Task 10a)
+   From 900 px wide: a navigation rail on the right (RTL start) instead of the bottom bar, and the content at most
+   1200 px, centred in the space left of the rail. Under 900 px nothing here applies: the phone layout is unchanged. */
+@media (min-width: 900px) {
+  :root { --rail-width: 96px; }
+  body { padding-inline-start: var(--rail-width); }
+  main { max-width: 1200px; padding: 16px 16px 32px; }
+
+  /* The same nav, as a rail: fixed full height, the five tabs top to bottom, the active pill kept. */
+  .tabs {
+    top: 0;
+    bottom: 0;
+    inset-inline-start: 0;
+    inset-inline-end: auto;
+    width: var(--rail-width);
+    height: auto;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 16px 0;
+    border-top: 0;
+    border-inline-end: 1px solid var(--surface-variant);
+  }
+  .tabs a { flex: none; height: 64px; padding: 0 4px; }
+  .tabs a .pill { width: 56px; }
+
+  /* No bottom bar to stay above. */
+  .toast { bottom: 24px; }
+}

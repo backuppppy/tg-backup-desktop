@@ -20,16 +20,18 @@ test('the top bar shows the version from /api/state', async ({ page }) => {
   await expect(page.locator('#title')).toHaveText(`TG Backup  v${state.version}`);
 });
 
-test('the five tabs appear in order from right to left', async ({ page }) => {
+test('the five tabs appear in order: right to left on the bottom bar, top to bottom on the desktop rail', async ({ page }) => {
   await open(page);
   const tabs = page.locator('nav.tabs a');
   await expect(tabs).toHaveText(TABS);
-  const xs = [];
-  for (let i = 0; i < TABS.length; i++) {
-    const box = await tabs.nth(i).boundingBox();
-    xs.push(box.x);
+  const boxes = [];
+  for (let i = 0; i < TABS.length; i++) boxes.push(await tabs.nth(i).boundingBox());
+  // From 900 px wide the nav is a rail on the right (Task 10a).
+  const rail = page.viewportSize().width >= 900;
+  for (let i = 1; i < boxes.length; i++) {
+    if (rail) expect(boxes[i].y).toBeGreaterThan(boxes[i - 1].y);
+    else expect(boxes[i].x).toBeLessThan(boxes[i - 1].x);
   }
-  for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeLessThan(xs[i - 1]);
 });
 
 test('every tab has an icon above its label', async ({ page }) => {
