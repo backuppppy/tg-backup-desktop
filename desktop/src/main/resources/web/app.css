@@ -13,7 +13,7 @@
   --log-error: #F07178;
   --log-info: #B0BEC5;
   --nav-height: 80px;
-  --font: system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --font: system-ui, "Segoe UI", Roboto, Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", "Apple Color Emoji";
   --mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   color-scheme: dark;
 }
