@@ -150,7 +150,7 @@ button.text, .button.text {
 }
 button:disabled { opacity: .5; cursor: default; }
 
-input[type="text"], input[type="password"], input:not([type]), select, textarea {
+input[type="text"], input[type="password"], input[type="tel"], input:not([type]), select, textarea {
   font: inherit;
   color: var(--on-surface);
   background: transparent;
@@ -263,3 +263,17 @@ button.text.danger { color: var(--error); }
 .dialog input[role="switch"]:checked { background: var(--primary); }
 .dialog input[role="switch"]:checked::after { inset-inline-start: 21px; background: var(--on-primary); }
 .dialog .switch-row .pre { white-space: pre-wrap; }
+
+/* Accounts screen */
+.accounts { display: flex; flex-direction: column; gap: 10px; }
+.accounts .card { margin: 0; }
+.accounts-note { margin: 0; }
+.account-card { display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+.account-part { display: contents; }
+.account-card > button { align-self: flex-start; }
+.account-title { margin: 0; font-size: 16px; font-weight: 500; }
+.account-input { display: flex; align-items: flex-end; gap: 8px; }
+.account-input .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.account-input .field-label { font-size: 12px; color: var(--on-surface-dim); }
+.ok-color { color: var(--secondary); }
+.error-color { color: var(--error); }

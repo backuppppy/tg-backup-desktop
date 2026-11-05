@@ -4,12 +4,13 @@ import { connect } from './lib/store.js';
 import { api } from './lib/api.js';
 import { h, formDialog, toast } from './lib/ui.js';
 import * as jobs from './screens/jobs.js';
+import * as accounts from './screens/accounts.js';
 import * as log from './screens/log.js';
 import * as settings from './screens/settings.js';
 
 const empty = { render() {} };
-// Later tasks fill export and accounts.
-const SCREENS = { jobs, export: empty, accounts: empty, log, settings };
+// A later task fills export.
+const SCREENS = { jobs, export: empty, accounts, log, settings };
 const DEFAULT_TAB = 'jobs';
 
 const root = document.getElementById('screen');
