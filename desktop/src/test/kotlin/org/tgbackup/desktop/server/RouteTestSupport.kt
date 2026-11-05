@@ -23,7 +23,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
 
-private val RouteDefaults = createClientPlugin("RouteDefaults") {
+internal val RouteDefaultsForTests = createClientPlugin("RouteDefaults") {
     onRequest { request, _ ->
         if (!request.headers.contains(HttpHeaders.Host)) request.headers.append(HttpHeaders.Host, "localhost:80")
         if (!request.headers.contains(HttpHeaders.Cookie)) request.headers.append(HttpHeaders.Cookie, "$SESSION_COOKIE=t1")
@@ -46,7 +46,7 @@ abstract class RouteTestBase {
 
     protected fun withServer(block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
         application { tgbModule(app = app, token = "t1", allowedHosts = setOf("localhost:80")) }
-        block(createClient { install(RouteDefaults) })
+        block(createClient { install(RouteDefaultsForTests) })
     }
 
     protected suspend fun HttpClient.postJson(path: String, body: String = "{}"): HttpResponse = post(path) {

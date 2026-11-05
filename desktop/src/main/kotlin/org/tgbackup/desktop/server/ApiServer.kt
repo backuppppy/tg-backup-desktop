@@ -33,11 +33,14 @@ val TgbJson = Json {
 /**
  * The program's internal server: it serves the screens (classpath `web/`) and the API to the program's own
  * WebView2 window, on [host] only. A new [sessionToken] is made on every launch; the window opens [entryUrl].
+ * [extraRoutes] are installed with the others (behind the same security); the program passes none, only the
+ * DevServer passes its test-only routes.
  */
 class ApiServer(
     private val app: DesktopApp,
     private val host: String = "127.0.0.1",
     private val port: Int = 0,
+    private val extraRoutes: Route.(Events) -> Unit = {},
 ) {
     /** 32 random bytes, hex encoded. */
     val sessionToken: String = ByteArray(32).also { SecureRandom().nextBytes(it) }
@@ -53,7 +56,7 @@ class ApiServer(
         // Bind first (port 0 = any free port); the allowed Host values depend on the port we get.
         val hosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val created = embeddedServer(CIO, port = port, host = host) {
-            tgbModule(app, sessionToken, hosts)
+            tgbModule(app, sessionToken, hosts, extraRoutes)
         }
         created.start(wait = false)
         val actual = runBlocking { created.engine.resolvedConnectors().first().port }
@@ -79,7 +82,12 @@ class ApiServer(
 }
 
 /** Everything the server does, installable on its own with `testApplication`. */
-fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<String>) {
+fun Application.tgbModule(
+    app: DesktopApp,
+    token: String,
+    allowedHosts: Set<String>,
+    extraRoutes: Route.(Events) -> Unit = {},
+) {
     installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
     install(SSE)
@@ -98,6 +106,7 @@ fun Application.tgbModule(app: DesktopApp, token: String, allowedHosts: Set<Stri
         jobRoutes(app, locks)
         accountRoutes(app, locks)
         exportRoutes(app, events, ChatHandles())
+        extraRoutes(events)
         webRoutes()
     }
 }

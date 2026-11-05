@@ -1,6 +1,7 @@
 // Starts the real engine and server (`./gradlew :desktop:devServer`), waits for its `DEV_URL <url>` line, opens
 // that URL once so the session cookie is set, and saves it for every test (storageState).
-// With TGB_DEV_URL set, a server that is already running is used instead.
+// With TGB_DEV_URL set, a server that is already running is used instead (start it with TGB_DEV_FIXTURE set, e.g. 1).
+// TGB_DEV_FIXTURE turns on the DevServer's test-only routes (POST /api/dev/export-state); `1` seeds nothing.
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ function startDevServer() {
   const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
   const child = spawn(gradlew, [':desktop:devServer', '--console=plain', '-q'], {
     cwd: repo,
+    env: { ...process.env, TGB_DEV_FIXTURE: process.env.TGB_DEV_FIXTURE || '1' },
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
