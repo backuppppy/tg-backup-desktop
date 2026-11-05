@@ -285,7 +285,12 @@ test.describe('desktop', () => {
     await open(page, '#log');
     const main = await box(page.locator('main'));
     const list = await box(page.locator('.log-list'));
-    expect(list.width).toBeGreaterThanOrEqual(main.width - 30);
+    // The whole content box of main (its width less its padding).
+    const inner = await page.locator('main').evaluate((el) => {
+      const c = getComputedStyle(el);
+      return el.clientWidth - parseFloat(c.paddingLeft) - parseFloat(c.paddingRight);
+    });
+    expect(Math.abs(list.width - inner)).toBeLessThanOrEqual(1);
     expect(await page.locator('.log-list').evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/mono/i);
     await open(page, '#settings');
     for (const c of await page.locator('[data-screen="settings"] .card').all()) {

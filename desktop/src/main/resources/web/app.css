@@ -356,3 +356,50 @@ button.chat-card:hover { background: var(--surface-variant); }
   /* No bottom bar to stay above. */
   .toast { bottom: 24px; }
 }
+
+/* Desktop: cards in a grid, centred dialogs, the export screen in two columns, narrower settings cards. */
+@media (min-width: 900px) {
+  /* Job and account cards: 2 columns (3 from 1500 px, below). Header, warning and note span the row; the add
+     button takes one cell, not the whole width. */
+  .jobs, .accounts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+    gap: 12px;
+  }
+  .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full) { grid-column: 1 / -1; }
+  .jobs > button.full, .accounts > button.full { align-self: start; }
+
+  /* The summary and the all-jobs buttons; the buttons stay on one line. */
+  .jobs-header { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+  .jobs-header .row { flex-wrap: nowrap; }
+
+  .dialog { width: min(560px, 92vw); max-width: none; }
+
+  /* The progress panel: one centred column. */
+  .export > .export-panel { width: 100%; max-width: 720px; margin-inline: auto; }
+
+  [data-screen="settings"] .card { max-width: 720px; margin-inline: auto; }
+
+  /* Click targets at least as large as on the phone. */
+  button, .button { min-height: 40px; }
+  .button { display: inline-flex; align-items: center; justify-content: center; }
+  input[type="text"], input[type="password"], input[type="tel"], input:not([type]), select { min-height: 40px; }
+}
+
+/* Wide: 3 columns. 3 × 420 px does not fit in the 1200 px content, so the minimum is lower here. */
+@media (min-width: 1500px) {
+  .jobs, .accounts { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+}
+
+/* Export from 1100 px: the setup (intro, session, chat picker) on the right, the options card on the left. */
+@media (min-width: 1100px) {
+  .export:has(> .options-slot) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    align-items: start;
+    gap: 10px 16px;
+  }
+  .export > .export-intro, .export > .export-session, .export > .export-picker { grid-column: 1; }
+  .export > .options-slot { grid-column: 2; grid-row: 1 / 4; }
+}
