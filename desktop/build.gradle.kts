@@ -106,7 +106,7 @@ tasks.register<JavaExec>("devServer") {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Embedded-view spike packaging (Windows only): app-image via jpackage, then the installer via
+// Windows packaging (TGBackup.exe = org.tgbackup.desktop.MainKt): app-image via jpackage, then the installer via
 // jpackage --type exe when WiX 3 (candle + light) is on PATH, otherwise via Inno Setup.
 // Output: build/spike/<candidate>/installer/TGBackup-Setup.exe (+ installer-kind.txt: wix|inno),
 // installing TGBackup.exe. All native libraries are placed inside the app dir at build time.
@@ -131,7 +131,7 @@ val spikeCandidates = listOf(
     SpikeCandidate(
         id = "webview2",
         task = "WebView2",
-        mainClass = "org.tgbackup.desktop.spike.WebView2WindowKt",
+        mainClass = "org.tgbackup.desktop.MainKt",
         excludeJars = emptyList(),
         javaOptions = listOf(
             "-Dtgb.natives=\$APPDIR\\natives",

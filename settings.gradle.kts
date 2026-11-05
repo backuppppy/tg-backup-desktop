@@ -8,7 +8,7 @@ pluginManagement {
 dependencyResolutionManagement {
     repositories {
         mavenCentral()
-        // Only for the WebView2 spike: webview.dll + WebView2Loader.dll are taken from this jar.
+        // The WebView2 window: webview.dll + WebView2Loader.dll are taken from this jar.
         maven("https://jitpack.io") {
             content { includeGroup("com.github.webview") }
         }
