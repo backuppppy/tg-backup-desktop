@@ -14,6 +14,7 @@ import java.awt.Desktop
 import java.io.File
 import java.net.URI
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
@@ -68,11 +69,13 @@ object AppWindow {
     private val keepAlive = mutableListOf<Any>()
 
     /**
-     * Opens [url] and blocks until the window is closed. The WebView2 profile goes to [profileDir] (otherwise it
-     * would sit next to TGBackup.exe, read-only under Program Files). [onRejectedLink] is told (without the URL)
-     * when the page asked to open a link that is not http(s).
+     * Opens [url] and blocks until the window is closed ([WindowOutcome.CLOSED]); returns
+     * [WindowOutcome.NO_WEBVIEW] at once when WebView2 cannot be created. The WebView2 profile goes to [profileDir]
+     * (otherwise it would sit next to TGBackup.exe, read-only under Program Files). [onRejectedLink] is told
+     * (without the URL) when our page asked to open a link that is not http(s).
      */
-    fun open(url: String, smoke: AppSmoke, profileDir: Path, onRejectedLink: () -> Unit = {}) {
+    fun open(url: String, smoke: AppSmoke, profileDir: Path, onRejectedLink: () -> Unit = {}): WindowOutcome {
+        val origin = checkNotNull(ExternalLinks.originOf(url)) { "entry URL is not http" }
         val natives = File(System.getProperty("tgb.natives") ?: "natives").absoluteFile
         val kernel32 = Native.load("kernel32", Kernel32Env::class.java)
         val userData = profileDir.toFile().apply { mkdirs() }
@@ -92,41 +95,62 @@ object AppWindow {
         )
 
         val w = lib.webview_create(0, null)
-            ?: return smoke.fail("webview_create returned null (WebView2 runtime missing?)")
+        if (w == null) {
+            smoke.fail("webview_create returned null (WebView2 runtime missing?)")
+            println("WEBVIEW_MISSING")
+            return WindowOutcome.NO_WEBVIEW
+        }
         val hwnd = lib.webview_get_window(w)?.let(::HWND)
+        // webview_dispatch must never reach a destroyed view (the smoke's close comes from another thread).
+        val alive = AtomicBoolean(true)
         val terminate = DispatchFn { view, _ -> view?.let(lib::webview_terminate) }
+        val close = { synchronized(alive) { if (alive.get()) lib.webview_dispatch(w, terminate, null) } }
         val openExternal = BindFn { seqPtr, reqPtr, _ ->
-            val seq = seqPtr.utf8()
-            val target = ExternalLinks.urlFromBindArgs(reqPtr.utf8())
-            if (target != null && ExternalLinks.allowed(target)) {
-                browse(target)
-            } else {
-                println("EXTERNAL_LINK_REJECTED")
-                runCatching(onRejectedLink)
+            when (val d = ExternalLinks.decide(reqPtr.utf8(), origin)) {
+                is LinkDecision.Open -> browse(d.url)
+                LinkDecision.Rejected -> {
+                    println("EXTERNAL_LINK_REJECTED")
+                    runCatching(onRejectedLink)
+                }
+                LinkDecision.WrongOrigin -> println("EXTERNAL_LINK_WRONG_ORIGIN")
             }
-            if (seq != null) lib.webview_return(w, seq, 0, "null")
+            seqPtr.utf8()?.let { lib.webview_return(w, it, 0, "null") }
+        }
+        // A document that is not ours (a navigation the init script could not catch): back home at once.
+        val onPage = BindFn { seqPtr, reqPtr, _ ->
+            seqPtr.utf8()?.let { lib.webview_return(w, it, 0, "null") }
+            val href = ExternalLinks.hrefFromBindArgs(reqPtr.utf8()) ?: return@BindFn
+            val action = ExternalLinks.onPage(href, origin)
+            if (action is PageAction.GoHome) {
+                println("FOREIGN_PAGE_LEFT")
+                lib.webview_navigate(w, url)
+                action.external?.let(::browse)
+            }
         }
         val onLoad = BindFn { seqPtr, reqPtr, _ ->
             seqPtr.utf8()?.let { lib.webview_return(w, it, 0, "null") }
             val problem = SmokePage.problem(reqPtr.utf8())
             if (problem != null) return@BindFn smoke.fail(problem)
             hwnd?.let(::reportPlacement)
-            smoke.loaded { lib.webview_dispatch(w, terminate, null) }
+            smoke.loaded(close)
         }
-        keepAlive.addAll(listOf(terminate, openExternal, onLoad))
+        keepAlive.addAll(listOf(terminate, openExternal, onPage, onLoad))
 
         lib.webview_set_title(w, WINDOW_TITLE)
         lib.webview_set_size(w, WINDOW_WIDTH, WINDOW_HEIGHT, WEBVIEW_HINT_NONE)
         hwnd?.let(::centreOnScreen) ?: println("WINDOW_FIT skipped (no HWND)")
         lib.webview_bind(w, ExternalLinks.BINDING, openExternal, null)
-        lib.webview_init(w, ExternalLinks.INIT_SCRIPT)
+        lib.webview_bind(w, ExternalLinks.PAGE_BINDING, onPage, null)
+        lib.webview_init(w, ExternalLinks.initScript(origin))
         if (smoke.enabled) {
             lib.webview_bind(w, SmokePage.BINDING, onLoad, null)
             lib.webview_init(w, SmokePage.SCRIPT)
         }
         lib.webview_navigate(w, url)
         lib.webview_run(w)
+        synchronized(alive) { alive.set(false) }
         lib.webview_destroy(w)
+        return WindowOutcome.CLOSED
     }
 
     /** Opens [url] in the default browser, off the window's thread (Desktop.browse can take a while). */

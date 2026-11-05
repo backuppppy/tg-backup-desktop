@@ -4,6 +4,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import com.sun.jna.Library
+import com.sun.jna.Native
+import com.sun.jna.Pointer
+import com.sun.jna.WString
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.desktop.server.ApiServer
 import org.tgbackup.desktop.server.HEALTH_PATH
@@ -33,19 +37,23 @@ fun main(args: Array<String>) {
     println("TGBackup $VERSION")
     val smoke = AppSmoke("--smoke" in args)
     smoke.startWatchdog()
-    try {
+    val code = try {
         run(smoke)
     } catch (t: Throwable) {
-        if (!smoke.enabled) throw t
+        // Before the window: the engine or the server did not start. Never leave a process without a window.
+        println("START_FAIL ${t::class.java.simpleName}")
+        t.printStackTrace()
         smoke.fail("${t::class.java.simpleName}: ${t.message}")
+        1
     }
-    smoke.finished()
+    if (code == 0) smoke.finished() else smoke.fail("window exit code $code")
     System.out.flush()
-    Runtime.getRuntime().halt(0)
+    Runtime.getRuntime().halt(code)
 }
 
+/** Returns the exit code ([WindowLifecycle.run]). */
 @OptIn(kotlin.io.path.ExperimentalPathApi::class)
-private fun run(smoke: AppSmoke) {
+private fun run(smoke: AppSmoke): Int {
     val dataDir = if (smoke.enabled) {
         smokeDataDir(AppDirs.dataDir()).also { if (it.exists()) it.deleteRecursively() }
     } else {
@@ -53,18 +61,55 @@ private fun run(smoke: AppSmoke) {
     }
     println("DATA_DIR $dataDir")
     val app = DesktopApp(dataDir)
-    app.start()
-    val server = ApiServer(app)
-    server.start()
-    if (smoke.enabled) SmokeApi(server).checkAndSeed()
-
-    AppWindow.open(server.entryUrl(), smoke, dataDir.resolve("webview2")) {
-        app.log.warn("קישור שאינו http(s) נחסם")
+    var server: ApiServer? = null
+    val shutdown = {
+        val started = System.nanoTime()
+        Shutdown.run(listOfNotNull(app::close, server?.let { s -> s::stop }), SHUTDOWN_LIMIT_MS)
+        println("SHUTDOWN_DONE ${(System.nanoTime() - started) / 1_000_000}ms")
     }
+    val profileDir = dataDir.resolve("webview2")
+    val code = WindowLifecycle.run(
+        open = {
+            app.start()
+            val s = ApiServer(app).also { server = it }
+            s.start()
+            if (smoke.enabled) SmokeApi(s).checkAndSeed()
+            AppWindow.open(s.entryUrl(), smoke, profileDir) { app.log.warn("קישור שאינו http(s) נחסם") }
+        },
+        shutdown = shutdown,
+        tellNoWebView = { if (!smoke.enabled) showError(MSG_NO_WEBVIEW) },
+    )
+    if (smoke.enabled) cleanSmokeDir(dataDir, profileDir)
+    return code
+}
 
-    val started = System.nanoTime()
-    Shutdown.run(listOf(app::close, server::stop), SHUTDOWN_LIMIT_MS)
-    println("SHUTDOWN_DONE ${(System.nanoTime() - started) / 1_000_000}ms")
+/** A blocking Windows error box (the window could not be shown, so this is the only way to tell the user). */
+private fun showError(text: String) {
+    Native.load("user32", User32Box::class.java).MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or MB_ICONERROR)
+}
+
+private interface User32Box : Library {
+    fun MessageBoxW(hwnd: Pointer?, text: WString, caption: WString, type: Int): Int
+}
+
+private const val MB_OK = 0x0
+private const val MB_ICONERROR = 0x10
+
+/**
+ * `--smoke` only: reports that WebView2 used the smoke profile, then removes the throw-away data dir. WebView2's
+ * helper processes can hold files for a moment after the window is gone, so it retries for a few seconds.
+ */
+@OptIn(kotlin.io.path.ExperimentalPathApi::class)
+private fun cleanSmokeDir(dataDir: Path, profileDir: Path) {
+    val entries = profileDir.toFile().list()?.size ?: 0
+    println("SMOKE_PROFILE entries=$entries")
+    var cleaned = false
+    for (attempt in 1..10) {
+        cleaned = runCatching { dataDir.deleteRecursively() }.isSuccess && !dataDir.exists()
+        if (cleaned) break
+        Thread.sleep(500)
+    }
+    println("SMOKE_CLEANED ${if (cleaned) "yes" else "partial"}")
 }
 
 /**

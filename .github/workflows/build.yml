@@ -225,12 +225,15 @@ jobs:
           if (-not (Select-String -Path $out -Pattern '^NATIVE_TMP_RELAUNCH ' -Quiet)) {
             Write-Error "TGBackup.exe did not restart with an ASCII TEMP"; exit 1
           }
-          # --smoke runs on its own throw-away data dir next to the real one, never on the user's data.
-          $profileDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup-smoke\webview2"
-          $entries = @(Get-ChildItem -Force -Path $profileDir -ErrorAction SilentlyContinue)
-          Write-Host "PROFILE_DIR $profileDir exists=$(Test-Path $profileDir) entries=$($entries.Count)"
-          $entries | Select-Object -First 8 | ForEach-Object { Write-Host "PROFILE_ENTRY $($_.Name)" }
-          if ($entries.Count -eq 0) { Write-Error "profile dir missing or empty under Hebrew LOCALAPPDATA"; exit 1 }
+          # --smoke runs on its own throw-away data dir next to the real one (never the user's data), reports the
+          # WebView2 profile it used there, then removes the dir.
+          $profileLine = (Select-String -Path $out -Pattern '^SMOKE_PROFILE entries=(\d+)' | Select-Object -First 1)
+          if (-not $profileLine -or [int]$profileLine.Matches[0].Groups[1].Value -eq 0) {
+            Write-Error "WebView2 profile missing or empty under the Hebrew smoke data dir"; exit 1
+          }
+          Write-Host "PROFILE $($profileLine.Line)"
+          $smokeDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup-smoke"
+          Write-Host "SMOKE_DIR_LEFT $(Test-Path $smokeDir) ($((Select-String -Path $out -Pattern '^SMOKE_CLEANED' | Select-Object -First 1).Line))"
           if (Test-Path (Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup")) { Write-Error "--smoke touched the real data dir"; exit 1 }
       - uses: actions/upload-artifact@v4
         if: always()
