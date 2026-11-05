@@ -161,11 +161,12 @@ test.describe('desktop', () => {
       await expect.poll(bg).not.toBe(before);
       expect(await start.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer');
 
-      // Tab from the top of the page reaches the button.
+      // Tab reaches the button. A click on the card's title (not focusable) sets where Tab starts, so the
+      // jobs other tests left on the shared server do not matter.
       await page.mouse.move(1, 1);
-      await page.locator('body').click({ position: { x: 300, y: 20 } });
+      await page.locator('.job-card', { hasText: `job-3-${s.tag}` }).locator('.job-title').click();
       let found = false;
-      for (let i = 0; i < 80 && !found; i++) {
+      for (let i = 0; i < 10 && !found; i++) {
         await page.keyboard.press('Tab');
         found = await start.evaluate((el) => el === document.activeElement);
       }

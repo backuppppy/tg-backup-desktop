@@ -403,3 +403,25 @@ button.chat-card:hover { background: var(--surface-variant); }
   .export > .export-intro, .export > .export-session, .export > .export-picker { grid-column: 1; }
   .export > .options-slot { grid-column: 2; grid-row: 1 / 4; }
 }
+
+/* Pointer and keyboard. A focus ring in the primary colour for keyboard focus (a tap or click shows none), and on
+   hover a state layer made of the theme colours: the dark background over filled buttons, primary over the others. */
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+input[type="radio"]:focus-visible, input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tabs a:focus-visible { outline-offset: -4px; border-radius: 12px; }
+button.chat-card:focus-visible { outline-offset: 0; }
+.tabs a { cursor: pointer; }
+
+@media (hover: hover) {
+  button:not(:disabled):hover, a.button:hover {
+    background-image: linear-gradient(rgba(15, 23, 32, .14), rgba(15, 23, 32, .14));
+  }
+  button.outlined:not(:disabled):hover, button.text:not(:disabled):hover, a.button.text:hover, a.button.outlined:hover {
+    background-image: none;
+    background-color: rgba(90, 169, 240, .1);
+  }
+  button.outlined:not(:disabled):hover { border-color: var(--primary); }
+  button.chat-card:not(:disabled):hover { background-image: none; background-color: var(--surface-variant); }
+  .tabs a:hover { color: var(--on-surface); }
+  .tabs a:not([aria-current="page"]):hover .pill { background: rgba(90, 169, 240, .1); }
+}

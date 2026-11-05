@@ -54,8 +54,8 @@ function nextToast() {
 
 /**
  * A modal dialog. `content` is extra nodes under the text (fields). `onOk` may return false (or a Promise of it)
- * to keep the dialog open. Clicking outside or Escape counts as cancel. `okClass` styles the OK button (default `text`);
- * while `okButton.disabled` is set, OK (and Enter) does nothing.
+ * to keep the dialog open. Clicking outside or Escape counts as cancel; Enter in a field is OK; Tab stays inside the
+ * dialog. `okClass` styles the OK button (default `text`); while `okButton.disabled` is set, OK (and Enter) does nothing.
  * Returns `{ result: Promise<boolean>, close(ok), okButton }`.
  */
 export function formDialog({ title, text, content = [], okText = 'אישור', cancelText = 'ביטול', okClass = 'text', onOk }) {
@@ -75,8 +75,24 @@ export function formDialog({ title, text, content = [], okText = 'אישור', c
     if (onOk && (await onOk()) === false) return;
     close(true);
   };
+  // Only the topmost dialog answers the keys (the 2FA dialog can open over another one).
   const onKey = (e) => {
+    if ([...document.querySelectorAll('.overlay')].at(-1) !== overlay) return;
     if (e.key === 'Escape') close(false);
+    else if (e.key === 'Tab') keepFocusInside(e);
+  };
+  // Tab and Shift+Tab go round the dialog's own controls and never reach the page behind it.
+  const keepFocusInside = (e) => {
+    const items = [...dialog.querySelectorAll('button, input, select, textarea, a[href]')]
+      .filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length > 0);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items.at(-1);
+    const inside = dialog.contains(document.activeElement);
+    if (!inside || (e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
   };
 
   const okButton = h('button', { type: 'button', class: okClass, onclick: () => ok() }, okText);
