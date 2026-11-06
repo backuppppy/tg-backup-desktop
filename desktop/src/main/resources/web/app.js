@@ -184,6 +184,8 @@ divider.addEventListener('keydown', (e) => {
   setLayout({ ...layout, ratio: clampRatio(layout.ratio + step) });
 });
 
+window.addEventListener('resize', apply);
+
 function onState(next) {
   state = next;
   if (state.connected) seenSnapshot = true;
