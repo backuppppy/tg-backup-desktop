@@ -55,19 +55,22 @@ function nextToast() {
 /**
  * A modal dialog. `content` is extra nodes under the text (fields). `onOk` may return false (or a Promise of it)
  * to keep the dialog open. Clicking outside or Escape counts as cancel; Enter in a field is OK; Tab stays inside the
- * dialog. `okClass` styles the OK button (default `text`); while `okButton.disabled` is set, OK (and Enter) does nothing.
+ * dialog; closing gives the focus back to the element that had it. `okClass` styles the OK button (default `text`); while `okButton.disabled` is set, OK (and Enter) does nothing.
  * Returns `{ result: Promise<boolean>, close(ok), okButton }`.
  */
 export function formDialog({ title, text, content = [], okText = 'אישור', cancelText = 'ביטול', okClass = 'text', onOk }) {
   let settle;
   const result = new Promise((resolve) => { settle = resolve; });
   let done = false;
+  // The focus goes back where it was (the button that opened the dialog) when the dialog closes.
+  const opener = document.activeElement;
 
   const close = (ok) => {
     if (done) return;
     done = true;
     overlay.remove();
     document.removeEventListener('keydown', onKey);
+    if (opener && opener !== document.body && opener.isConnected && typeof opener.focus === 'function') opener.focus();
     settle(ok);
   };
   const ok = async () => {

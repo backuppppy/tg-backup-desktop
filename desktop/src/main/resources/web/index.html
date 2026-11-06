@@ -8,7 +8,13 @@
 <script type="module" src="app.js"></script>
 </head>
 <body>
-<header class="topbar"><h1 id="title">TG Backup</h1></header>
+<header class="topbar">
+  <h1 id="title">TG Backup</h1>
+  <div id="mode-switch" class="mode-switch" hidden>
+    <button type="button" data-mode="single" aria-pressed="false">מסך אחד</button>
+    <button type="button" data-mode="split" aria-pressed="false">שני מסכים</button>
+  </div>
+</header>
 <div id="banner" class="banner" role="status" hidden>מתחבר מחדש…</div>
 <main id="screen"></main>
 <!-- Icons: Material Icons paths (PlaylistPlay, Archive, Person, Terminal, Info), Apache License 2.0. -->

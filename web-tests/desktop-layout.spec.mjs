@@ -50,7 +50,12 @@ const box = (locator) => locator.boundingBox();
 const viewport = (page) => page.viewportSize();
 
 test.describe('desktop', () => {
-  test.beforeEach(({}, info) => { test.skip(info.project.name === 'phone', 'desktop widths only'); });
+  test.beforeEach(async ({ page }, info) => {
+    test.skip(info.project.name === 'phone', 'desktop widths only');
+    // These checks are for one screen. From 1200 px the split view (Task 10b) is the default, so at 1920 the
+    // one-screen layout is chosen first; at 1100 there is no split anyway.
+    await page.addInitScript(() => localStorage.setItem('tgb.layout', '{"mode":"single"}'));
+  });
 
   test('the nav rail sits on the right, taller than wide, the tabs top to bottom; no bottom bar', async ({ page }) => {
     await open(page, '#jobs');

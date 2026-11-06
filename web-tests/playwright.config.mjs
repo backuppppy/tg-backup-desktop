@@ -21,7 +21,8 @@ export default defineConfig({
   projects: [
     { name: 'window', use: { viewport: { width: 1100, height: 750 } } },
     { name: 'phone', use: { viewport: { width: 390, height: 844 } } },
-    // A full-HD desktop for the desktop layout (Task 10a); the other specs run at the two sizes above.
-    { name: 'wide', testMatch: 'desktop-layout.spec.mjs', use: { viewport: { width: 1920, height: 1040 } } },
+    // A full-HD desktop for the desktop layout (Task 10a) and the split view (Task 10b); the other specs run at the two
+    // sizes above.
+    { name: 'wide', testMatch: ['desktop-layout.spec.mjs', 'split-view.spec.mjs'], use: { viewport: { width: 1920, height: 1040 } } },
   ],
 });
