@@ -285,9 +285,16 @@ function passwordDialog(request) {
   if (!request || open || answered.has(request.id)) return;
   const { id, hint } = request;
   const field = h('input', { type: 'password', autocomplete: 'off', 'aria-label': 'סיסמה' });
-  // 409: the request was already answered or is gone (another window, or it timed out); nothing to tell.
+  // 409: the request was already answered or is gone (another window, or it timed out); nothing to tell. Any other
+  // failure (the network, the server) leaves the request unanswered: it can be answered again, so the dialog comes
+  // back while the request is still in the state.
   const answer = (password) => api('POST', '/api/export/password', { id, password })
-    .catch((e) => { if (e.status !== 409) toast(e.message); });
+    .catch((e) => {
+      if (e.status === 409) return;
+      toast(e.message);
+      answered.delete(id);
+      passwordDialog(state.password);
+    });
   const dialog = formDialog({
     title: 'סיסמת אימות דו-שלבי',
     text: 'סשן הייצוא צריך את הסיסמה של החשבון.' + (hint && hint.trim() ? `\nרמז: ${hint}` : ''),

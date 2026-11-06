@@ -215,3 +215,26 @@ test('a 409 answer to the 2FA request shows no toast', async ({ page }) => {
   expect(await page.evaluate(() => [document.getElementById('toast').hidden, document.getElementById('toast').textContent]))
     .toEqual([true, '']);
 });
+
+test('a 2FA answer that fails (not 409) can be sent again: the dialog comes back', async ({ page }) => {
+  await fakeStream(page, { password: { id: 'p5', hint: '' } });
+  await page.unroute('**/api/export/password');
+  const answers = [];
+  await page.route('**/api/export/password', async (route) => {
+    answers.push(route.request().postDataJSON());
+    // The first answer is lost on the way (a network failure); the second one gets through.
+    if (answers.length === 1) return route.abort('failed');
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await dialog.locator('input').fill('first');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect.poll(() => answers.length).toBe(1);
+  await expect(page.locator('#toast')).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await dialog.locator('input').fill('second');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect.poll(() => answers).toEqual([{ id: 'p5', password: 'first' }, { id: 'p5', password: 'second' }]);
+  await expect(dialog).toBeHidden();
+});
