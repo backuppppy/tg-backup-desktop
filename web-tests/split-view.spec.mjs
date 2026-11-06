@@ -62,8 +62,9 @@ test('with nothing saved: two panes, משימות on the right and לוג on the
   await expect(select(page, 'left')).toHaveAttribute('aria-label', 'חלק שמאלי');
   await expect(divider(page)).toHaveAttribute('aria-label', 'גודל החלקים');
   await expect(page.getByRole('group', { name: 'תצוגה' })).toContainText('מסך אחד');
-  // The right pane has 55% of the room.
-  expect(Math.abs(r.width / (r.width + l.width) - 0.55)).toBeLessThan(0.01);
+  // Task 10c: the right pane shows the jobs, so it has a third of the room (up to 3 jobs) or half (from 4).
+  const n = (await (await page.request.get('/api/state')).json()).jobs.length;
+  expect(Math.abs(r.width / (r.width + l.width) - (n >= 4 ? 0.5 : 1 / 3))).toBeLessThan(0.01);
   // Each pane scrolls on its own; the page itself does not.
   for (const side of ['right', 'left']) {
     expect(await pane(page, side).locator('.pane-body').evaluate((el) => getComputedStyle(el).overflowY)).toBe('auto');
@@ -113,6 +114,7 @@ test('after a click inside the left pane, the rail’s ייצוא puts Export on
 test('dragging the divider changes the right pane’s width, which survives a reload; arrows move it by 5%', async ({ page }) => {
   await open(page);
   const before = (await box(pane(page, 'right'))).width;
+  const beforeShare = before / (before + (await box(pane(page, 'left'))).width);
   const d = await box(divider(page));
   await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
   await page.mouse.down();
@@ -121,7 +123,8 @@ test('dragging the divider changes the right pane’s width, which survives a re
   await page.mouse.up();
   const after = (await box(pane(page, 'right'))).width;
   expect(after).toBeGreaterThan(before + 150);
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout'))).ratio).toBeGreaterThan(0.6);
+  // Task 10c: the drag starts from the jobs pane's automatic share (a third or half), not from 0.55.
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout'))).ratio).toBeGreaterThan(beforeShare + 0.08);
   await page.reload();
   await expect(page.locator('#title')).toContainText('TG Backup  v');
   await expect(pane(page, 'left')).toBeVisible();
@@ -355,9 +358,200 @@ test('a drag stops when the window gets narrower than 1200 px; the ratio is not 
   await page.mouse.move(100, d.y + d.height / 2, { steps: 4 });
   await page.mouse.up();
   await page.setViewportSize({ width: 1920, height: 1040 });
-  await expect(divider(page)).toHaveAttribute('aria-valuenow', '55');
+  // Task 10c: the jobs are on the right, so the ratio shown is the automatic one (a third, or half from 4 jobs).
+  const n = (await (await page.request.get('/api/state')).json()).jobs.length;
+  const auto = n >= 4 ? 0.5 : 0.33;
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round(auto * 100)));
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')) ?? '{}').ratio ?? 0.55).toBe(0.55);
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')) ?? '{}').ratioJobs ?? null).toBeNull();
   const r = await box(pane(page, 'right'));
   const l = await box(pane(page, 'left'));
-  expect(Math.abs(r.width / (r.width + l.width) - 0.55)).toBeLessThan(0.01);
+  expect(Math.abs(r.width / (r.width + l.width) - (n >= 4 ? 0.5 : 1 / 3))).toBeLessThan(0.01);
+});
+
+// ---------------------------------------------------------------- Task 10c: the jobs pane's width by the number of jobs
+// Up to 3 jobs the jobs pane is a third of the room (one column of cards), from 4 half (two columns), on either side.
+// The cards have a fixed width; `➕ הוסף משימה` sits under all of them. A divider moved by hand holds while the number
+// of jobs stays the same.
+
+/** The jobs pane's share for `n` jobs. */
+const share = (n) => (n >= 4 ? 0.5 : 0.33);
+
+/** The real state with `n` copies of the fixture's jobs (ids j1..jn), through a fake stream; `layout` saved first. */
+async function openWithJobs(page, n, layout) {
+  const real = await (await page.request.get('/api/state')).json();
+  const base = real.jobs.length ? real.jobs : [{ id: 'x', name: 'job', source: '@a', target: '@b', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [], startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false }];
+  const jobs = Array.from({ length: n }, (_, i) => ({ ...base[i % base.length], id: `j${i + 1}` }));
+  const snapshot = { ...real, jobs, statuses: {} };
+  if (layout) {
+    await page.addInitScript((value) => { try { localStorage.setItem('tgb.layout', value); } catch { /* none */ } }, JSON.stringify(layout));
+  }
+  await page.route('**/api/events', (route) => route.fulfill({
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+    body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+  }));
+  await open(page);
+  await expect(page.locator('.job-card')).toHaveCount(n);
+}
+
+/** The jobs pane's share of the two panes' width. */
+async function jobsShareOf(page, side) {
+  const r = (await box(pane(page, 'right'))).width;
+  const l = (await box(pane(page, 'left'))).width;
+  return (side === 'right' ? r : l) / (r + l);
+}
+
+const columns = async (page, side) => (await screenIn(page, side, 'jobs').locator('.jobs')
+  .evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length;
+
+/** Every card in its own place, `cols` columns, and the add button under all the cards. */
+async function expectCards(page, side, n, cols) {
+  expect(await columns(page, side)).toBe(cols);
+  const cards = [];
+  for (const c of await screenIn(page, side, 'jobs').locator('.job-card').all()) cards.push(await box(c));
+  expect(cards).toHaveLength(n);
+  for (const b of cards) {
+    expect(b.width).toBeGreaterThanOrEqual(319);
+    expect(b.width).toBeLessThanOrEqual(441);
+  }
+  expect(new Set(cards.map((b) => Math.round(b.x))).size).toBe(Math.min(cols, n));
+  const add = await box(screenIn(page, side, 'jobs').getByRole('button', { name: '➕ הוסף משימה' }));
+  for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
+  expect(add.width).toBeLessThanOrEqual(441);
+  return cards;
+}
+
+test('2 jobs on the right: the jobs pane is a third, one column of cards, the add button under the last', async ({ page }) => {
+  await openWithJobs(page, 2);
+  await expectSplit(page, 'jobs', 'log');
+  expect(Math.abs(await jobsShareOf(page, 'right') - 1 / 3)).toBeLessThan(0.01);
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '33');
+  const [a, b] = await expectCards(page, 'right', 2, 1);
+  expect(b.y).toBeGreaterThanOrEqual(a.y + a.height);
+  // Nothing saved: the automatic ratio is not stored as one set by hand.
+  expect(await page.evaluate(() => localStorage.getItem('tgb.layout'))).toBeNull();
+});
+
+test('4 jobs on the right: half the room, two columns', async ({ page }) => {
+  await openWithJobs(page, 4);
+  expect(Math.abs(await jobsShareOf(page, 'right') - 0.5)).toBeLessThan(0.01);
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '50');
+  const cards = await expectCards(page, 'right', 4, 2);
+  // Two cards share each row.
+  expect(new Set(cards.map((b) => Math.round(b.y))).size).toBe(2);
+});
+
+for (const [n, cols] of [[1, 1], [3, 1], [4, 2], [7, 2]]) {
+  test(`${n} jobs on the left: the same share on the other side, ${cols} column(s)`, async ({ page }) => {
+    await openWithJobs(page, n, { mode: 'split', right: 'log', left: 'jobs', active: 'left', ratio: 0.55 });
+    await expectSplit(page, 'log', 'jobs');
+    expect(Math.abs(await jobsShareOf(page, 'left') - (n >= 4 ? 0.5 : 1 / 3))).toBeLessThan(0.01);
+    await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round((1 - share(n)) * 100)));
+    await expectCards(page, 'left', n, cols);
+  });
+}
+
+test('without the jobs in view the saved ratio holds, as before', async ({ page }) => {
+  await openWithJobs(page, 0, { mode: 'split', right: 'accounts', left: 'export', active: 'right', ratio: 0.42 });
+  await expectSplit(page, 'accounts', 'export');
+  expect(Math.abs(await jobsShareOf(page, 'right') - 0.42)).toBeLessThan(0.01);
+});
+
+test('a drag holds while the number of jobs stays; adding a job, or deleting one, brings back the automatic share', async ({ page }) => {
+  const count = async () => (await (await page.request.get('/api/state')).json()).jobs.length;
+  const n0 = await count();
+  await open(page);
+  await expectSplit(page, 'jobs', 'log');
+  expect(Math.abs(await jobsShareOf(page, 'right') - share(n0))).toBeLessThan(0.01);
+  const d = await box(divider(page));
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(d.x + d.width / 2 - 150, d.y + d.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const dragged = await jobsShareOf(page, 'right');
+  expect(dragged).toBeGreaterThan(share(n0) + 0.05);
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratioJobs: n0 });
+  await page.reload();
+  await expect(page.locator('#title')).toContainText('TG Backup  v');
+  await expect(page.locator('.job-card')).toHaveCount(n0);
+  expect(Math.abs(await jobsShareOf(page, 'right') - dragged)).toBeLessThan(0.01);
+
+  const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const acc = await page.request.post('/api/accounts', { data: { name: `acc-10c-${tag}`, apiId: 1, apiHash: '0'.repeat(32), phone: '+10000000000' } });
+  expect(acc.ok(), await acc.text()).toBeTruthy();
+  const accId = (await (await page.request.get('/api/state')).json()).accounts.find((a) => a.name === `acc-10c-${tag}`).id;
+  let jobId = null;
+  try {
+    const res = await page.request.post('/api/jobs', { data: { name: `job-10c-${tag}`, source: '-1001000000000', target: '-1002000000000', accountIds: [accId] } });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    jobId = (await (await page.request.get('/api/state')).json()).jobs.find((j) => j.name === `job-10c-${tag}`).id;
+    await expect(page.locator('.job-card')).toHaveCount(n0 + 1);
+    await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round(share(n0 + 1) * 100)));
+    expect(Math.abs(await jobsShareOf(page, 'right') - (share(n0 + 1) === 0.5 ? 0.5 : 1 / 3))).toBeLessThan(0.01);
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratioJobs: null });
+
+    // Set by hand again, then a job deleted: automatic again.
+    await divider(page).focus();
+    await page.keyboard.press('ArrowLeft');
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratioJobs: n0 + 1 });
+    const v = Number(await divider(page).getAttribute('aria-valuenow'));
+    expect(v).toBe(Math.round(share(n0 + 1) * 100) + 5);
+    expect((await page.request.delete(`/api/jobs/${jobId}`)).ok()).toBeTruthy();
+    jobId = null;
+    await expect(page.locator('.job-card')).toHaveCount(n0);
+    await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round(share(n0) * 100)));
+    expect(Math.abs(await jobsShareOf(page, 'right') - (share(n0) === 0.5 ? 0.5 : 1 / 3))).toBeLessThan(0.01);
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratioJobs: null });
+  } finally {
+    if (jobId) await page.request.delete(`/api/jobs/${jobId}`);
+    await page.request.delete(`/api/accounts/${accId}`);
+  }
+});
+
+for (const n of [2, 4]) {
+  test(`1200x900 with ${n} jobs: the cards fit the jobs pane, the summary and the all-jobs buttons wrap, no sideways scroll`, async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await openWithJobs(page, n);
+    await expectSplit(page, 'jobs', 'log');
+    expect(Math.abs(await jobsShareOf(page, 'right') - (n >= 4 ? 0.5 : 1 / 3))).toBeLessThan(0.01);
+    const r = await page.evaluate(() => {
+      const body = document.querySelector('.pane[data-pane="right"] .pane-body');
+      const b = body.getBoundingClientRect();
+      const out = [];
+      for (const el of body.querySelectorAll('*')) {
+        const e = el.getBoundingClientRect();
+        if (e.width && (e.left < b.left - 1 || e.right > b.right + 1)) out.push(`${el.tagName}.${el.className}`);
+      }
+      return { out: out.slice(0, 10), scroll: body.scrollWidth, client: body.clientWidth, doc: document.documentElement.scrollWidth };
+    });
+    expect(r.out).toEqual([]);
+    expect(r.scroll).toBeLessThanOrEqual(r.client);
+    expect(r.doc).toBeLessThanOrEqual(1200);
+    expect(await columns(page, 'right')).toBe(1);
+    // The all-jobs buttons do not fit one line in a third of 1200 px: they wrap.
+    if (n === 2) {
+      const tops = new Set();
+      for (const b of await page.locator('.jobs-header button').all()) tops.add(Math.round((await box(b)).y));
+      expect(tops.size).toBeGreaterThan(1);
+    }
+  });
+}
+
+test('one screen: the add button is on its own row under all the job cards', async ({ page }) => {
+  await openWithJobs(page, 4, { mode: 'single', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 });
+  await expectSingle(page, 'jobs');
+  const cards = [];
+  for (const c of await page.locator('.job-card').all()) cards.push(await box(c));
+  const add = await box(page.getByRole('button', { name: '➕ הוסף משימה' }));
+  for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
+});
+
+test('one screen with 2 jobs: the add button does not take the free cell next to the last card', async ({ page }) => {
+  await openWithJobs(page, 2, { mode: 'single', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 });
+  await expectSingle(page, 'jobs');
+  const cards = [];
+  for (const c of await page.locator('.job-card').all()) cards.push(await box(c));
+  const add = await box(page.getByRole('button', { name: '➕ הוסף משימה' }));
+  for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
 });

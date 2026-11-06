@@ -10,7 +10,7 @@ import * as log from './screens/log.js';
 import * as settings from './screens/settings.js';
 import {
   TABS, PANES, SPLIT_MIN_WIDTH, RATIO_MIN, RATIO_MAX,
-  effectiveMode, choose, showInActive, resolveSplit, clampRatio, load, save,
+  effectiveMode, choose, showInActive, resolveSplit, clampRatio, ratioFor, manualRatio, load, save,
 } from './lib/layout.js';
 
 const SCREENS = { jobs, export: exportScreen, accounts, log, settings };
@@ -133,7 +133,7 @@ function apply() {
   shown = { mode, tabs };
 
   document.body.dataset.layout = mode;
-  showRatio(layout.ratio);
+  if (dragRatio === null) showRatio(ratio());
   divider.hidden = mode !== 'split';
 
   modeSwitch.hidden = width < SPLIT_MIN_WIDTH;
@@ -158,6 +158,18 @@ function renderScreens() {
     if (away.delete(tab)) SCREENS[tab].comeBack?.();
     SCREENS[tab].render(hosts[tab], state);
   }
+}
+
+/**
+ * The number of jobs the ratio follows. Until the first snapshot it is unknown: a ratio set by hand stays shown.
+ */
+function jobsCount() {
+  return seenSnapshot ? (state.jobs ?? []).length : (layout.ratioJobs ?? 0);
+}
+
+/** The right pane's share now (Task 10c): with the jobs in a pane, by the number of jobs unless set by hand. */
+function ratio() {
+  return ratioFor(layout, jobsCount());
 }
 
 /** The panes' widths and the divider's value; nothing else is drawn (a drag calls it on every move). */
@@ -191,7 +203,7 @@ let dragRatio = null;
 let dragPointer = null;
 divider.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || divider.hidden) return;
-  dragRatio = layout.ratio;
+  dragRatio = ratio();
   dragPointer = e.pointerId;
   divider.setPointerCapture(e.pointerId);
   divider.classList.add('dragging');
@@ -204,7 +216,7 @@ function endDrag(keep) {
   dragRatio = null;
   divider.classList.remove('dragging');
   if (divider.hasPointerCapture(dragPointer)) divider.releasePointerCapture(dragPointer);
-  if (keep && !divider.hidden) setLayout({ ...layout, ratio });
+  if (keep && !divider.hidden) setLayout(manualRatio(layout, ratio, jobsCount()));
   else apply();
 }
 divider.addEventListener('pointermove', (e) => {
@@ -223,7 +235,7 @@ divider.addEventListener('keydown', (e) => {
   const step = { ArrowLeft: 0.05, ArrowRight: -0.05 }[e.key];
   if (step === undefined) return;
   e.preventDefault();
-  setLayout({ ...layout, ratio: clampRatio(layout.ratio + step) });
+  setLayout(manualRatio(layout, ratio() + step, jobsCount()));
 });
 
 window.addEventListener('resize', apply);
@@ -234,6 +246,12 @@ function onState(next) {
   title.textContent = state.version ? `TG Backup  v${state.version}` : 'TG Backup';
   banner.hidden = !seenSnapshot || state.connected;
   passwordDialog(state.password);
+  // A job added or deleted: a ratio set by hand for the old number of jobs gives way to the automatic one.
+  if (seenSnapshot && layout.ratioJobs !== null && layout.ratioJobs !== jobsCount()) {
+    layout = { ...layout, ratioJobs: null };
+    persist();
+  }
+  if (dragRatio === null) showRatio(ratio());
   renderScreens();
 }
 
