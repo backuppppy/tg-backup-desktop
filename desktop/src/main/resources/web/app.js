@@ -10,7 +10,7 @@ import * as log from './screens/log.js';
 import * as settings from './screens/settings.js';
 import {
   TABS, PANES, SPLIT_MIN_WIDTH, RATIO_MIN, RATIO_MAX,
-  effectiveMode, choose, showInActive, resolveSplit, clampRatio, ratioFor, manualRatio, load, save,
+  effectiveMode, choose, showInActive, resolveSplit, clampRatio, ratioFor, manualRatio, seenJobs, load, save,
 } from './lib/layout.js';
 
 const SCREENS = { jobs, export: exportScreen, accounts, log, settings };
@@ -133,7 +133,8 @@ function apply() {
   shown = { mode, tabs };
 
   document.body.dataset.layout = mode;
-  if (dragRatio === null) showRatio(ratio());
+  // Mid-drag the CSS keeps following the pointer.
+  showRatio(dragRatio ?? ratio());
   divider.hidden = mode !== 'split';
 
   modeSwitch.hidden = width < SPLIT_MIN_WIDTH;
@@ -161,10 +162,11 @@ function renderScreens() {
 }
 
 /**
- * The number of jobs the ratio follows. Until the first snapshot it is unknown: a ratio set by hand stays shown.
+ * The number of jobs the ratio follows. Until the first snapshot it is unknown: a share set by hand stays shown, or
+ * else the one of the number of jobs last seen.
  */
 function jobsCount() {
-  return seenSnapshot ? (state.jobs ?? []).length : (layout.ratioJobs ?? 0);
+  return seenSnapshot ? (state.jobs ?? []).length : (layout.ratioJobs ?? layout.jobsSeen ?? 0);
 }
 
 /** The right pane's share now (Task 10c): with the jobs in a pane, by the number of jobs unless set by hand. */
@@ -201,22 +203,26 @@ function ratioAt(clientX) {
 /** The ratio while a drag is on (null when none): only the CSS follows it until the release. */
 let dragRatio = null;
 let dragPointer = null;
+/** Whether a move of this drag changed the ratio: a click without one saves nothing. */
+let dragMoved = false;
 divider.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 || divider.hidden) return;
+  // A second pointer does not take over a drag that is on.
+  if (e.button !== 0 || divider.hidden || dragRatio !== null) return;
   dragRatio = ratio();
   dragPointer = e.pointerId;
+  dragMoved = false;
   divider.setPointerCapture(e.pointerId);
   divider.classList.add('dragging');
   e.preventDefault();
 });
-/** Ends the drag; `keep` saves its ratio, otherwise the saved one comes back. */
+/** Ends the drag; `keep` saves its ratio when a move changed it, otherwise the saved one comes back. */
 function endDrag(keep) {
   if (dragRatio === null) return;
   const ratio = dragRatio;
   dragRatio = null;
   divider.classList.remove('dragging');
   if (divider.hasPointerCapture(dragPointer)) divider.releasePointerCapture(dragPointer);
-  if (keep && !divider.hidden) setLayout(manualRatio(layout, ratio, jobsCount()));
+  if (keep && dragMoved && !divider.hidden) setLayout(manualRatio(layout, ratio, jobsCount()));
   else apply();
 }
 divider.addEventListener('pointermove', (e) => {
@@ -226,11 +232,17 @@ divider.addEventListener('pointermove', (e) => {
     endDrag(false);
     return;
   }
-  dragRatio = ratioAt(e.clientX);
+  if (e.pointerId !== dragPointer) return;
+  const next = ratioAt(e.clientX);
+  if (next === dragRatio) return;
+  dragRatio = next;
+  dragMoved = true;
   showRatio(dragRatio);
 });
-divider.addEventListener('pointerup', () => endDrag(true));
-divider.addEventListener('lostpointercapture', () => endDrag(true));
+divider.addEventListener('pointerup', (e) => { if (e.pointerId === dragPointer) endDrag(true); });
+divider.addEventListener('lostpointercapture', (e) => { if (e.pointerId === dragPointer) endDrag(true); });
+// The system took the pointer (a touch turned into a scroll, a window switch): the drag is dropped, not saved.
+divider.addEventListener('pointercancel', (e) => { if (e.pointerId === dragPointer) endDrag(false); });
 divider.addEventListener('keydown', (e) => {
   const step = { ArrowLeft: 0.05, ArrowRight: -0.05 }[e.key];
   if (step === undefined) return;
@@ -246,10 +258,15 @@ function onState(next) {
   title.textContent = state.version ? `TG Backup  v${state.version}` : 'TG Backup';
   banner.hidden = !seenSnapshot || state.connected;
   passwordDialog(state.password);
-  // A job added or deleted: a ratio set by hand for the old number of jobs gives way to the automatic one.
-  if (seenSnapshot && layout.ratioJobs !== null && layout.ratioJobs !== jobsCount()) {
-    layout = { ...layout, ratioJobs: null };
-    persist();
+  if (seenSnapshot) {
+    // A job added or deleted: a share set by hand for the old number of jobs gives way to the automatic one.
+    let next = layout;
+    if (next.ratioJobs !== null && next.ratioJobs !== jobsCount()) next = { ...next, jobsRatio: null, ratioJobs: null };
+    next = seenJobs(next, jobsCount());
+    if (next !== layout) {
+      layout = next;
+      persist();
+    }
   }
   if (dragRatio === null) showRatio(ratio());
   renderScreens();

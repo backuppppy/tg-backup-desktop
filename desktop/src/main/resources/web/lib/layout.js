@@ -1,6 +1,7 @@
 // The split view's state (Task 10b): which screen each pane shows, which pane is active, one or two screens, and the
-// right pane's share. Task 10c: while a pane shows the jobs, that pane's width follows the number of jobs (ratioFor),
-// unless the divider was moved by hand while that many jobs existed (ratioJobs). Pure functions (unit-tested under node) plus load/save in localStorage under `tgb.layout`.
+// right pane's share when no pane shows the jobs. Task 10c: while a pane shows the jobs, that pane's width follows the
+// number of jobs (ratioFor), unless the divider was moved by hand while that many jobs existed (jobsRatio, the jobs
+// pane's own share, on whichever side it is, with ratioJobs). Pure functions (unit-tested under node) plus load/save in localStorage under `tgb.layout`.
 
 export const TABS = Object.freeze(['jobs', 'export', 'accounts', 'log', 'settings']);
 export const PANES = Object.freeze(['right', 'left']);
@@ -10,8 +11,14 @@ export const RATIO_MIN = 0.3;
 export const RATIO_MAX = 0.7;
 export const KEY = 'tgb.layout';
 
-/** `ratioJobs`: the number of jobs when the divider was last moved by hand, or null when it never was. */
-export const DEFAULTS = Object.freeze({ mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55, ratioJobs: null });
+/**
+ * `ratio`: the right pane's share while no pane shows the jobs. `jobsRatio`: the jobs pane's share set by hand, and
+ * `ratioJobs` the number of jobs then (both null when never set). `jobsSeen`: the last number of jobs that changed
+ * their share, so the first paint before the snapshot already has it (null: none seen yet).
+ */
+export const DEFAULTS = Object.freeze({
+  mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55, jobsRatio: null, ratioJobs: null, jobsSeen: null,
+});
 /** From this many jobs the jobs pane gets half the room (two columns of cards); fewer get a third (one column). */
 export const JOBS_HALF_FROM = 4;
 
@@ -62,20 +69,40 @@ export function jobsShare(count) {
   return count >= JOBS_HALF_FROM ? 0.5 : 0.33;
 }
 
-/**
- * The right pane's effective share. With the jobs in a pane: the ratio set by hand while it was set with the same
- * number of jobs, otherwise the jobs share on the jobs' side. Without the jobs in view: the saved ratio.
- */
-export function ratioFor(state, jobsCount) {
-  const side = state.right === 'jobs' ? 'right' : state.left === 'jobs' ? 'left' : null;
-  if (!side || state.ratioJobs === jobsCount) return state.ratio;
-  const share = jobsShare(jobsCount);
-  return side === 'right' ? share : Math.round((1 - share) * 100) / 100;
+/** The pane that shows the jobs, or null. */
+function jobsSide(state) {
+  return state.right === 'jobs' ? 'right' : state.left === 'jobs' ? 'left' : null;
 }
 
-/** A ratio set by hand (the divider dragged or moved with the arrows), kept with the number of jobs at the time. */
+const rest = (share) => Math.round((1 - share) * 100) / 100;
+
+/**
+ * The right pane's effective share. With the jobs in a pane: their share set by hand while it was set with the same
+ * number of jobs, otherwise the jobs share; the right pane gets it or the rest, by the jobs' side. Without the jobs in
+ * view: the saved ratio.
+ */
+export function ratioFor(state, jobsCount) {
+  const side = jobsSide(state);
+  if (!side) return state.ratio;
+  const share = state.jobsRatio !== null && state.jobsRatio !== undefined && state.ratioJobs === jobsCount
+    ? state.jobsRatio : jobsShare(jobsCount);
+  return side === 'right' ? share : rest(share);
+}
+
+/**
+ * The divider moved by hand to `ratio` (the right pane's share). With the jobs in view, it is kept as the jobs pane's
+ * share with the number of jobs at the time; without them, as the ratio of that pair only.
+ */
 export function manualRatio(state, ratio, jobsCount) {
-  return { ...state, ratio: clampRatio(ratio), ratioJobs: jobsCount };
+  const side = jobsSide(state);
+  if (!side) return { ...state, ratio: clampRatio(ratio) };
+  return { ...state, jobsRatio: clampRatio(side === 'right' ? ratio : 1 - ratio), ratioJobs: jobsCount };
+}
+
+/** The state with the number of jobs seen kept, only when it changes the jobs share (the same object otherwise). */
+export function seenJobs(state, jobsCount) {
+  if (jobsShare(jobsCount) === jobsShare(state.jobsSeen ?? 0)) return state;
+  return { ...state, jobsSeen: jobsCount };
 }
 
 const isCount = (n) => Number.isSafeInteger(n) && n >= 0;
@@ -95,18 +122,32 @@ export function parse(json) {
     left: TABS.includes(raw.left) ? raw.left : DEFAULTS.left,
     active: PANES.includes(raw.active) ? raw.active : DEFAULTS.active,
     ratio: raw.ratio === undefined ? DEFAULTS.ratio : clampRatio(raw.ratio),
+    jobsRatio: null,
     ratioJobs: isCount(raw.ratioJobs) ? raw.ratioJobs : null,
+    jobsSeen: isCount(raw.jobsSeen) ? raw.jobsSeen : null,
   };
   if (s.right === s.left) {
     s.right = DEFAULTS.right;
     s.left = DEFAULTS.left;
   }
+  if (raw.jobsRatio === undefined && s.ratioJobs !== null) {
+    // A Task 10c layout: `ratio` was the right pane's share, set with the jobs on the side they are on now.
+    const side = jobsSide(s);
+    if (side) s.jobsRatio = side === 'right' ? s.ratio : clampRatio(1 - s.ratio);
+  } else if (typeof raw.jobsRatio === 'number' && Number.isFinite(raw.jobsRatio)) {
+    s.jobsRatio = clampRatio(raw.jobsRatio);
+  }
+  // The share set by hand and its count go together.
+  if (s.jobsRatio === null || s.ratioJobs === null) {
+    s.jobsRatio = null;
+    s.ratioJobs = null;
+  }
   return s;
 }
 
 export function serialize(state) {
-  const { mode, right, left, active, ratio, ratioJobs = null } = state;
-  return JSON.stringify({ mode, right, left, active, ratio, ratioJobs });
+  const { mode, right, left, active, ratio, jobsRatio = null, ratioJobs = null, jobsSeen = null } = state;
+  return JSON.stringify({ mode, right, left, active, ratio, jobsRatio, ratioJobs, jobsSeen });
 }
 
 /** The saved state, or the defaults when there is none or the storage cannot be read. */

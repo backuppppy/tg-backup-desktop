@@ -123,8 +123,9 @@ test('dragging the divider changes the right pane’s width, which survives a re
   await page.mouse.up();
   const after = (await box(pane(page, 'right'))).width;
   expect(after).toBeGreaterThan(before + 150);
-  // Task 10c: the drag starts from the jobs pane's automatic share (a third or half), not from 0.55.
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout'))).ratio).toBeGreaterThan(beforeShare + 0.08);
+  // Task 10c: the drag starts from the jobs pane's automatic share (a third or half), not from 0.55. Final wave: it is
+  // kept as the jobs' share (jobsRatio), the jobs being on the right.
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout'))).jobsRatio).toBeGreaterThan(beforeShare + 0.08);
   await page.reload();
   await expect(page.locator('#title')).toContainText('TG Backup  v');
   await expect(pane(page, 'left')).toBeVisible();
@@ -138,7 +139,7 @@ test('dragging the divider changes the right pane’s width, which survives a re
   for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowLeft');
   await expect(divider(page)).toHaveAttribute('aria-valuenow', '70');
   await expect(divider(page)).toHaveAttribute('aria-orientation', 'vertical');
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout'))).ratio).toBe(0.7);
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout'))).jobsRatio).toBe(0.7);
 });
 
 test('מסך אחד shows one screen; שני מסכים brings back the same two', async ({ page }) => {
@@ -256,10 +257,21 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   await expect(divider(page)).toHaveAttribute('aria-valuenow', '70');
   expect((await box(pane(page, 'right'))).width).toBeGreaterThanOrEqual(1100);
   await expect.poll(() => exp.evaluate((el) => getComputedStyle(el).display)).toBe('grid');
-  // The card grid in the left pane (30%, about 540 px) is one column; in the right pane at least two.
+  // Final wave: the arrows moved the divider without the jobs in view, so they set only this pair's ratio (0.7); the
+  // jobs, once in a pane, get their automatic share.
+  const n = (await (await page.request.get('/api/state')).json()).jobs.length;
+  const auto = n >= 4 ? 0.5 : 0.33;
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratio: 0.7, jobsRatio: null, ratioJobs: null });
+  // The card grid in the left pane (a third, about 600 px, or half from 4 jobs) is one column; in the right pane, at
+  // 70% from the arrows, at least two.
   await select(page, 'left').selectOption({ label: 'משימות' });
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round((1 - auto) * 100)));
   expect((await screenIn(page, 'left', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(1);
   await select(page, 'right').selectOption({ label: 'משימות' });
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round(auto * 100)));
+  await divider(page).focus();
+  for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowLeft');
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '70');
   expect((await screenIn(page, 'right', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBeGreaterThanOrEqual(2);
 });
 
@@ -378,7 +390,7 @@ test('a drag stops when the window gets narrower than 1200 px; the ratio is not 
 const share = (n) => (n >= 4 ? 0.5 : 0.33);
 
 /** The real state with `n` copies of the fixture's jobs (ids j1..jn), through a fake stream; `layout` saved first. */
-async function openWithJobs(page, n, layout) {
+async function openWithJobs(page, n, layout, { cards = n } = {}) {
   const real = await (await page.request.get('/api/state')).json();
   const base = real.jobs.length ? real.jobs : [{ id: 'x', name: 'job', source: '@a', target: '@b', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [], startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false }];
   const jobs = Array.from({ length: n }, (_, i) => ({ ...base[i % base.length], id: `j${i + 1}` }));
@@ -392,7 +404,7 @@ async function openWithJobs(page, n, layout) {
     body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
   }));
   await open(page);
-  await expect(page.locator('.job-card')).toHaveCount(n);
+  await expect(page.locator('.job-card')).toHaveCount(cards);
 }
 
 /** The jobs pane's share of the two panes' width. */
@@ -554,4 +566,125 @@ test('one screen with 2 jobs: the add button does not take the free cell next to
   for (const c of await page.locator('.job-card').all()) cards.push(await box(c));
   const add = await box(page.getByRole('button', { name: '➕ הוסף משימה' }));
   for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
+});
+
+// ---------------------------------------------------------------- final wave: the share set by hand is the jobs'
+const saved = async (page) => JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')) ?? 'null');
+
+/** A drag of the divider by `dx` px (negative: to the left, the right pane wider). */
+async function drag(page, dx) {
+  const d = await box(divider(page));
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(d.x + d.width / 2 + dx, d.y + d.height / 2, { steps: 5 });
+  await page.mouse.up();
+}
+
+test('a drag sets the jobs pane’s width; moving the jobs to the other side keeps that width', async ({ page }) => {
+  await openWithJobs(page, 2);
+  await drag(page, -200);
+  const dragged = await jobsShareOf(page, 'right');
+  expect(dragged).toBeGreaterThan(0.33 + 0.08);
+  const s = await saved(page);
+  expect(s.ratioJobs).toBe(2);
+  expect(Math.abs(s.jobsRatio - dragged)).toBeLessThan(0.01);
+  expect(s.ratio).toBe(0.55);
+  // The jobs to the left pane (a swap): the same width there.
+  await select(page, 'left').selectOption({ label: 'משימות' });
+  await expectSplit(page, 'log', 'jobs');
+  expect(Math.abs(await jobsShareOf(page, 'left') - dragged)).toBeLessThan(0.01);
+  // The arrows on that side change the jobs share too, and it comes back with them to the right.
+  await divider(page).focus();
+  await page.keyboard.press('ArrowRight');
+  const moved = await jobsShareOf(page, 'left');
+  expect(Math.abs(moved - (dragged + 0.05))).toBeLessThan(0.015);
+  await select(page, 'right').selectOption({ label: 'משימות' });
+  await expectSplit(page, 'jobs', 'log');
+  expect(Math.abs(await jobsShareOf(page, 'right') - moved)).toBeLessThan(0.01);
+});
+
+test('a Task 10c tgb.layout loads: its ratio set with the jobs on the left stays the jobs’ width', async ({ page }) => {
+  await openWithJobs(page, 2, { mode: 'split', right: 'log', left: 'jobs', active: 'left', ratio: 0.6, ratioJobs: 2 });
+  await expectSplit(page, 'log', 'jobs');
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '60');
+  await select(page, 'right').selectOption({ label: 'משימות' });
+  expect(Math.abs(await jobsShareOf(page, 'right') - 0.4)).toBeLessThan(0.01);
+});
+
+test('a click on the divider without a move saves nothing', async ({ page }) => {
+  await openWithJobs(page, 2, { mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.42 });
+  const d = await box(divider(page));
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '33');
+  const s = await saved(page);
+  expect(s.ratio).toBe(0.42);
+  expect(s.ratioJobs ?? null).toBeNull();
+  expect(s.jobsRatio ?? null).toBeNull();
+});
+
+test('a drag without the jobs in view sets that pair’s ratio only; the jobs share is not touched', async ({ page }) => {
+  await openWithJobs(page, 2, { mode: 'split', right: 'accounts', left: 'export', active: 'right', ratio: 0.42, jobsRatio: 0.4, ratioJobs: 2 }, { cards: 0 });
+  await expectSplit(page, 'accounts', 'export');
+  await drag(page, -150);
+  const s = await saved(page);
+  expect(s.ratio).toBeGreaterThan(0.42 + 0.05);
+  expect(s.jobsRatio).toBe(0.4);
+  expect(s.ratioJobs).toBe(2);
+  await select(page, 'left').selectOption({ label: 'משימות' });
+  expect(Math.abs(await jobsShareOf(page, 'left') - 0.4)).toBeLessThan(0.01);
+});
+
+test('pointercancel ends a drag without saving; a second pointerdown does not take over a drag', async ({ page }) => {
+  await openWithJobs(page, 2, { mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.42 });
+  const d = await box(divider(page));
+  const y = d.y + d.height / 2;
+  await page.mouse.move(d.x + d.width / 2, y);
+  await page.mouse.down();
+  await page.mouse.move(d.x + d.width / 2 - 150, y, { steps: 5 });
+  await divider(page).dispatchEvent('pointercancel', { pointerId: 1, isPrimary: true });
+  await page.mouse.up();
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '33');
+  expect(Math.abs(await jobsShareOf(page, 'right') - 1 / 3)).toBeLessThan(0.01);
+  expect((await saved(page)).ratioJobs ?? null).toBeNull();
+
+  // A second pointer pressed mid-drag: the first drag goes on and is the one saved.
+  await page.mouse.move(d.x + d.width / 2, y);
+  await page.mouse.down();
+  await page.mouse.move(d.x + d.width / 2 - 150, y, { steps: 5 });
+  const during = Number(await divider(page).getAttribute('aria-valuenow'));
+  expect(during).toBeGreaterThan(33 + 5);
+  await divider(page).dispatchEvent('pointerdown', { pointerId: 77, button: 0, isPrimary: false });
+  // A resize mid-drag (still a split) keeps the dragged width.
+  await page.setViewportSize({ width: 1900, height: 1040 });
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', String(during));
+  await page.mouse.up();
+  const s = await saved(page);
+  expect(s.ratioJobs).toBe(2);
+  expect(Math.round(s.jobsRatio * 100)).toBe(during);
+});
+
+test('the number of jobs last seen gives the first paint its share, before the snapshot comes', async ({ page }) => {
+  await openWithJobs(page, 4);
+  expect((await saved(page)).jobsSeen).toBe(4);
+  // The next load: the snapshot held back; the jobs pane is already half.
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await page.unroute('**/api/events');
+  const real = await (await page.request.get('/api/state')).json();
+  const base = real.jobs.length ? real.jobs : [];
+  await page.route('**/api/events', async (route) => {
+    await held;
+    const jobs = Array.from({ length: 4 }, (_, i) => ({ ...(base[0] ?? {}), id: `j${i + 1}` }));
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+      body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify({ ...real, jobs, statuses: {} })}\n\n`,
+    }).catch(() => {});
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(divider(page)).toBeVisible();
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '50');
+  release();
 });
