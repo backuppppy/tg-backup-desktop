@@ -75,19 +75,30 @@ private fun Route.devRoutes(events: Events) {
     }
 }
 
-/** Accounts and jobs whose names are long enough to test wrapping (dummy accounts: they never log in). */
-private fun seedLongNames(app: DesktopApp) {
+/**
+ * `TGB_DEV_FIXTURE=long-names` (Task 10): accounts, jobs and log lines long enough to test wrapping at 390 px.
+ * A job name of exactly 120 characters (Hebrew and English, with an `\u200E-100…` id inside), ids as the program
+ * shows them (`\u200E-100…`), a long account name, and log lines with and without break opportunities.
+ * Dummy accounts: they never log in.
+ */
+internal fun seedLongNames(app: DesktopApp) {
     val long = "חשבון גיבוי עם שם ארוך מאוד מאוד שלא נכנס בשורה אחת Very Long English Account Name"
     val accounts = listOf(
         Account(id = "long1", name = long, apiId = 1, apiHash = "0".repeat(32), phone = "+10000000000"),
         Account(id = "long2", name = "Second account with a really long English name for wrapping", apiId = 1,
             apiHash = "0".repeat(32), phone = "+10000000001"),
     )
+    val name120 = "משימת העתקה מהערוץ הראשי \u200E-1001234567890 אל ארכיון הגיבוי Archive Backup Mirror " +
+        "עם שם ארוך במיוחד שלא נכנס בשורה אחת, OK"
+    check(name120.length == 120) { "long-names: the job name is ${name120.length} characters" }
     val jobs = listOf(
-        Job(id = "longjob1", name = "משימת העתקה עם שם ארוך במיוחד שאמור לשבור שורה Long Job Name",
-            source = "https://t.me/c/1000000000/1", target = "https://t.me/c/2000000000/1", accountIds = listOf("long1")),
+        Job(id = "longjob1", name = name120,
+            source = "\u200E-1001234567890", target = "\u200E-1009876543210", accountIds = listOf("long1")),
         Job(id = "longjob2", name = "Copy job with a very long English name that should wrap nicely in the card",
-            source = "-1001000000000", target = "-1002000000000", accountIds = listOf("long1", "long2")),
+            source = "https://t.me/c/1000000000/1", target = "https://t.me/c/2000000000/1", accountIds = listOf("long1", "long2")),
     )
     app.store.updateConfig { it.copy(accounts = accounts, jobs = jobs) }
+    app.log.info("[$name120] הועתקו 1500 הודעות מתוך \u200E-1001234567890 אל \u200E-1009876543210 — Copied 1500 messages, last id 987654")
+    app.log.warn("[$long] FLOOD_WAIT_120 בהעתקה מהערוץ \u200E-1001234567890, ממתין 120 שניות לפני הניסיון הבא — waiting before the next try")
+    app.log.error("C:\\Users\\משתמש\\AppData\\Local\\TGBackup\\exports\\" + "Very_Long_Folder_Name_Without_Any_Spaces_".repeat(3) + "file.json")
 }
