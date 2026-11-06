@@ -120,5 +120,5 @@ in `web-tests/` (jobs, accounts, export, shell, desktop-layout, split-view, layo
 ### Screenshots (`docs/screens/`, deviceScaleFactor 2, long-names fixture)
 - Phone 390×844: `phone-jobs.png`, `phone-accounts.png`, `phone-export.png`, `phone-log.png`, `phone-settings.png`.
 - Window 1100×750: `window-jobs.png`, `window-accounts.png`, `window-export.png`, `window-log.png`, `window-settings.png`.
-- Split view 1920×1040: `split-jobs-log.png`, `split-accounts-export.png`.
+- Split view 1920×1040: `split-jobs-log.png` (2 jobs: the jobs pane a third), `split-jobs-4-log.png` (4 jobs: half, two columns), `split-accounts-export.png`.
 - One screen with the rail, 960×1040: `rail-960-jobs.png`.
