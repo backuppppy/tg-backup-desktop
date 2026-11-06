@@ -127,6 +127,24 @@ class AccountRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun deleteAndLogoutForgetTheLoadedChats() = withServer { client ->
+        app.store.updateConfig { it.copy(accounts = listOf(dummy("a1"), dummy("a2"))) }
+        app.accounts.sync(app.store.config.value.accounts)
+        val chat = org.tgbackup.export.ChatEntry(
+            peerId = 7, title = "ערוץ", username = "", type = org.tgbackup.export.data.DialogInfo.Type.PublicChannel,
+            isForum = false, archived = false, input = org.tgbackup.mtproto.tl.MTPDinputPeerEmpty,
+        )
+        handles.putChats("a1", listOf(chat))
+        handles.putChats("a2", listOf(chat))
+        client.del("/api/accounts/a1").assertOk()
+        kotlin.test.assertNull(handles.chat("a1", 7))
+        kotlin.test.assertNotNull(handles.chat("a2", 7))
+        // Logout forgets them too, whatever TDLib answers.
+        client.postJson("/api/accounts/a2/logout")
+        kotlin.test.assertNull(handles.chat("a2", 7))
+    }
+
+    @Test
     fun loginActionsWithoutClient() = withServer { client ->
         // apiId 0: a valid dialog save, but no TDLib client exists for it.
         app.store.updateConfig { it.copy(accounts = listOf(Account(id = "a1", apiId = 0, apiHash = hash, phone = "+1"))) }

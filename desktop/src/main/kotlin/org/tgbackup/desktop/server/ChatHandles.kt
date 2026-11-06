@@ -15,6 +15,11 @@ class ChatHandles {
 
     private val loaded = ConcurrentHashMap<String, Loaded>()
     private val locks = ConcurrentHashMap<String, Mutex>()
+    /** Bumped by [forget]: a load that started before it does not put its chats back. */
+    private val generations = ConcurrentHashMap<String, Long>()
+
+    /** The account's generation now: taken when a load starts, given to [putChats] / [putTopics] as `since`. */
+    fun generation(accountId: String): Long = generations[accountId] ?: 0L
 
     /**
      * Runs [block] alone for [accountId]: the export session's login, check, chats and topics loads share one
@@ -23,16 +28,22 @@ class ChatHandles {
     suspend fun <T> exclusive(accountId: String, block: suspend () -> T): T =
         locks.computeIfAbsent(accountId) { Mutex() }.withLock { block() }
 
-    /** Replaces the account's chats; the topics of the previous load are dropped with them. */
-    fun putChats(accountId: String, chats: List<ChatEntry>) {
-        loaded[accountId] = Loaded(chats.associateBy { it.peerId })
+    /**
+     * Replaces the account's chats; the topics of the previous load are dropped with them. Nothing is kept when the
+     * account was forgotten since the load started ([since]).
+     */
+    fun putChats(accountId: String, chats: List<ChatEntry>, since: Long = generation(accountId)) {
+        loaded.compute(accountId) { _, old ->
+            if (generation(accountId) != since) old else Loaded(chats.associateBy { it.peerId })
+        }
     }
 
     fun chat(accountId: String, peerId: Long): ChatEntry? = loaded[accountId]?.chats?.get(peerId)
 
     /** The last topics loaded for chat [peerId]. */
-    fun putTopics(accountId: String, peerId: Long, topics: List<TopicEntry>) {
+    fun putTopics(accountId: String, peerId: Long, topics: List<TopicEntry>, since: Long = generation(accountId)) {
         loaded.compute(accountId) { _, old ->
+            if (generation(accountId) != since) return@compute old
             val base = old ?: Loaded(emptyMap())
             Loaded(base.chats, base.topics + (peerId to topics.associateBy { it.id }))
         }
@@ -40,8 +51,11 @@ class ChatHandles {
 
     fun topic(accountId: String, peerId: Long, topicId: Int): TopicEntry? = loaded[accountId]?.topics?.get(peerId)?.get(topicId)
 
-    /** Drops what was loaded for [accountId] (e.g. after the account was deleted). */
+    /** Drops what was loaded for [accountId] (the account deleted or logged out); a load in flight keeps nothing. */
     fun forget(accountId: String) {
-        loaded.remove(accountId)
+        loaded.compute(accountId) { _, _ ->
+            generations.merge(accountId, 1L, Long::plus)
+            null
+        }
     }
 }

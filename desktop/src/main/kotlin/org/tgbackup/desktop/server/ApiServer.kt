@@ -87,12 +87,15 @@ fun Application.tgbModule(
     token: String,
     allowedHosts: Set<String>,
     extraRoutes: Route.(Events) -> Unit = {},
+    handles: ChatHandles = ChatHandles(),
 ) {
     installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
     install(SSE)
     val events = Events(app).also { attributes.put(EventsKey, it) }
     val locks = CommandLocks()
+    // Stops with the server (the application's scope).
+    boundPasswordWait(app.exports.password)
 
     routing {
         // Public: the only route that needs no session cookie (see installSecurity).
@@ -104,8 +107,8 @@ fun Application.tgbModule(
         // Origin is checked only on non-GET requests: never add a GET route that changes state.
         stateRoutes(app, events)
         jobRoutes(app, locks)
-        accountRoutes(app, locks)
-        exportRoutes(app, events, ChatHandles())
+        accountRoutes(app, locks, handles)
+        exportRoutes(app, events, handles)
         extraRoutes(events)
         webRoutes()
     }

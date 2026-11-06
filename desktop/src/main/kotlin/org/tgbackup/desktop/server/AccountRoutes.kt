@@ -60,7 +60,7 @@ internal fun AccountInput.toAccount(id: String, storedHash: String?): Account {
 }
 
 /** Accounts commands, the Android accounts screen's rules (docs/ui-inventory.md §2b). */
-fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
+fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks, handles: ChatHandles = ChatHandles()) {
     val store = app.store
 
     fun find(id: String): Account =
@@ -109,7 +109,7 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
         }
 
         delete("{id}") {
-            command { deleteAccount(app, locks, idParam()) }
+            command { deleteAccount(app, locks, handles, idParam()) }
         }
 
         post("{id}/phone") {
@@ -138,6 +138,8 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
             command {
                 val id = idParam()
                 clientOf(id)
+                // The export screen's chats were loaded with this login: they go with it.
+                handles.forget(id)
                 // In the app scope: a timeout must not cancel logout halfway (between the wipe and the fresh client).
                 val logout = app.scope.async { app.accounts.logout(id) }
                 login { logout.await(); null }
@@ -149,9 +151,10 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks) {
 /**
  * The Android delete order: stop the running jobs that use the account, remove it from the accounts and from
  * every `job.accountIds`, then `accounts.purge(id)` and `exports.forget(id)` (Android skipped the last one and left
- * the export session on disk). The jobs that hold the account are locked, so none of them starts in between.
+ * the export session on disk). The jobs that hold the account are locked, so none of them starts in between. The
+ * export screen's loaded chats of the account are dropped as soon as it is gone from the config.
  */
-private suspend fun deleteAccount(app: DesktopApp, locks: CommandLocks, id: String) {
+private suspend fun deleteAccount(app: DesktopApp, locks: CommandLocks, handles: ChatHandles, id: String) {
     val store = app.store
     while (true) {
         val holders = store.config.value.jobs.filter { id in it.accountIds }.map { it.id }.toSet()
@@ -170,7 +173,10 @@ private suspend fun deleteAccount(app: DesktopApp, locks: CommandLocks, id: Stri
                 true
             }
         }
-        if (done) break
+        if (done) {
+            handles.forget(id)
+            break
+        }
         // A job gained or lost the account while we waited for the locks: take the new set.
     }
 

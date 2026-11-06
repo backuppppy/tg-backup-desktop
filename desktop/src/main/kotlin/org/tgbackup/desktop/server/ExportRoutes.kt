@@ -122,11 +122,17 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
     fun find(id: String): Account =
         app.store.config.value.accounts.firstOrNull { it.id == id } ?: throw Refusal(HttpStatusCode.NotFound, MSG_NOT_FOUND)
 
-    /** Runs [block] alone for the path's account, with the account re-read once the turn comes. */
-    suspend fun <T> RoutingContext.forAccount(block: suspend (Account) -> T): T {
+    /**
+     * Runs [block] alone for the path's account, with the account re-read once the turn comes, and the account's
+     * [ChatHandles.generation] then (a delete or a logout during the load drops what it loaded).
+     */
+    suspend fun <T> RoutingContext.forAccount(block: suspend (Account, Long) -> T): T {
         val id = idParam("accountId")
         find(id)
-        return handles.exclusive(id) { block(find(id)) }
+        return handles.exclusive(id) {
+            val since = handles.generation(id)
+            block(find(id), since)
+        }
     }
 
     route("/api/export") {
@@ -148,7 +154,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
 
         post("{accountId}/login") {
             command {
-                forAccount { acc ->
+                forAccount { acc, _ ->
                     exports.login(acc).onFailure { if (it is CancellationException) throw it; throw it.failure("ההתחברות נכשלה") }
                 }
             }
@@ -156,7 +162,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
 
         post("{accountId}/check") {
             answer {
-                forAccount { acc ->
+                forAccount { acc, _ ->
                     val ready = exports.checkTakeoutReady(acc)
                         .getOrElse { if (it is CancellationException) throw it; throw it.failure("בדיקה נכשלה") }
                     ReadyDto(ready)
@@ -166,7 +172,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
 
         post("{accountId}/chats") {
             answer {
-                forAccount { acc ->
+                forAccount { acc, since ->
                     events.chatsProgress(acc.id, 0)
                     val chats = try {
                         exports.loadChats(acc) { n -> events.chatsProgress(acc.id, n) }
@@ -177,7 +183,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
                     } finally {
                         events.chatsDone(acc.id)
                     }
-                    handles.putChats(acc.id, chats)
+                    handles.putChats(acc.id, chats, since)
                     chats.map { it.toDto() }
                 }
             }
@@ -186,7 +192,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
         post("{accountId}/topics") {
             answer {
                 val peerId = call.receive<PeerInput>().peerId
-                forAccount { acc ->
+                forAccount { acc, since ->
                     val chat = handles.chat(acc.id, peerId) ?: throw Refusal(HttpStatusCode.BadRequest, MSG_RELOAD_CHATS)
                     val topics = try {
                         exports.loadTopics(acc, chat)
@@ -195,7 +201,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
                     } catch (e: Exception) {
                         throw e.failure("טעינת הנושאים נכשלה")
                     }
-                    handles.putTopics(acc.id, peerId, topics)
+                    handles.putTopics(acc.id, peerId, topics, since)
                     topics.map { it.toDto() }
                 }
             }

@@ -173,6 +173,60 @@ class ExportRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun aLoadThatEndsAfterForgetDoesNotPutItsChatsBack() {
+        val handles = ChatHandles()
+        val gen = handles.generation("a1")
+        handles.forget("a1")
+        handles.putChats("a1", listOf(chatEntry(1)), since = gen)
+        assertNull(handles.chat("a1", 1))
+        handles.putTopics("a1", 1, listOf(org.tgbackup.export.TopicEntry(5, "נושא")), since = gen)
+        assertNull(handles.topic("a1", 1, 5))
+        // A load started after the forget is kept.
+        handles.putChats("a1", listOf(chatEntry(1)), since = handles.generation("a1"))
+        assertEquals("c1", handles.chat("a1", 1)?.title)
+    }
+
+    private fun chatEntry(peerId: Long) = org.tgbackup.export.ChatEntry(
+        peerId = peerId, title = "c$peerId", username = "", type = org.tgbackup.export.data.DialogInfo.Type.PublicChannel,
+        isForum = false, archived = false, input = org.tgbackup.mtproto.tl.MTPDinputPeerEmpty,
+    )
+
+    @Test
+    fun anUnansweredPasswordRequestIsCancelledAfterTenMinutes() = kotlinx.coroutines.test.runTest {
+        assertEquals(kotlin.time.Duration.parse("10m"), PASSWORD_WAIT)
+        val requests = kotlinx.coroutines.flow.MutableStateFlow<org.tgbackup.app.export.PasswordRequest?>(null)
+        backgroundScope.boundPasswordWait(requests)
+        val first = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = first
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(PASSWORD_WAIT - kotlin.time.Duration.parse("1s"))
+        testScheduler.runCurrent()
+        assertFalse(first.answer.isCompleted)
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("2s"))
+        testScheduler.runCurrent()
+        assertTrue(first.answer.isCompleted)
+        assertNull(first.answer.await())
+        // Answered in time: kept as answered; the next request gets its own ten minutes.
+        val second = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = second
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("5m"))
+        second.answer.complete("pw")
+        requests.value = null
+        val third = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("1m"))
+        requests.value = third
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("9m"))
+        testScheduler.runCurrent()
+        assertEquals("pw", second.answer.await())
+        assertFalse(third.answer.isCompleted)
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("2m"))
+        testScheduler.runCurrent()
+        assertNull(third.answer.await())
+    }
+
+    @Test
     fun chatsLoadingIsInTheSnapshot() {
         val events = Events(app)
         assertTrue(events.snapshot().chatsLoading.isEmpty())
