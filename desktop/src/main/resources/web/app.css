@@ -414,8 +414,23 @@ button.chat-card:hover { background: var(--surface-variant); }
       gap: 12px;
     }
     .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full) { grid-column: 1 / -1; }
-    .jobs > button.full, .accounts > button.full { align-self: start; }
+    .accounts > button.full { align-self: start; }
+    /* Task 10c: the add button on its own row under all the job cards, about a card wide. */
+    .jobs > button.full { grid-column: 1 / -1; justify-self: start; width: min(100%, 420px); }
   }
+
+  /* Task 10c, split: job cards of a fixed width (320..420 px; auto-fill counts the 420), one column in a third of
+     the window, two in half
+     (lib/layout.js sets the pane's share by the number of jobs); the add button under them all. In a narrow pane
+     the summary and the all-jobs buttons wrap. */
+  body[data-layout="split"] .jobs {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 420px));
+    gap: 12px;
+  }
+  body[data-layout="split"] .jobs > :not(.job-card) { grid-column: 1 / -1; }
+  body[data-layout="split"] .jobs > button.full { justify-self: start; width: min(100%, 420px); }
+  body[data-layout="split"] .jobs-header .row { flex-wrap: wrap; }
 
   body[data-layout="split"] {
     height: 100vh;
