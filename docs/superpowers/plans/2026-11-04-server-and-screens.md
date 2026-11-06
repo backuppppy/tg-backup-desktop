@@ -457,38 +457,70 @@ The user: the screens must also be comfortable on a PC screen, not only phone-li
 - [ ] **Step 4:** Run the whole Playwright suite. Expected: PASS, and the existing phone specs are unchanged.
 - [ ] **Step 5:** Save screenshots of every tab at `1100x750` and of the Jobs tab at `1920x1040` (deviceScaleFactor 2) to the workspace dir. Commit and push. Expected: CI green. The Windows CI screenshot then shows the rail.
 
-### Task 10b: Log beside every screen on a wide PC screen (added 2026-11-06 at the user's request)
+### Task 10b: Split view — two chosen screens side by side on a wide PC screen (user request, 2026-11-06; replaces the fixed log panel)
 
-The user wants the log visible next to משימות, ייצוא, חשבונות and הגדרות on a full PC screen, because there is a lot of free space. The phone layout (under 900 px) stays unchanged.
+The user wants the full-screen program to show **two app screens side by side**, each one chosen by the user (they suggested משימות and לוג, but the user decides), and also to be able to choose **a single screen**. When the window is resized to half or a quarter of the monitor, it must adapt to its size. The phone layout (under 900 px) is unchanged.
 
 **Files:**
-- Create: `desktop/src/main/resources/web/screens/logPanel.js`. It reuses the Log screen's rendering: extract the shared entry list from `screens/log.js` and don't duplicate it.
-- Modify: `app.css`, `app.js`, `index.html`, `screens/log.js`
-- Test: `web-tests/log-panel.spec.mjs`
+- Create: `desktop/src/main/resources/web/lib/layout.js`: layout state, pure functions, persistence.
+- Modify: `app.js`, `app.css`, `index.html`, and screen modules only where they assume a single root.
+- Test: `web-tests/unit/layout.test.mjs`, `web-tests/split-view.spec.mjs`
 
 **Interfaces:**
-- **From 1200 px wide:** the layout is the rail on the right, then the current screen, then the **log panel** on the left (RTL end).
-  - The panel is `width: clamp(360px, 38vw, 640px)` and has its own vertical scroll.
-  - It is shown on משימות, ייצוא, חשבונות and הגדרות, and hidden on לוג, which keeps the full-width log.
-  - Its contents match the Log screen: newest first, monospace, level colours, `נקה` (the same `DELETE /api/log`, clearing every open page) and `${n} שורות`.
-  - With the panel shown, the export screen's two columns collapse to one.
-- **From 900 to 1199 px:** no panel by default. A toggle button `הצג לוג` / `הסתר לוג` in the top bar opens the same panel as an overlay drawer on the left that does not cover the rail.
-  - The choice is kept in `localStorage` (`tgb.logPanel`), wrapped in try/catch.
-  - From 1200 px the panel is always shown and the toggle is hidden.
-- **Below 900 px:** nothing changes. There is no panel and no toggle.
-- **Performance:** the panel and the Log tab share one rendered list per state update, capped at 500. Appending a new entry must not rebuild the 500 existing nodes: add only the new entries at the top, and rebuild only on `cleared`.
+- **Layout state:** `{ mode: "single" | "split", right: TabId, left: TabId, active: "right" | "left", ratio: number }`.
+  - `TabId` is one of `jobs`, `export`, `accounts`, `log`, `settings`.
+  - The defaults are `mode: "split"`, `right: "jobs"`, `left: "log"`, `ratio: 0.55` (the right pane's share).
+  - The state is saved in `localStorage` under `tgb.layout`, wrapped in try/catch. A broken or missing value falls back to the defaults.
+- **Pure functions in `lib/layout.js`:**
+  - `effectiveMode(state, width)`: returns `"split"` only when `state.mode === "split"` and `width >= 1200`, and `"single"` otherwise.
+  - `choose(state, pane, tab)`: puts `tab` in `pane`. If the other pane already shows `tab`, the two panes swap. It also sets `active = pane`.
+  - `clampRatio(r)`: clamps to `0.3..0.7`.
+  - `parse(json)` / `serialize(state)`: validating parse and serialize.
+- **Split mode (effective):**
+  - Rail on the right, then the right pane, a draggable divider, then the left pane. Each pane scrolls on its own.
+  - Each pane has a slim header with a `<select>` of the five Hebrew tab labels. The active pane gets a subtle primary outline.
+  - Clicking a rail item puts that screen in the **active** pane, through `choose`. Clicking or focusing inside a pane makes it the active pane.
+  - The rail highlights both visible screens, the active one stronger.
+  - Dragging the divider (pointer events) changes `ratio`, and it is saved on release. The divider can also be moved from the keyboard: arrow keys move it by 5%.
+- **Mode switch:** shown in the top bar only when `width >= 1200`. It is a two-state toggle, `מסך אחד` / `שני מסכים`, saved in `mode`.
+  - In single mode, the content is the active pane's screen with the normal rail behaviour.
+  - In single mode the toggle stays visible, so split can be turned back on.
+- **Resizing:** reacts to the window resize (ResizeObserver or `resize`).
+  - From `1200` and up: split, if chosen.
+  - From `900` to `1199` (for example half of a 1920 screen): single screen with the rail. That screen is the active pane's.
+  - Under `900` (for example a quarter screen, or a phone): the phone layout with the bottom bar.
+  - Widening the window again restores the saved split exactly.
+- **Constraints:**
+  - Every screen module is a singleton, so the same screen never renders in both panes; `choose` swaps them instead.
+  - Typing preservation in Accounts and Export must survive moving a screen between panes or modes. Re-attaching the screen's root element is fine, rebuilding it is not.
+  - `location.hash` keeps the active pane's tab, so old links keep working.
+  - With split shown, the export screen's internal two columns collapse to one when its pane is narrower than 1100 px. Use a container query (`@container`) on the pane, not a viewport media query.
+- The previous Task 10a review notes are carried here:
+  - `close()` restores focus to the dialog's opener.
+  - The card grid gives 2 columns from 900 px. Use a container query so it fits a pane's width.
 
-- [ ] **Step 1: Write the failing spec** `log-panel.spec.mjs`:
-  - At 1920x1040 and 1300x800 on each of the four tabs: the panel is visible, its box is left of the screen content (`panel.x + panel.width <= content.x + 2`), and it shows a log line seeded through the API (for example by creating a job and starting it, or with a server-side `log.info` from DevServer's fixture).
-  - On `#log` the panel is hidden and the full Log screen is shown.
-  - `נקה` in the panel empties both the panel and the Log tab.
-  - At 1100x750 the panel is hidden. `הצג לוג` opens it, the setting survives a reload, and `הסתר לוג` closes it.
-  - At 390x844 there is no panel and no toggle.
-  - Append performance: push 50 log events and assert the first existing `.log-line` element is the same DOM node before and after (it was not rebuilt).
-- [ ] **Step 2:** Run the spec. Expected: FAIL.
+- [ ] **Step 1: Write the failing tests.**
+  - `unit/layout.test.mjs`:
+    - `effectiveMode` at 1199 and 1200;
+    - `choose` puts a tab in a pane and swaps when the other pane has it;
+    - `clampRatio(0.1) === 0.3`;
+    - `parse('garbage')` returns the defaults;
+    - `parse` of a valid state round-trips.
+  - `split-view.spec.mjs`:
+    - at 1920x1040 with no saved state: two panes, `משימות` on the right and `לוג` on the left, each with its `<select>`;
+    - choosing `חשבונות` in the left `<select>` shows Accounts on the left;
+    - choosing `משימות` in the left pane swaps the panes;
+    - clicking the rail's `ייצוא` after clicking inside the left pane puts Export on the left;
+    - dragging the divider changes the right pane's width, and the width survives a reload;
+    - `מסך אחד` shows one screen, and `שני מסכים` restores the same two;
+    - resizing the viewport to 960x1040 gives a single screen with the rail, and to 960x540 a single screen; resizing back to 1920x1040 restores the split;
+    - at 390x844 there is no split, no toggle, and the bottom bar is shown;
+    - text typed in the Accounts code input survives moving Accounts from the left pane to the right one;
+    - a dialog opened from a pane is centred on the window, and Esc returns focus to its opener.
+- [ ] **Step 2:** Run both test files. Expected: FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the whole Playwright suite. Expected: PASS.
-- [ ] **Step 5:** Save screenshots at 1920x1040 of all four tabs with the panel, plus the 1100x750 drawer open. Commit and push. Expected: CI green. Download the Windows CI screenshot.
+- [ ] **Step 4:** Run the whole Playwright and unit suites. Expected: PASS. The existing specs for single-screen behaviour must still pass in single mode. Where a spec at 1920 assumed a single screen, it sets `tgb.layout` to `{mode:"single"}` first. Document every such change.
+- [ ] **Step 5:** Save these screenshots: 1920x1040 split jobs and log, 1920x1040 split accounts and export, 960x1040 half screen, 960x540 quarter screen, and the toggle in single mode. Commit and push. Expected: CI green. Download the Windows CI screenshot, which shows the split at 1024x720 or a single screen there, according to the rule.
 
 ### Task 10: Phone width, long names, and the results
 
