@@ -262,11 +262,11 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   const n = (await (await page.request.get('/api/state')).json()).jobs.length;
   const auto = n >= 4 ? 0.5 : 0.33;
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratio: 0.7, jobsRatio: null, ratioJobs: null });
-  // The card grid in the left pane (a third, about 600 px, or half from 4 jobs) is one column; in the right pane, at
-  // 70% from the arrows, at least two.
+  // The card grid in the left pane: a third (about 600 px) is one column, half (from 4 jobs) two; in the right pane,
+  // at 70% from the arrows, at least two.
   await select(page, 'left').selectOption({ label: 'משימות' });
   await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round((1 - auto) * 100)));
-  expect((await screenIn(page, 'left', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(1);
+  expect((await screenIn(page, 'left', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(n >= 4 ? 2 : 1);
   await select(page, 'right').selectOption({ label: 'משימות' });
   await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round(auto * 100)));
   await divider(page).focus();
