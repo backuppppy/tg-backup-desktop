@@ -148,6 +148,82 @@ function onHash() {
 
 for (const b of modeButtons) b.addEventListener('click', () => setLayout({ ...layout, mode: b.dataset.mode }));
 
+// The divider: dragged with the pointer (saved on release) or moved 5% at a time with the arrow keys. The ratio is
+// the right pane's share; with dir=rtl the right pane comes first, so going left makes it wider.
+function ratioAt(clientX) {
+  const r = panes.right.pane.getBoundingClientRect();
+  const l = panes.left.pane.getBoundingClientRect();
+  const room = r.right - l.left - divider.getBoundingClientRect().width;
+  return clampRatio((r.right - clientX) / room);
+}
+let dragging = false;
+divider.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  dragging = true;
+  divider.setPointerCapture(e.pointerId);
+  divider.classList.add('dragging');
+  e.preventDefault();
+});
+divider.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const ratio = ratioAt(e.clientX);
+  if (ratio !== layout.ratio) setLayout({ ...layout, ratio }, { persist: false });
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  divider.classList.remove('dragging');
+  save(storage(), layout);
+};
+divider.addEventListener('pointerup', endDrag);
+divider.addEventListener('lostpointercapture', endDrag);
+divider.addEventListener('keydown', (e) => {
+  const step = { ArrowLeft: 0.05, ArrowRight: -0.05 }[e.key];
+  if (step === undefined) return;
+  e.preventDefault();
+  setLayout({ ...layout, ratio: clampRatio(layout.ratio + step) });
+});
+
+function onState(next) {
+  state = next;
+  if (state.connected) seenSnapshot = true;
+  title.textContent = state.version ? `TG Backup  v${state.version}` : 'TG Backup';
+  banner.hidden = !seenSnapshot || state.connected;
+  passwordDialog(state.password);
+  renderScreens();
+}
+
+// The export session asks for the account's 2FA password; the answer (or null = cancel) goes back by id.
+// An answered id never opens again: the request stays in the state until the server's `password: null` arrives.
+let open = null;
+const answered = new Set();
+
+function passwordDialog(request) {
+  if (open && (!request || request.id !== open.id)) {
+    open.dialog.close(false);
+    open = null;
+  }
+  if (!request || open || answered.has(request.id)) return;
+  const { id, hint } = request;
+  const field = h('input', { type: 'password', autocomplete: 'off', 'aria-label': 'סיסמה' });
+  // 409: the request was already answered or is gone (another window, or it timed out); nothing to tell.
+  const answer = (password) => api('POST', '/api/export/password', { id, password })
+    .catch((e) => { if (e.status !== 409) toast(e.message); });
+  const dialog = formDialog({
+    title: 'סיסמת אימות דו-שלבי',
+    text: 'סשן הייצוא צריך את הסיסמה של החשבון.' + (hint && hint.trim() ? `\nרמז: ${hint}` : ''),
+    content: [field],
+  });
+  open = { id, dialog };
+  dialog.result.then((ok) => {
+    // Closed by us because the request went away: nothing to answer.
+    if (open?.id !== id) return;
+    open = null;
+    answered.add(id);
+    answer(ok ? field.value : null);
+  });
+}
+
 window.addEventListener('hashchange', onHash);
 onHash();
 connect(onState);

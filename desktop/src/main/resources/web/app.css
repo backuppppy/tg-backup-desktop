@@ -449,6 +449,25 @@ button.chat-card:hover { background: var(--surface-variant); }
     padding: 12px 16px 32px;
   }
 
+  .divider {
+    cursor: col-resize;
+    touch-action: none;
+    position: relative;
+  }
+  body[data-layout="split"] .divider { display: block; }
+  .divider::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    inset-inline-start: 3px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--surface-variant);
+  }
+  .divider:hover::after, .divider.dragging::after, .divider:focus-visible::after { background: var(--primary); }
+  .divider:focus-visible { outline-offset: -2px; border-radius: 4px; }
+
   /* The rail marks both screens shown; the active one has the filled pill. */
   .tabs a.shown { color: var(--on-surface); }
   .tabs a.shown .pill { box-shadow: inset 0 0 0 2px var(--surface-variant); }
