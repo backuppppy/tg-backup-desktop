@@ -70,7 +70,8 @@ object Shutdown {
 
 /**
  * The `--smoke` contract: exactly one of `PAGE_LOADED` (then the window is held for [HOLD_MS] and closed) or
- * `PAGE_FAIL <reason>` (exit 1), with a [TIMEOUT_MS] overall timeout. Exits use [Runtime.halt] so a native view's
+ * `PAGE_FAIL <reason>` (exit 1), with a [TIMEOUT_MS] overall timeout. `TGB_SMOKE_HOLD_MS` holds the window longer
+ * (CI's second screenshot, of the maximised window), see [holdMs]. Exits use [Runtime.halt] so a native view's
  * or the engine's shutdown can never hang the result. Without `--smoke` only [loaded]'s line is printed.
  */
 class AppSmoke(val enabled: Boolean) {
@@ -91,7 +92,7 @@ class AppSmoke(val enabled: Boolean) {
         System.out.flush()
         if (!enabled) return
         thread(isDaemon = true, name = "smoke-hold") {
-            Thread.sleep(HOLD_MS)
+            Thread.sleep(holdMs(System.getenv("TGB_SMOKE_HOLD_MS")))
             runCatching(close)
             // close() ends the run loop and main shuts the engine down; if that stalls, end hard.
             Thread.sleep(SHUTDOWN_GRACE_MS)
@@ -124,6 +125,11 @@ class AppSmoke(val enabled: Boolean) {
     companion object {
         const val TIMEOUT_MS = 75_000L
         const val HOLD_MS = 5_000L
+        const val MAX_HOLD_MS = 60_000L
+
+        /** The hold time: `TGB_SMOKE_HOLD_MS` when it is a positive number (at most [MAX_HOLD_MS]), else [HOLD_MS]. */
+        fun holdMs(env: String?): Long =
+            env?.trim()?.toLongOrNull()?.takeIf { it > 0 }?.coerceAtMost(MAX_HOLD_MS) ?: HOLD_MS
         const val SHUTDOWN_GRACE_MS = 20_000L
     }
 }
