@@ -27,9 +27,10 @@ let seenSnapshot = false;
 
 // ---------------------------------------------------------------- split view (Task 10b)
 // Every screen renders into its own host element, which moves between the panes as a whole (re-attached, never
-// rebuilt), so what is typed in it survives a move. A screen that leaves the view is only detached, kept whole; when
-// it comes back, its module's comeBack() (if any) asks again what a screen asks when it is shown (the export
-// session, as Android's LaunchedEffect does when composed).
+// rebuilt), so what is typed in it survives a move. A screen that leaves the view is only detached, kept whole, and
+// draws nothing while away (its module's goAway(), if any, stops its timers); when it comes back, its module's
+// comeBack() (if any) asks again what a screen asks when it is shown (the export session, as Android's
+// LaunchedEffect does when composed), and it is rendered with the state of now.
 
 const LABELS = Object.fromEntries(tabLinks.map((a) => [a.getAttribute('href').slice(1), a.querySelector('.label').textContent]));
 const hosts = Object.fromEntries(TABS.map((tab) => [tab, h('div', { class: 'screen', 'data-screen': tab })]));
@@ -112,6 +113,7 @@ function apply() {
     if (!visibleTabs.has(tab) && hosts[tab].isConnected) {
       hosts[tab].remove();
       away.add(tab);
+      SCREENS[tab].goAway?.();
     }
   }
   for (const side of PANES) {

@@ -290,6 +290,33 @@ test('Ready shows the connected line and the export session line per state', asy
   await expect(byId('r4').locator('.account-export')).toHaveText('✅ סשן ייצוא: מחובר ומוכן');
 });
 
+test('a detached Accounts screen draws nothing: its countdown waits, and moves on when it is back', async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  await page.clock.install({ time: now * 1000 });
+  await fakeAccounts(page, {
+    accounts: [acc('w1')],
+    states: [{ id: 'w1', auth: AUTH.Ready('W') }],
+    availableAt: { w1: now + 2 * 3600 + 5 * 60 + 30 },
+    sessions: { w1: true },
+  });
+  await open(page);
+  const line = page.locator('.account-card[data-account-id="w1"] .account-export');
+  await expect(line).toHaveText("⏳ סשן ייצוא: ממתין לאישור ב-Telegram (עוד 2ש' 5ד')");
+  // Away (the rail by script; in a split the active pane gets Log): the host is detached, kept whole.
+  await page.evaluate(() => {
+    window.__accounts = document.querySelector('[data-screen="accounts"]');
+    location.hash = '#log';
+  });
+  await expect.poll(() => page.evaluate(() => window.__accounts.isConnected)).toBe(false);
+  await page.clock.runFor(61_000);
+  expect(await page.evaluate(() => window.__accounts.querySelector('.account-export').textContent))
+    .toBe("⏳ סשן ייצוא: ממתין לאישור ב-Telegram (עוד 2ש' 5ד')");
+  await page.evaluate(() => { location.hash = '#accounts'; });
+  await expect(line).toHaveText("⏳ סשן ייצוא: ממתין לאישור ב-Telegram (עוד 2ש' 4ד')");
+  await page.clock.runFor(61_000);
+  await expect(line).toHaveText("⏳ סשן ייצוא: ממתין לאישור ב-Telegram (עוד 2ש' 3ד')");
+});
+
 test('the export line reads בודק… until the session answer comes', async ({ page }) => {
   await fakeAccounts(page, { accounts: [acc('s1')], states: [{ id: 's1', auth: AUTH.Ready('S') }] });
   let release;

@@ -465,6 +465,32 @@ test('clearing a date field sets that bound back to none (From: the oldest messa
   await page.request.delete(`/api/accounts/${id}`);
 });
 
+// 10b M1: Chromium (and WebView2) blurs a focused field when it leaves the page, so the typed path is saved on the
+// way out; a prefs change while Export is away does not take it back.
+test('a path typed and not saved is kept when Export comes back after the prefs changed', async ({ page }) => {
+  const name = `exp-${uid()}`;
+  const id = await addAccount(page.request, name);
+  const before = (await state(page.request)).exportPrefs;
+  await fakeSession(page);
+  await open(page);
+  await chooseAccount(page, `${name} (לא מחובר)`);
+  await loadChats(page);
+  await chatCard(page, 'Alpha News').click();
+  const path = page.locator('.export-options').getByLabel('Download path');
+  await path.fill('/typed/not/saved');
+  // Export leaves the view with the field focused (the rail by script), then another window changes the prefs.
+  await page.evaluate(() => { location.hash = '#log'; });
+  await expect(page.locator('[data-screen="export"]')).toHaveCount(0);
+  await page.request.patch('/api/export/prefs', { data: { sizeLimit: 16 * MiB } });
+  await expect.poll(async () => (await state(page.request)).exportPrefs.sizeLimit).toBe(16 * MiB);
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { location.hash = '#export'; });
+  await expect(page.locator('.export-options')).toBeVisible();
+  await expect(path).toHaveValue('/typed/not/saved');
+  await page.request.patch('/api/export/prefs', { data: { sizeLimit: before.sizeLimit, path: before.path } });
+  await page.request.delete(`/api/accounts/${id}`);
+});
+
 // ---------------------------------------------------------------- progress panel
 
 const PROCESSING = {

@@ -55,22 +55,23 @@ export function render(root, state) {
   last = state;
   const mode = state.runningExport ? 'panel' : 'setup';
   if (!view || view.root !== root || view.mode !== mode || !root.contains(view.el)) {
-    const comesBack = view && view.mode === mode && mode === 'setup';
     if (mode === 'panel' && view?.mode !== 'panel') s = freshSetup();
     view = mode === 'panel' ? buildPanel(root) : buildSetup(root);
     root.replaceChildren(view.el);
-    // A screen that comes back asks the export session again, as Android's LaunchedEffect does when composed.
-    if (comesBack && s.accountId) checkSession(false);
   }
   if (mode === 'panel') updatePanel(state.runningExport);
   else updateSetup(state);
 }
 
+/** Draws again after a request or a pick; a screen out of the view draws nothing (the shell renders it on return). */
 function redraw() {
-  if (view && last && view.root.contains(view.el)) render(view.root, last);
+  if (view && last && view.root.isConnected && view.root.contains(view.el)) render(view.root, last);
 }
 
-/** The shell put the screen back in view (it was detached, not rebuilt): ask the export session again. */
+/**
+ * The shell put the screen back in view (it was detached, not rebuilt): ask the export session again, as Android's
+ * LaunchedEffect does when composed.
+ */
 export function comeBack() {
   if (view?.mode === 'setup' && s.accountId) checkSession(false);
 }

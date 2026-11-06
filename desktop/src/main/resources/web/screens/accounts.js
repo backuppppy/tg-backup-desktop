@@ -42,8 +42,6 @@ export function render(root, state) {
       order: null,
     };
     root.replaceChildren(view.list);
-    // A screen that comes back asks the export sessions again, as the Android card does when it is composed.
-    for (const c of cards.values()) c.authKey = null;
   }
   const accounts = state.accounts ?? [];
   const ids = new Set(accounts.map((a) => a.id));
@@ -61,13 +59,23 @@ export function render(root, state) {
   schedule(accounts, state);
 }
 
+/** Draws again after a request or the countdown; a screen out of the view draws nothing and its timer stops. */
 function redraw() {
-  if (view && last && view.root.contains(view.list)) render(view.root, last);
+  if (view && last && view.root.isConnected && view.root.contains(view.list)) render(view.root, last);
 }
 
-/** The shell put the screen back in view (it was detached, not rebuilt): ask the export sessions again. */
+/**
+ * The shell put the screen back in view (it was detached, not rebuilt): ask the export sessions again, as the Android
+ * card does when it is composed. The render that follows starts the countdown again.
+ */
 export function comeBack() {
   for (const c of cards.values()) c.authKey = null;
+}
+
+/** The shell took the screen out of the view: no countdown while it is away. */
+export function goAway() {
+  if (tick) clearTimeout(tick);
+  tick = null;
 }
 
 /** One timer while a countdown is shown: it fires when the shown minutes change (at most once a minute). */
