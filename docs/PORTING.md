@@ -70,3 +70,55 @@ and a `File.renameTo` fallback below that (on Android `renameTo` already replace
 - Backport: `java.nio.file.Files` needs Android API 26 (app minSdk is 23), so the Android port of `AtomicFiles` needs an API-level guard with a `renameTo` fallback.
 - Upstream bug (verbatim `Store.kt`, Android too): `migratedFromLegacy` is declared after `_config = MutableStateFlow(loadConfig())`, so its initializer resets the flag to false after `loadConfig()` sets it. Not fixed here, because the file stays verbatim.
 - Task 8 (live read-only check): skipped. It needs the user's login code and will be done with the user.
+
+## Screens
+
+The web UI (`desktop/src/main/resources/web`) against the Android inventory (`docs/ui-inventory.md`, source commit
+6bdd532). Every string is the Android one unless a desktop replacement is listed below. Each item is covered by a spec
+in `web-tests/` (jobs, accounts, export, shell, desktop-layout, split-view, layout).
+
+### Parity checklist
+
+**§2a Jobs (`משימות`)**
+- [x] Header: `⚪ עצור` / `🟢 N משימות פעילות` summary with the run's copied total; `▶ הפעל הכל` (errors as one toast), `⏸ השהה הכל`, `▶ המשך הכל`, `⏹ עצור הכל` with the Android enable rules; `קודם הוסף חשבון בלשונית 'חשבונות'.` when there are no accounts.
+- [x] Job card: icon + name (`משימה <id>` when blank), `source  ←  target` (each id in its own direction), media/mode/takeout/accounts line, the takeout and protected-channel notes, phase line and last-message links (open in the system browser), copied/failed counts, running background.
+- [x] Card actions: `▶ הפעל` / `⏹ עצור` / `⏸ השהה` / `▶ המשך`, `ערוך`, `אפס התקדמות`, `מחק` (disabled while running); `➕ הוסף משימה`.
+- [x] JobDialog: `משימה חדשה` / `עריכת משימה`, all 11 fields in order, `(משויך למשימה אחרת)` rows, `מצב עבודה` only with 2+ accounts, digits-only numbers, empty per-minute limit saves 25, `שמור` enable rule.
+- [x] Delete and reset-progress confirmations with their texts.
+
+**§2b Accounts (`חשבונות`)**
+- [x] Top note, one card per account (`ללא שם` when blank), phone, regular-session line for every AuthUi state, the last TDLib error.
+- [x] Login flow: `התחבר (שלח קוד)`, `קוד מטלגרם` + `אשר`, 2FA password with the hint, `התנתק`, `שגיאה: …` toasts; typed input survives live updates.
+- [x] Export-session line and buttons (`בודק…`, `לא מחובר`, `⏳ … ממתין לאישור ב-Telegram`, `✅ … מחובר ומוכן`, `חבר סשן ייצוא`, `בדוק סשן ייצוא`).
+- [x] AccountDialog (`חשבון חדש` / `עריכת חשבון`, `שמור` rule) and the delete confirmation (stops the account's jobs; the desktop also forgets its export session).
+
+**§2c Export (`ייצוא`)**
+- [x] Intro card with the account radios and `(לא מחובר)`; session card (`בודק…`, `✅ מחובר (סשן נפרד מ-TG Backup)`, QR login text and `התחבר לסשן הייצוא`, the `⏳ מטעמי אבטחה …` wait).
+- [x] Chat picker: `טען צ'אטים` / `רענן` with the live `טוען צ'אטים… N`, `חיפוש`, cards with the type labels, `@username`, `פורום`, `בארכיון`; topics for forums.
+- [x] Options: `החלף צ'אט`, topic radios with `כל הצ'אט`, the 7 media checkboxes, `Size limit` slider (Telegram Desktop steps), `Format`, `Download path`, From/To with `תאריך`/`שעה`/`Reset` and the local-midnight and 600 s rules, `Export`.
+- [x] Progress panel: Idle, Processing rows (Telegram Desktop progress maths, `Skip this file`, `Stop` with its confirm), Finished (`Show my data`, `סגור`), ApiError (`TAKEOUT_INVALID`, `TAKEOUT_INIT_DELAY_…`, generic), OutputError, Cancelled.
+- [x] The 2FA password dialog over every tab (`סיסמת אימות דו-שלבי`).
+
+**§2d Log (`לוג`)**
+- [x] `נקה`, `N שורות`, newest first, `time  msg`, monospace, level colours; long lines wrap inside the screen.
+
+**§2e Settings (`הגדרות`)**
+- [x] `עבודה ברקע` (desktop text, see below) and `אודות` with `גרסה … · TDLib …`, `קבוצת טלגרם`, `GitHub`.
+
+**Navigation and layout (§1, §3)**
+- [x] RTL, dark theme colours, `TG Backup  v…` title, the five tabs in the Android order, toasts; tab kept in the URL hash.
+- [x] Desktop additions: the navigation rail from 900 px, cards in a grid, and the split view (two chosen screens) from 1200 px.
+- [x] Long names (the `TGB_DEV_FIXTURE=long-names` fixture, `web-tests/layout.spec.mjs`): no horizontal scroll at 390, 1100 and 1920 px, long names wrap inside their cards, the navigation stays visible, and in the split view nothing overflows its pane.
+
+### Desktop replacements (§5)
+- **Foreground service, ongoing notification and `עצור הכל` action:** the Windows tray icon and notification come in plan 5. Until then, sleep is prevented while anything runs and the window shows the state.
+- **Storage permission (`אפשר גישה לקבצים`):** dropped. `Export` is always enabled, and the path is typed or the default.
+- **Battery optimisation card:** replaced by the desktop `עבודה ברקע` text (the computer does not sleep while a job runs; closing the window does not stop the jobs).
+- **`Show my data`:** opens the exported file or folder on the PC (`POST /api/export/open`); an error is a toast.
+- **POST_NOTIFICATIONS, intents and FileProvider:** n/a. Links open in the system browser.
+
+### Screenshots (`docs/screens/`, deviceScaleFactor 2, long-names fixture)
+- Phone 390×844: `phone-jobs.png`, `phone-accounts.png`, `phone-export.png`, `phone-log.png`, `phone-settings.png`.
+- Window 1100×750: `window-jobs.png`, `window-accounts.png`, `window-export.png`, `window-log.png`, `window-settings.png`.
+- Split view 1920×1040: `split-jobs-log.png`, `split-accounts-export.png`.
+- One screen with the rail, 960×1040: `rail-960-jobs.png`.
