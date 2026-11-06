@@ -457,6 +457,39 @@ The user: the screens must also be comfortable on a PC screen, not only phone-li
 - [ ] **Step 4:** Run the whole Playwright suite. Expected: PASS, and the existing phone specs are unchanged.
 - [ ] **Step 5:** Save screenshots of every tab at `1100x750` and of the Jobs tab at `1920x1040` (deviceScaleFactor 2) to the workspace dir. Commit and push. Expected: CI green. The Windows CI screenshot then shows the rail.
 
+### Task 10b: Log beside every screen on a wide PC screen (added 2026-11-06 at the user's request)
+
+The user wants the log visible next to משימות, ייצוא, חשבונות and הגדרות on a full PC screen, because there is a lot of free space. The phone layout (under 900 px) stays unchanged.
+
+**Files:**
+- Create: `desktop/src/main/resources/web/screens/logPanel.js`. It reuses the Log screen's rendering: extract the shared entry list from `screens/log.js` and don't duplicate it.
+- Modify: `app.css`, `app.js`, `index.html`, `screens/log.js`
+- Test: `web-tests/log-panel.spec.mjs`
+
+**Interfaces:**
+- **From 1200 px wide:** the layout is the rail on the right, then the current screen, then the **log panel** on the left (RTL end).
+  - The panel is `width: clamp(360px, 38vw, 640px)` and has its own vertical scroll.
+  - It is shown on משימות, ייצוא, חשבונות and הגדרות, and hidden on לוג, which keeps the full-width log.
+  - Its contents match the Log screen: newest first, monospace, level colours, `נקה` (the same `DELETE /api/log`, clearing every open page) and `${n} שורות`.
+  - With the panel shown, the export screen's two columns collapse to one.
+- **From 900 to 1199 px:** no panel by default. A toggle button `הצג לוג` / `הסתר לוג` in the top bar opens the same panel as an overlay drawer on the left that does not cover the rail.
+  - The choice is kept in `localStorage` (`tgb.logPanel`), wrapped in try/catch.
+  - From 1200 px the panel is always shown and the toggle is hidden.
+- **Below 900 px:** nothing changes. There is no panel and no toggle.
+- **Performance:** the panel and the Log tab share one rendered list per state update, capped at 500. Appending a new entry must not rebuild the 500 existing nodes: add only the new entries at the top, and rebuild only on `cleared`.
+
+- [ ] **Step 1: Write the failing spec** `log-panel.spec.mjs`:
+  - At 1920x1040 and 1300x800 on each of the four tabs: the panel is visible, its box is left of the screen content (`panel.x + panel.width <= content.x + 2`), and it shows a log line seeded through the API (for example by creating a job and starting it, or with a server-side `log.info` from DevServer's fixture).
+  - On `#log` the panel is hidden and the full Log screen is shown.
+  - `נקה` in the panel empties both the panel and the Log tab.
+  - At 1100x750 the panel is hidden. `הצג לוג` opens it, the setting survives a reload, and `הסתר לוג` closes it.
+  - At 390x844 there is no panel and no toggle.
+  - Append performance: push 50 log events and assert the first existing `.log-line` element is the same DOM node before and after (it was not rebuilt).
+- [ ] **Step 2:** Run the spec. Expected: FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** Run the whole Playwright suite. Expected: PASS.
+- [ ] **Step 5:** Save screenshots at 1920x1040 of all four tabs with the panel, plus the 1100x750 drawer open. Commit and push. Expected: CI green. Download the Windows CI screenshot.
+
 ### Task 10: Phone width, long names, and the results
 
 **Files:**
