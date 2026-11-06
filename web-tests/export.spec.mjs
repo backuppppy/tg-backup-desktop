@@ -438,6 +438,33 @@ test('options: From/To with the local-midnight and 600 s rules, Reset, and Expor
   await page.request.delete(`/api/accounts/${id}`);
 });
 
+test('clearing a date field sets that bound back to none (From: the oldest message, To: present)', async ({ page }) => {
+  const name = `exp-${uid()}`;
+  const id = await addAccount(page.request, name);
+  await fakeSession(page);
+  const starts = [];
+  await page.route('**/api/export/start', (route) => { starts.push(route.request().postDataJSON()); return okJson(route); });
+  await open(page);
+  await chooseAccount(page, `${name} (לא מחובר)`);
+  await loadChats(page);
+  await chatCard(page, 'Alpha News').click();
+  const options = page.locator('.export-options');
+  const from = options.locator('.date-row[data-which="from"]');
+  const till = options.locator('.date-row[data-which="till"]');
+  await from.getByLabel('תאריך').fill('2026-11-05');
+  await till.getByLabel('תאריך').fill('2026-11-06');
+  await expect(till.locator('.date-text')).toHaveText('To: 6 נובמבר 2026, 00:00');
+  await from.getByLabel('תאריך').fill('');
+  await expect(from.locator('.date-text')).toHaveText('From: the oldest message');
+  await expect(from.getByLabel('שעה')).toBeHidden();
+  await till.getByLabel('תאריך').fill('');
+  await expect(till.locator('.date-text')).toHaveText('To: present');
+  await options.getByRole('button', { name: 'Export', exact: true }).click();
+  await expect.poll(() => starts.length).toBe(1);
+  expect(starts[0]).toEqual({ accountId: id, peerId: 11, from: 0, till: 0 });
+  await page.request.delete(`/api/accounts/${id}`);
+});
+
 // ---------------------------------------------------------------- progress panel
 
 const PROCESSING = {

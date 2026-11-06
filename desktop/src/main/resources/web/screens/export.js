@@ -359,6 +359,13 @@ function dateRow(o, which) {
 
 /** The date dialog's שמור: local midnight of the day; To keeps 10 minutes after From. The From date is not clamped. */
 function pickDate(which, value) {
+  // The field emptied (not a date half typed, which also reads as ''): no bound, as Reset.
+  if (value === '' && !view?.options?.dates?.[which]?.date.validity.badInput) {
+    s[which] = 0;
+    resync(which);
+    redraw();
+    return;
+  }
   const limit = dayStart(value);
   // Typing a year digit by digit passes through years like 0002: only a real date counts.
   if (limit === null || limit < 0) return;
