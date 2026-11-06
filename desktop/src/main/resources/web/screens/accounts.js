@@ -283,7 +283,9 @@ function accountDialog(initial) {
     if (v !== apiId.input.value) apiId.input.value = v;
   });
   apiHash.input.addEventListener('input', () => {
-    const v = apiHash.input.value.trim();
+    // Typed or pasted next to the mask: the mask goes, so `••••…` is never sent as a hash (a hash has no `•`).
+    let v = apiHash.input.value.trim();
+    if (v !== MASKED_HASH && v.includes('•')) v = v.replace(/•/g, '');
     if (v !== apiHash.input.value) apiHash.input.value = v;
   });
   // Typing over the mask replaces it.

@@ -114,6 +114,29 @@ test('editing the hash to a short value disables שמור', async ({ page }) => 
   await dialog.getByRole('button', { name: 'ביטול' }).click();
 });
 
+test('typing after the masked hash replaces the mask; ••••… is never sent as a hash', async ({ page }) => {
+  const name = `acc-${uid()}`;
+  const id = await addAccount(page.request, name);
+  await open(page);
+  await card(page, name).getByRole('button', { name: 'ערוך' }).click();
+  const dialog = page.getByRole('dialog', { name: 'עריכת חשבון' });
+  const hash = dialog.getByLabel('API Hash');
+  await expect(hash).toHaveValue(MASK);
+  // A click puts the caret after the mask (no select-all): the typing goes after it.
+  await hash.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('abcdef0123456789');
+  await expect(hash).toHaveValue('abcdef0123456789');
+  // A paste of the mask with more after it: the mask goes.
+  await hash.fill(`${MASK}abcdef0123456789xx`);
+  await expect(hash).toHaveValue('abcdef0123456789xx');
+  const put = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith(`/api/accounts/${id}`));
+  await dialog.getByRole('button', { name: 'שמור' }).click();
+  expect((await put).postDataJSON().apiHash).toBe('abcdef0123456789xx');
+  await expect(dialog).toBeHidden();
+  await page.request.delete(`/api/accounts/${id}`);
+});
+
 test('deleteConfirm: the dialog asks first, and אישור removes the card', async ({ page }) => {
   const name = `acc-${uid()}`;
   const id = await addAccount(page.request, name);
