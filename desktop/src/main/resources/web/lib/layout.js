@@ -1,5 +1,6 @@
 // The split view's state (Task 10b): which screen each pane shows, which pane is active, one or two screens, and the
-// right pane's share. Pure functions (unit-tested under node) plus load/save in localStorage under `tgb.layout`.
+// right pane's share. Task 10c: while a pane shows the jobs, that pane's width follows the number of jobs (ratioFor),
+// unless the divider was moved by hand while that many jobs existed (ratioJobs). Pure functions (unit-tested under node) plus load/save in localStorage under `tgb.layout`.
 
 export const TABS = Object.freeze(['jobs', 'export', 'accounts', 'log', 'settings']);
 export const PANES = Object.freeze(['right', 'left']);
@@ -9,7 +10,10 @@ export const RATIO_MIN = 0.3;
 export const RATIO_MAX = 0.7;
 export const KEY = 'tgb.layout';
 
-export const DEFAULTS = Object.freeze({ mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 });
+/** `ratioJobs`: the number of jobs when the divider was last moved by hand, or null when it never was. */
+export const DEFAULTS = Object.freeze({ mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55, ratioJobs: null });
+/** From this many jobs the jobs pane gets half the room (two columns of cards); fewer get a third (one column). */
+export const JOBS_HALF_FROM = 4;
 
 const other = (pane) => (pane === 'right' ? 'left' : 'right');
 
@@ -53,6 +57,29 @@ export function clampRatio(r) {
   return Math.round(Math.min(RATIO_MAX, Math.max(RATIO_MIN, r)) * 100) / 100;
 }
 
+/** The jobs pane's share of the room for `count` jobs: a third up to 3, half from 4. */
+export function jobsShare(count) {
+  return count >= JOBS_HALF_FROM ? 0.5 : 0.33;
+}
+
+/**
+ * The right pane's effective share. With the jobs in a pane: the ratio set by hand while it was set with the same
+ * number of jobs, otherwise the jobs share on the jobs' side. Without the jobs in view: the saved ratio.
+ */
+export function ratioFor(state, jobsCount) {
+  const side = state.right === 'jobs' ? 'right' : state.left === 'jobs' ? 'left' : null;
+  if (!side || state.ratioJobs === jobsCount) return state.ratio;
+  const share = jobsShare(jobsCount);
+  return side === 'right' ? share : Math.round((1 - share) * 100) / 100;
+}
+
+/** A ratio set by hand (the divider dragged or moved with the arrows), kept with the number of jobs at the time. */
+export function manualRatio(state, ratio, jobsCount) {
+  return { ...state, ratio: clampRatio(ratio), ratioJobs: jobsCount };
+}
+
+const isCount = (n) => Number.isSafeInteger(n) && n >= 0;
+
 /** A validated state from JSON: every bad or missing field takes its default; the panes never show the same tab. */
 export function parse(json) {
   let raw;
@@ -68,6 +95,7 @@ export function parse(json) {
     left: TABS.includes(raw.left) ? raw.left : DEFAULTS.left,
     active: PANES.includes(raw.active) ? raw.active : DEFAULTS.active,
     ratio: raw.ratio === undefined ? DEFAULTS.ratio : clampRatio(raw.ratio),
+    ratioJobs: isCount(raw.ratioJobs) ? raw.ratioJobs : null,
   };
   if (s.right === s.left) {
     s.right = DEFAULTS.right;
@@ -77,8 +105,8 @@ export function parse(json) {
 }
 
 export function serialize(state) {
-  const { mode, right, left, active, ratio } = state;
-  return JSON.stringify({ mode, right, left, active, ratio });
+  const { mode, right, left, active, ratio, ratioJobs = null } = state;
+  return JSON.stringify({ mode, right, left, active, ratio, ratioJobs });
 }
 
 /** The saved state, or the defaults when there is none or the storage cannot be read. */

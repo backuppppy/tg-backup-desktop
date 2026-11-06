@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULTS, TABS, SPLIT_MIN_WIDTH, effectiveMode, choose, showInActive, resolveSplit, clampRatio, parse, serialize, load, save,
+  ratioFor, jobsShare, manualRatio,
 } from '../../desktop/src/main/resources/web/lib/layout.js';
 
 const split = { ...DEFAULTS };
 
 test('the defaults: split, jobs on the right, log on the left, the right pane active, ratio 0.55', () => {
-  assert.deepEqual(DEFAULTS, { mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 });
+  assert.deepEqual(DEFAULTS, { mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55, ratioJobs: null });
   assert.deepEqual(TABS, ['jobs', 'export', 'accounts', 'log', 'settings']);
   assert.equal(SPLIT_MIN_WIDTH, 1200);
 });
@@ -57,7 +58,7 @@ test('parse of garbage, null or a non-object gives the defaults', () => {
 });
 
 test('parse of a valid state round-trips through serialize', () => {
-  const s = { mode: 'single', right: 'accounts', left: 'export', active: 'left', ratio: 0.4 };
+  const s = { mode: 'single', right: 'accounts', left: 'export', active: 'left', ratio: 0.4, ratioJobs: null };
   assert.deepEqual(parse(serialize(s)), s);
   assert.deepEqual(parse(serialize(DEFAULTS)), DEFAULTS);
 });
@@ -73,7 +74,7 @@ test('parse never gives the same tab in both panes', () => {
   assert.deepEqual(parse('{"right":"log"}'), DEFAULTS);
 });
 
-test('serialize writes only the five fields', () => {
+test('serialize writes only the six fields', () => {
   assert.deepEqual(JSON.parse(serialize({ ...DEFAULTS, extra: 1 })), DEFAULTS);
 });
 
@@ -104,4 +105,61 @@ test('resolveSplit gives the other pane the displaced tab only when both panes n
   // No usable displaced tab: the first other tab.
   assert.deepEqual(resolveSplit({ ...split, right: 'log' }, 'log'), { ...split, right: 'log', left: 'jobs' });
   assert.deepEqual(resolveSplit({ ...split, right: 'jobs', left: 'jobs' }, undefined), { ...split, right: 'jobs', left: 'export' });
+});
+
+// Task 10c: the jobs pane's width follows the number of jobs (a third up to 3, half from 4), unless the divider was
+// moved by hand while that many jobs existed.
+test('jobsShare: a third for 0..3 jobs, half from 4', () => {
+  for (const n of [0, 1, 2, 3]) assert.equal(jobsShare(n), 0.33, String(n));
+  for (const n of [4, 5, 7, 20]) assert.equal(jobsShare(n), 0.5, String(n));
+});
+
+test('ratioFor with jobs on the right: the right pane gets the jobs share', () => {
+  const s = { ...DEFAULTS, ratioJobs: null };
+  for (const n of [0, 1, 2, 3]) assert.equal(ratioFor(s, n), 0.33, String(n));
+  for (const n of [4, 7]) assert.equal(ratioFor(s, n), 0.5, String(n));
+});
+
+test('ratioFor with jobs on the left: the right pane gets the rest', () => {
+  const s = { ...DEFAULTS, right: 'log', left: 'jobs', ratioJobs: null };
+  for (const n of [0, 1, 2, 3]) assert.equal(ratioFor(s, n), 0.67, String(n));
+  for (const n of [4, 7]) assert.equal(ratioFor(s, n), 0.5, String(n));
+});
+
+test('ratioFor: a ratio set by hand holds only while the number of jobs is the one it was set with', () => {
+  const s = { ...DEFAULTS, ratio: 0.62, ratioJobs: 2 };
+  assert.equal(ratioFor(s, 2), 0.62);
+  assert.equal(ratioFor(s, 3), 0.33);
+  assert.equal(ratioFor(s, 1), 0.33);
+  assert.equal(ratioFor(s, 4), 0.5);
+  assert.equal(ratioFor({ ...s, right: 'export', left: 'jobs' }, 2), 0.62);
+  assert.equal(ratioFor({ ...s, right: 'export', left: 'jobs' }, 5), 0.5);
+  // Zero jobs set by hand is a count like any other.
+  assert.equal(ratioFor({ ...s, ratioJobs: 0 }, 0), 0.62);
+  assert.equal(ratioFor({ ...s, ratioJobs: 0 }, 1), 0.33);
+});
+
+test('ratioFor without jobs in view: the saved ratio, as before', () => {
+  const s = { ...DEFAULTS, right: 'accounts', left: 'export', ratio: 0.42, ratioJobs: null };
+  assert.equal(ratioFor(s, 0), 0.42);
+  assert.equal(ratioFor(s, 7), 0.42);
+  assert.equal(ratioFor({ ...s, ratioJobs: 3 }, 5), 0.42);
+  assert.equal(ratioFor({ ...DEFAULTS, right: 'log', left: 'settings' }, 2), 0.55);
+});
+
+test('manualRatio keeps the ratio with the number of jobs it was set with', () => {
+  assert.deepEqual(manualRatio(DEFAULTS, 0.61, 3), { ...DEFAULTS, ratio: 0.61, ratioJobs: 3 });
+  assert.deepEqual(manualRatio(DEFAULTS, 0.95, 0), { ...DEFAULTS, ratio: 0.7, ratioJobs: 0 });
+});
+
+test('parse: ratioJobs a count of jobs, anything else null; an old tgb.layout without it loads', () => {
+  assert.equal(DEFAULTS.ratioJobs, null);
+  assert.deepEqual(parse('{"mode":"split","right":"jobs","left":"log","active":"right","ratio":0.6}'), { ...DEFAULTS, ratio: 0.6 });
+  assert.equal(parse('{"ratioJobs":4}').ratioJobs, 4);
+  assert.equal(parse('{"ratioJobs":0}').ratioJobs, 0);
+  for (const bad of ['-1', '1.5', '"3"', 'true', '[]', '{}', 'null', '1e400']) {
+    assert.equal(parse(`{"ratioJobs":${bad}}`).ratioJobs, null, bad);
+  }
+  const s = { ...DEFAULTS, ratio: 0.45, ratioJobs: 2 };
+  assert.deepEqual(parse(serialize(s)), s);
 });
