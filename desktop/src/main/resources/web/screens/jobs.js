@@ -36,12 +36,38 @@ export function render(root, state) {
   const shown = view.shown;
   if (shown && shown.accounts === accounts && shown.jobs === jobs && shown.statuses === statuses) return;
   view.shown = { accounts, jobs, statuses };
+  const focus = focusedButton(view.list);
   view.list.replaceChildren(...[
     header(statuses),
     accounts.length === 0 ? h('p', { class: 'error-text' }, "קודם הוסף חשבון בלשונית 'חשבונות'.") : null,
     jobs.map((job) => jobCard(job, statuses[job.id] ?? IDLE, accounts, state)),
     h('button', { type: 'button', class: 'full', onclick: () => jobDialog(NEW_JOB, state) }, '➕ הוסף משימה'),
   ].flat().filter(Boolean));
+  restoreFocus(view.list, focus);
+}
+
+/** The scope of a button in the list: its job card, or else the list itself (the all-jobs and add buttons). */
+const scopeOf = (list, el) => el.closest('[data-job-id]') ?? list;
+const buttonsIn = (scope, list) => [...scope.querySelectorAll('button')].filter((b) => scopeOf(list, b) === scope);
+
+/** The focused button in the list, by its card's job id, its text and its place among the card's buttons. */
+function focusedButton(list) {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLButtonElement) || !list.contains(el)) return null;
+  const scope = scopeOf(list, el);
+  return { jobId: scope === list ? null : scope.dataset.jobId, text: el.textContent, index: buttonsIn(scope, list).indexOf(el) };
+}
+
+/** The same button after the list was drawn again; when its text changed (⏸ השהה → ▶ המשך), the one in its place. */
+function restoreFocus(list, focus) {
+  if (!focus) return;
+  const scope = focus.jobId === null ? list
+    : [...list.querySelectorAll('[data-job-id]')].find((c) => c.dataset.jobId === focus.jobId);
+  if (!scope) return;
+  const buttons = buttonsIn(scope, list);
+  const target = buttons.find((b) => b.textContent === focus.text && !b.disabled)
+    ?? buttons.slice(focus.index).find((b) => !b.disabled);
+  target?.focus({ preventScroll: true });
 }
 
 function header(statuses) {
@@ -273,9 +299,11 @@ function jobDialog(initial, state) {
   function update() {
     takeoutHelp.hidden = !takeout.input.checked;
     modeSection.hidden = selected.size <= 1;
-    dialog.okButton.disabled = blank(source.input.value) || blank(target.input.value) || selected.size === 0;
+    // A start id beyond what a JSON number keeps exactly is refused, not saved as 0.
+    const startBad = startFrom.input.value !== '' && toLong(startFrom.input.value) === null;
+    dialog.okButton.disabled = blank(source.input.value) || blank(target.input.value) || selected.size === 0 || startBad;
   }
-  for (const f of [source, target]) f.input.addEventListener('input', update);
+  for (const f of [source, target, startFrom]) f.input.addEventListener('input', update);
   update();
   return dialog;
 }

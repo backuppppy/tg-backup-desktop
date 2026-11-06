@@ -360,3 +360,54 @@ test('a link that is not http(s) is shown as plain text', async ({ page }) => {
   await expect(page.locator('a[href^="javascript" i]')).toHaveCount(0);
   await expect(c.getByRole('link')).toHaveCount(0);
 });
+
+test('the keyboard focus on a card button survives the list being drawn again', async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const name = `job-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  const id = await addJob(page.request, { name, accountIds: [accId] });
+  let other = null;
+  try {
+    await open(page);
+    const edit = card(page, name).getByRole('button', { name: 'ערוך' });
+    await edit.focus();
+    await expect(edit).toBeFocused();
+    // Any change of the state draws the list again: here another account.
+    other = await addAccount(page.request, `acc-${uid()}`);
+    await expect.poll(() => page.evaluate((jobId) => {
+      const el = document.activeElement;
+      return el?.closest('[data-job-id]')?.dataset.jobId === jobId ? el.textContent : null;
+    }, id)).toBe('ערוך');
+    // It is the button in the page now, not a detached one.
+    expect(await page.evaluate(() => document.activeElement.isConnected)).toBe(true);
+  } finally {
+    await page.request.delete(`/api/jobs/${id}`);
+    await page.request.delete(`/api/accounts/${accId}`);
+    if (other) await page.request.delete(`/api/accounts/${other}`);
+  }
+});
+
+test("a start message id beyond what a number keeps exactly is refused: שמור stays disabled", async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  try {
+    await open(page);
+    await page.getByRole('button', { name: '➕ הוסף משימה' }).click();
+    const dialog = page.getByRole('dialog', { name: 'משימה חדשה' });
+    await dialog.getByLabel('מקור: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@a');
+    await dialog.getByLabel('יעד: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@b');
+    await dialog.getByRole('checkbox', { name: acc, exact: true }).check();
+    const save = dialog.getByRole('button', { name: 'שמור' });
+    const start = dialog.getByLabel("התחל מהודעה מס' (ריק = להמשיך מאיפה שעצר)");
+    await expect(save).toBeEnabled();
+    await start.fill('9007199254740993');
+    await expect(save).toBeDisabled();
+    await start.fill('9007199254740991');
+    await expect(save).toBeEnabled();
+    await start.fill('');
+    await expect(save).toBeEnabled();
+    await dialog.getByRole('button', { name: 'ביטול' }).click();
+  } finally {
+    await page.request.delete(`/api/accounts/${accId}`);
+  }
+});
