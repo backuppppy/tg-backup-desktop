@@ -362,16 +362,6 @@ button.chat-card:hover { background: var(--surface-variant); }
 
 /* Desktop: cards in a grid, centred dialogs, the export screen in two columns, narrower settings cards. */
 @media (min-width: 900px) {
-  /* Job and account cards: 2 columns (3 from 1500 px, below). Header, warning and note span the row; the add
-     button takes one cell, not the whole width. */
-  .jobs, .accounts {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-    gap: 12px;
-  }
-  .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full) { grid-column: 1 / -1; }
-  .jobs > button.full, .accounts > button.full { align-self: start; }
-
   /* The summary and the all-jobs buttons; the buttons stay on one line. */
   .jobs-header { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
   .jobs-header .row { flex-wrap: nowrap; }
@@ -390,9 +380,10 @@ button.chat-card:hover { background: var(--surface-variant); }
 }
 
 /* ---------------------------------------------------------------- split view (Task 10b)
-   Every screen sits in a pane (.pane). One screen: a single pane fills main as before. Split (from 1200 px, when chosen): the
+   Every screen sits in a pane (.pane), which is the container the cards and the export columns measure, so they fit
+   the pane, not the window. One screen: a single pane fills main as before. Split (from 1200 px, when chosen): the
    right pane, the divider and the left pane fill the room left of the rail, each pane scrolling on its own. */
-.pane { min-width: 0; }
+.pane { container: pane / inline-size; min-width: 0; }
 .divider { display: none; }
 
 .mode-switch {
@@ -414,6 +405,18 @@ button.chat-card:hover { background: var(--surface-variant); }
 .mode-switch button[aria-pressed="true"] { background: var(--surface-variant); color: var(--on-surface); }
 
 @media (min-width: 900px) {
+  /* Job and account cards: as many 340 px columns as the pane holds (2 from a 900 px window). Header, warning and
+     note span the row; the add button takes one cell, not the whole width. */
+  @container pane (min-width: 700px) {
+    .jobs, .accounts {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+      gap: 12px;
+    }
+    .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full) { grid-column: 1 / -1; }
+    .jobs > button.full, .accounts > button.full { align-self: start; }
+  }
+
   body[data-layout="split"] {
     height: 100vh;
     display: flex;
@@ -473,22 +476,33 @@ button.chat-card:hover { background: var(--surface-variant); }
   .tabs a.shown .pill { box-shadow: inset 0 0 0 2px var(--surface-variant); }
 }
 
-/* Wide: 3 columns. 3 × 420 px does not fit in the 1200 px content, so the minimum is lower here. */
-@media (min-width: 1500px) {
-  .jobs, .accounts { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
-}
-
-/* Export from 1100 px: the setup (intro, session, chat picker) on the right, the options card on the left. */
+/* Export: the setup (intro, session, chat picker) on the right, the options card on the left. One screen: from a
+   1100 px window, as in Task 10a. Split: when the pane is at least 1100 px wide (a container query). */
 @media (min-width: 1100px) {
-  .export:has(> .options-slot) {
+  body:not([data-layout="split"]) .export:has(> .options-slot) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-rows: auto auto 1fr;
     align-items: start;
     gap: 10px 16px;
   }
-  .export > .export-intro, .export > .export-session, .export > .export-picker { grid-column: 1; }
-  .export > .options-slot { grid-column: 2; grid-row: 1 / 4; }
+  body:not([data-layout="split"]) .export > .export-intro,
+  body:not([data-layout="split"]) .export > .export-session,
+  body:not([data-layout="split"]) .export > .export-picker { grid-column: 1; }
+  body:not([data-layout="split"]) .export > .options-slot { grid-column: 2; grid-row: 1 / 4; }
+}
+@container pane (min-width: 1100px) {
+  body[data-layout="split"] .export:has(> .options-slot) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    align-items: start;
+    gap: 10px 16px;
+  }
+  body[data-layout="split"] .export > .export-intro,
+  body[data-layout="split"] .export > .export-session,
+  body[data-layout="split"] .export > .export-picker { grid-column: 1; }
+  body[data-layout="split"] .export > .options-slot { grid-column: 2; grid-row: 1 / 4; }
 }
 
 /* Pointer and keyboard. A focus ring in the primary colour for keyboard focus (a tap or click shows none), and on
