@@ -65,6 +65,11 @@ function redraw() {
   if (view && last && view.root.contains(view.list)) render(view.root, last);
 }
 
+/** The shell put the screen back in view (it was detached, not rebuilt): ask the export sessions again. */
+export function comeBack() {
+  for (const c of cards.values()) c.authKey = null;
+}
+
 /** One timer while a countdown is shown: it fires when the shown minutes change (at most once a minute). */
 function schedule(accounts, state) {
   if (tick) clearTimeout(tick);

@@ -27,6 +27,26 @@ export function choose(state, pane, tab) {
   return next;
 }
 
+/**
+ * One screen: `tab` in the active pane, without a swap; the other pane keeps its tab, so both may name the same tab
+ * until the split is back (see resolveSplit).
+ */
+export function showInActive(state, tab) {
+  if (!TABS.includes(tab)) return state;
+  return { ...state, [state.active]: tab };
+}
+
+/**
+ * Back to two screens: when both panes name the same tab, the other pane gets `displaced`, the tab the active pane
+ * had when the split was left (or else the first other tab).
+ */
+export function resolveSplit(state, displaced) {
+  if (state.right !== state.left) return state;
+  const mine = state[state.active];
+  const tab = TABS.includes(displaced) && displaced !== mine ? displaced : TABS.find((t) => t !== mine);
+  return { ...state, [other(state.active)]: tab };
+}
+
 /** The ratio within 0.3..0.7, to two decimals; anything not a number gives the default. */
 export function clampRatio(r) {
   if (typeof r !== 'number' || !Number.isFinite(r)) return DEFAULTS.ratio;

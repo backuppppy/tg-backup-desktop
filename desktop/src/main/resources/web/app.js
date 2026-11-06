@@ -9,7 +9,8 @@ import * as exportScreen from './screens/export.js';
 import * as log from './screens/log.js';
 import * as settings from './screens/settings.js';
 import {
-  TABS, PANES, SPLIT_MIN_WIDTH, RATIO_MIN, RATIO_MAX, effectiveMode, choose, clampRatio, load, save,
+  TABS, PANES, SPLIT_MIN_WIDTH, RATIO_MIN, RATIO_MAX,
+  effectiveMode, choose, showInActive, resolveSplit, clampRatio, load, save,
 } from './lib/layout.js';
 
 const SCREENS = { jobs, export: exportScreen, accounts, log, settings };
@@ -26,15 +27,20 @@ let seenSnapshot = false;
 
 // ---------------------------------------------------------------- split view (Task 10b)
 // Every screen renders into its own host element, which moves between the panes as a whole (re-attached, never
-// rebuilt), so what is typed in it survives a move. A screen that leaves the view is emptied, as a tab that was
-// left always was, and builds itself again when it comes back.
+// rebuilt), so what is typed in it survives a move. A screen that leaves the view is only detached, kept whole; when
+// it comes back, its module's comeBack() (if any) asks again what a screen asks when it is shown (the export
+// session, as Android's LaunchedEffect does when composed).
 
 const LABELS = Object.fromEntries(tabLinks.map((a) => [a.getAttribute('href').slice(1), a.querySelector('.label').textContent]));
 const hosts = Object.fromEntries(TABS.map((tab) => [tab, h('div', { class: 'screen', 'data-screen': tab })]));
 
 let layout = load(storage());
+/** The active pane's tab when the split was last shown: the other pane's tab if both name the same on the way back. */
+let splitTab = layout[layout.active];
 /** What the page shows now: `{mode, tabs: {pane: tab}}`, to tell what changed. */
 let shown = { mode: null, tabs: {} };
+/** Screens detached from the view since they were last shown. */
+const away = new Set();
 
 function storage() {
   try {
@@ -45,7 +51,7 @@ function storage() {
 }
 
 function buildPane(side) {
-  const select = h('select', { onchange: () => setLayout(choose(layout, side, select.value)) },
+  const select = h('select', { 'aria-label': side === 'right' ? 'חלק ימני' : 'חלק שמאלי', onchange: () => setLayout(choose(layout, side, select.value)) },
     TABS.map((tab) => h('option', { value: tab }, LABELS[tab])));
   const head = h('div', { class: 'pane-head' }, select);
   const body = h('div', { class: 'pane-body' });
@@ -65,14 +71,20 @@ const divider = h('div', {
   'aria-orientation': 'vertical',
   'aria-valuemin': String(Math.round(RATIO_MIN * 100)),
   'aria-valuemax': String(Math.round(RATIO_MAX * 100)),
+  'aria-label': 'גודל החלקים',
   tabindex: '0',
 });
 main.replaceChildren(panes.right.pane, divider, panes.left.pane);
 
-function setLayout(next, { persist = true } = {}) {
+function setLayout(next) {
   layout = next;
-  if (persist) save(storage(), layout);
+  persist();
   apply();
+}
+
+/** Saved as the split would be: both panes never name the same tab in storage. */
+function persist() {
+  save(storage(), resolveSplit(layout, splitTab));
 }
 
 /** A click or the focus inside a pane makes it the active one (the rail and the hash follow it). */
@@ -84,14 +96,22 @@ function activate(side) {
 function apply() {
   const width = window.innerWidth;
   const mode = effectiveMode(layout, width);
+  if (mode === 'split') {
+    // Back from one screen, where the rail changed only the active pane: a clash is solved now, by a swap.
+    if (layout.right === layout.left) {
+      layout = resolveSplit(layout, splitTab);
+      persist();
+    }
+    splitTab = layout[layout.active];
+  }
   const visiblePanes = mode === 'split' ? PANES : [layout.active];
   const tabs = Object.fromEntries(visiblePanes.map((side) => [side, layout[side]]));
   const visibleTabs = new Set(Object.values(tabs));
 
   for (const tab of TABS) {
-    if (!visibleTabs.has(tab)) {
+    if (!visibleTabs.has(tab) && hosts[tab].isConnected) {
       hosts[tab].remove();
-      hosts[tab].replaceChildren();
+      away.add(tab);
     }
   }
   for (const side of PANES) {
@@ -113,10 +133,8 @@ function apply() {
   shown = { mode, tabs };
 
   document.body.dataset.layout = mode;
-  main.style.setProperty('--right-fr', `${layout.ratio}fr`);
-  main.style.setProperty('--left-fr', `${Math.round((1 - layout.ratio) * 100) / 100}fr`);
+  showRatio(layout.ratio);
   divider.hidden = mode !== 'split';
-  divider.setAttribute('aria-valuenow', String(Math.round(layout.ratio * 100)));
 
   modeSwitch.hidden = width < SPLIT_MIN_WIDTH;
   for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === layout.mode));
@@ -135,15 +153,27 @@ function apply() {
 function renderScreens() {
   if (!seenSnapshot) return;
   for (const side of PANES) {
-    if (!panes[side].pane.hidden) SCREENS[layout[side]].render(hosts[layout[side]], state);
+    if (panes[side].pane.hidden) continue;
+    const tab = layout[side];
+    if (away.delete(tab)) SCREENS[tab].comeBack?.();
+    SCREENS[tab].render(hosts[tab], state);
   }
 }
 
+/** The panes' widths and the divider's value; nothing else is drawn (a drag calls it on every move). */
+function showRatio(ratio) {
+  main.style.setProperty('--right-fr', `${ratio}fr`);
+  main.style.setProperty('--left-fr', `${Math.round((1 - ratio) * 100) / 100}fr`);
+  divider.setAttribute('aria-valuenow', String(Math.round(ratio * 100)));
+}
+
 /** A rail click (or any link to #tab) puts that screen in the active pane. */
+// With one screen shown it changes only that screen, without a swap; the split comes back as it was (apply).
 function onHash() {
   const tab = location.hash.slice(1);
-  if (TABS.includes(tab) && tab !== layout[layout.active]) setLayout(choose(layout, layout.active, tab));
-  else apply();
+  if (!TABS.includes(tab) || tab === layout[layout.active]) apply();
+  else if (effectiveMode(layout, window.innerWidth) === 'split') setLayout(choose(layout, layout.active, tab));
+  else setLayout(showInActive(layout, tab));
 }
 
 for (const b of modeButtons) b.addEventListener('click', () => setLayout({ ...layout, mode: b.dataset.mode }));
@@ -156,27 +186,39 @@ function ratioAt(clientX) {
   const room = r.right - l.left - divider.getBoundingClientRect().width;
   return clampRatio((r.right - clientX) / room);
 }
-let dragging = false;
+/** The ratio while a drag is on (null when none): only the CSS follows it until the release. */
+let dragRatio = null;
+let dragPointer = null;
 divider.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0) return;
-  dragging = true;
+  if (e.button !== 0 || divider.hidden) return;
+  dragRatio = layout.ratio;
+  dragPointer = e.pointerId;
   divider.setPointerCapture(e.pointerId);
   divider.classList.add('dragging');
   e.preventDefault();
 });
-divider.addEventListener('pointermove', (e) => {
-  if (!dragging) return;
-  const ratio = ratioAt(e.clientX);
-  if (ratio !== layout.ratio) setLayout({ ...layout, ratio }, { persist: false });
-});
-const endDrag = () => {
-  if (!dragging) return;
-  dragging = false;
+/** Ends the drag; `keep` saves its ratio, otherwise the saved one comes back. */
+function endDrag(keep) {
+  if (dragRatio === null) return;
+  const ratio = dragRatio;
+  dragRatio = null;
   divider.classList.remove('dragging');
-  save(storage(), layout);
-};
-divider.addEventListener('pointerup', endDrag);
-divider.addEventListener('lostpointercapture', endDrag);
+  if (divider.hasPointerCapture(dragPointer)) divider.releasePointerCapture(dragPointer);
+  if (keep && !divider.hidden) setLayout({ ...layout, ratio });
+  else apply();
+}
+divider.addEventListener('pointermove', (e) => {
+  if (dragRatio === null) return;
+  // The window got narrower than 1200 px during the drag: no split, no drag.
+  if (divider.hidden) {
+    endDrag(false);
+    return;
+  }
+  dragRatio = ratioAt(e.clientX);
+  showRatio(dragRatio);
+});
+divider.addEventListener('pointerup', () => endDrag(true));
+divider.addEventListener('lostpointercapture', () => endDrag(true));
 divider.addEventListener('keydown', (e) => {
   const step = { ArrowLeft: 0.05, ArrowRight: -0.05 }[e.key];
   if (step === undefined) return;

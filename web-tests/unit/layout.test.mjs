@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DEFAULTS, TABS, SPLIT_MIN_WIDTH, effectiveMode, choose, clampRatio, parse, serialize, load, save,
+  DEFAULTS, TABS, SPLIT_MIN_WIDTH, effectiveMode, choose, showInActive, resolveSplit, clampRatio, parse, serialize, load, save,
 } from '../../desktop/src/main/resources/web/lib/layout.js';
 
 const split = { ...DEFAULTS };
@@ -88,4 +88,20 @@ test('load and save use tgb.layout and survive a storage that throws', () => {
   assert.deepEqual(load(broken), DEFAULTS);
   assert.doesNotThrow(() => save(broken, DEFAULTS));
   assert.deepEqual(load(undefined), DEFAULTS);
+});
+
+test('showInActive puts a tab in the active pane and never swaps', () => {
+  assert.deepEqual(showInActive(split, 'export'), { ...split, right: 'export' });
+  assert.deepEqual(showInActive(split, 'log'), { ...split, right: 'log' });
+  assert.deepEqual(showInActive({ ...split, active: 'left' }, 'jobs'), { ...split, active: 'left', left: 'jobs' });
+  assert.deepEqual(showInActive(split, 'nope'), split);
+});
+
+test('resolveSplit gives the other pane the displaced tab only when both panes name the same tab', () => {
+  assert.deepEqual(resolveSplit({ ...split, right: 'export' }, 'jobs'), { ...split, right: 'export' });
+  assert.deepEqual(resolveSplit({ ...split, right: 'log' }, 'jobs'), { ...split, right: 'log', left: 'jobs' });
+  assert.deepEqual(resolveSplit({ ...split, active: 'left', right: 'jobs', left: 'jobs' }, 'log'), { ...split, active: 'left', right: 'log', left: 'jobs' });
+  // No usable displaced tab: the first other tab.
+  assert.deepEqual(resolveSplit({ ...split, right: 'log' }, 'log'), { ...split, right: 'log', left: 'jobs' });
+  assert.deepEqual(resolveSplit({ ...split, right: 'jobs', left: 'jobs' }, undefined), { ...split, right: 'jobs', left: 'export' });
 });

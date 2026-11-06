@@ -430,7 +430,8 @@ button.chat-card:hover { background: var(--surface-variant); }
     width: 100%;
     max-width: none;
     margin: 0;
-    padding: 0;
+    /* A small margin keeps the active outline off the window's edges. */
+    padding: 0 8px 8px;
     display: grid;
     grid-template-columns: minmax(0, var(--right-fr, .55fr)) 8px minmax(0, var(--left-fr, .45fr));
   }
@@ -463,9 +464,9 @@ button.chat-card:hover { background: var(--surface-variant); }
     position: absolute;
     top: 8px;
     bottom: 8px;
-    inset-inline-start: 3px;
-    width: 2px;
-    border-radius: 1px;
+    inset-inline-start: 2px;
+    width: 4px;
+    border-radius: 2px;
     background: var(--surface-variant);
   }
   .divider:hover::after, .divider.dragging::after, .divider:focus-visible::after { background: var(--primary); }

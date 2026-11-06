@@ -54,7 +54,14 @@ test('with nothing saved: two panes, משימות on the right and לוג on the
   expect(r.x + r.width).toBeLessThanOrEqual(rail.x + 1);
   expect(d.x + d.width).toBeLessThanOrEqual(r.x + 1);
   expect(l.x + l.width).toBeLessThanOrEqual(d.x + 1);
-  expect(l.x).toBeLessThanOrEqual(1);
+  // A small margin keeps the active outline off the window's edge.
+  expect(l.x).toBeGreaterThanOrEqual(4);
+  expect(l.x).toBeLessThanOrEqual(16);
+  // Names for assistive technology only.
+  await expect(select(page, 'right')).toHaveAttribute('aria-label', 'חלק ימני');
+  await expect(select(page, 'left')).toHaveAttribute('aria-label', 'חלק שמאלי');
+  await expect(divider(page)).toHaveAttribute('aria-label', 'גודל החלקים');
+  await expect(page.getByRole('group', { name: 'תצוגה' })).toContainText('מסך אחד');
   // The right pane has 55% of the room.
   expect(Math.abs(r.width / (r.width + l.width) - 0.55)).toBeLessThan(0.01);
   // Each pane scrolls on its own; the page itself does not.
@@ -251,4 +258,106 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   expect((await screenIn(page, 'left', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(1);
   await select(page, 'right').selectOption({ label: 'משימות' });
   expect((await screenIn(page, 'right', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBeGreaterThanOrEqual(2);
+});
+
+test('what is typed survives a screen leaving the view: 960 px and back, one screen and back, the Export search', async ({ page }) => {
+  const real = await (await page.request.get('/api/state')).json();
+  const snapshot = {
+    ...real,
+    log: [],
+    accounts: [{ id: 'a2', name: 'name-a2', apiId: 1, hasApiHash: true, phone: '+10000002' }],
+    accountStates: [{ id: 'a2', auth: { type: 'NeedCode', label: 'ממתין לקוד' } }],
+  };
+  await page.route('**/api/events', (route) => route.fulfill({
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+    body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+  }));
+  let asked = 0;
+  await page.route(/\/api\/export\/[^/]+\/session$/, (r) => { asked += 1; return r.fulfill({ status: 200, contentType: 'application/json', body: '{"loggedIn":true}' }); });
+  await page.route(/\/api\/export\/[^/]+\/chats$/, (r) => r.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{ peerId: 11, title: 'Alpha News', username: 'alphanews', type: 'PublicChannel', isForum: false, archived: false }]),
+  }));
+  await open(page);
+  await select(page, 'left').selectOption({ label: 'חשבונות' });
+  const code = page.getByLabel('קוד מטלגרם');
+  await code.fill('12345');
+  await code.evaluate((el) => { el.dataset.mark = 'same'; });
+
+  // The right pane active: at 960 px only its screen shows, and Accounts leaves the view.
+  await pane(page, 'right').locator('.pane-body').click({ position: { x: 20, y: 400 } });
+  await page.setViewportSize({ width: 960, height: 1040 });
+  await expectSingle(page, 'jobs');
+  await expect(page.locator('[data-screen="accounts"]')).toHaveCount(0);
+  await page.setViewportSize({ width: 1920, height: 1040 });
+  await expectSplit(page, 'jobs', 'accounts');
+  await expect(code).toHaveValue('12345');
+  await expect(code).toHaveAttribute('data-mark', 'same');
+
+  await pane(page, 'right').locator('.pane-body').click({ position: { x: 20, y: 400 } });
+  await single(page).click();
+  await expectSingle(page, 'jobs');
+  await both(page).click();
+  await expectSplit(page, 'jobs', 'accounts');
+  await expect(code).toHaveValue('12345');
+  await expect(code).toHaveAttribute('data-mark', 'same');
+
+  // Export: the search survives the pane showing another screen, and the session is asked again on the way back.
+  await select(page, 'right').selectOption({ label: 'ייצוא' });
+  await page.getByRole('radio', { name: 'name-a2 (לא מחובר)', exact: true }).check();
+  await page.getByRole('button', { name: "טען צ'אטים" }).click();
+  await expect(page.locator('.chat-card', { hasText: 'Alpha News' })).toBeVisible();
+  const search = screenIn(page, 'right', 'export').getByLabel('חיפוש');
+  await search.fill('Alp');
+  await search.evaluate((el) => { el.dataset.mark = 'same'; });
+  await select(page, 'right').selectOption({ label: 'לוג' });
+  await expect(page.locator('[data-screen="export"]')).toHaveCount(0);
+  const before = asked;
+  await select(page, 'right').selectOption({ label: 'ייצוא' });
+  await expect(search).toHaveValue('Alp');
+  await expect(search).toHaveAttribute('data-mark', 'same');
+  await expect.poll(() => asked).toBeGreaterThan(before);
+  await expect(code).toHaveValue('12345');
+});
+
+test('in one screen the rail changes only the active pane; the split comes back with the other pane as it was', async ({ page }) => {
+  await open(page);
+  await single(page).click();
+  await page.locator('nav.tabs a', { hasText: 'ייצוא' }).click();
+  await expectSingle(page, 'export');
+  await both(page).click();
+  await expectSplit(page, 'export', 'log');
+
+  // The tab the other pane shows: both name it while one screen shows; the swap happens on the way back.
+  await single(page).click();
+  await page.locator('nav.tabs a', { hasText: 'לוג' }).click();
+  await expectSingle(page, 'log');
+  await page.locator('nav.tabs a', { hasText: 'משימות' }).click();
+  await expectSingle(page, 'jobs');
+  await both(page).click();
+  await expectSplit(page, 'jobs', 'log');
+
+  await single(page).click();
+  await page.locator('nav.tabs a', { hasText: 'לוג' }).click();
+  await both(page).click();
+  await expectSplit(page, 'log', 'jobs');
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ right: 'log', left: 'jobs' });
+});
+
+test('a drag stops when the window gets narrower than 1200 px; the ratio is not changed', async ({ page }) => {
+  await open(page);
+  const d = await box(divider(page));
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+  await page.mouse.down();
+  await page.setViewportSize({ width: 1100, height: 1040 });
+  await page.mouse.move(100, d.y + d.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await page.setViewportSize({ width: 1920, height: 1040 });
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '55');
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')) ?? '{}').ratio ?? 0.55).toBe(0.55);
+  const r = await box(pane(page, 'right'));
+  const l = await box(pane(page, 'left'));
+  expect(Math.abs(r.width / (r.width + l.width) - 0.55)).toBeLessThan(0.01);
 });

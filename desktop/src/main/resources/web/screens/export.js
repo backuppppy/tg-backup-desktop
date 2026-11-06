@@ -70,6 +70,11 @@ function redraw() {
   if (view && last && view.root.contains(view.el)) render(view.root, last);
 }
 
+/** The shell put the screen back in view (it was detached, not rebuilt): ask the export session again. */
+export function comeBack() {
+  if (view?.mode === 'setup' && s.accountId) checkSession(false);
+}
+
 // ---------------------------------------------------------------- setup
 
 function buildSetup(root) {
