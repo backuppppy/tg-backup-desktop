@@ -300,16 +300,20 @@ class JobManager(
         showSavedProgress(jobId)
     }
 
+    /** Forgets a job that was already removed from the config (so nothing saves its progress again). */
     fun forget(jobId: String) {
         // Its clock must not write the progress back after it is cleared.
         synchronized(clockLock) { runSegments.remove(jobId) }
         stop(jobId)
-        store.clearProgress(jobId)
-        _statuses.update { it - jobId }
+        synchronized(clockLock) {
+            store.clearProgress(jobId)
+            _statuses.update { it - jobId }
+        }
     }
 
-    private fun saveLatest(jobId: String, id: Long) {
-        if (id <= 0) return
+    /** Saves [id] as the source's latest id, only while [jobId] is in the config (a deleted job gets none). */
+    private fun saveLatest(jobId: String, id: Long) = synchronized(clockLock) {
+        if (id <= 0 || store.config.value.jobs.none { it.id == jobId }) return@synchronized
         if (store.progress(jobId).latestId != id) store.saveProgress(jobId) { it.copy(latestId = id) }
         setStatus(jobId) { it.copy(latestId = id) }
     }
@@ -334,8 +338,7 @@ class JobManager(
         } catch (e: Throwable) {
             null
         } ?: return null
-        // The job may have been deleted meanwhile.
-        if (store.config.value.jobs.none { it.id == jobId }) return null
+        // saveLatest skips a job deleted meanwhile.
         saveLatest(jobId, latest)
         return latest.takeIf { it > 0 }
     }

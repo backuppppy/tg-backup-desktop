@@ -179,8 +179,9 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
                     requireStopped(id)
                     locks.config {
                         requireJob(id)
-                        jobs.forget(id)
+                        // The config first: a refreshLatest that ends after forget sees no job and saves nothing.
                         store.updateConfig { c -> c.copy(jobs = c.jobs.filter { it.id != id }) }
+                        jobs.forget(id)
                     }
                 }
             }

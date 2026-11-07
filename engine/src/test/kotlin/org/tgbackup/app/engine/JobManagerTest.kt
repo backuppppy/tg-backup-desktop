@@ -295,6 +295,23 @@ class JobManagerTest {
     }
 
     @Test
+    fun aDeletedJobsLatestIdIsNotSaved() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(latestId = 50))
+        val jobs = manager(store, dir)
+        val r = jobs.reporter("j1")
+
+        // As the desktop deletes a job: the config first, then forget.
+        store.updateConfig { it.copy(jobs = emptyList()) }
+        jobs.forget("j1")
+        // A refreshLatest that read the source before the delete saves its result after it.
+        r.latest(500)
+
+        assertEquals(Progress(), store.progress("j1"), "no orphan progress")
+        assertFalse("j1" in jobs.statuses.value, "no status for the deleted job")
+    }
+
+    @Test
     fun resetProgressClearsTheRunTotals() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir, Progress(lastId = 40, copiedTotal = 7, runMillis = 1_000, latestId = 50))
