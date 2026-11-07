@@ -140,7 +140,11 @@ class AccountRoutesTest : RouteTestBase() {
         kotlin.test.assertNull(handles.chat("a1", 7))
         kotlin.test.assertNotNull(handles.chat("a2", 7))
         // Logout forgets them too, whatever TDLib answers.
+        val before = handles.generation("a2")
         client.postJson("/api/accounts/a2/logout")
+        kotlin.test.assertNull(handles.chat("a2", 7))
+        // A load that started during the logout (after the first forget) loaded with the old login: dropped too.
+        handles.putChats("a2", listOf(chat), since = before + 1)
         kotlin.test.assertNull(handles.chat("a2", 7))
     }
 

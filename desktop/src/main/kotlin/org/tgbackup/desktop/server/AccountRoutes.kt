@@ -142,6 +142,9 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks, handles: ChatHandl
                 handles.forget(id)
                 // In the app scope: a timeout must not cancel logout halfway (between the wipe and the fresh client).
                 val logout = app.scope.async { app.accounts.logout(id) }
+                // Again once the logout is done (even after the route's timeout): a load that started during it
+                // loaded with the old login.
+                logout.invokeOnCompletion { handles.forget(id) }
                 login { logout.await(); null }
             }
         }
