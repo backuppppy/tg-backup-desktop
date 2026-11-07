@@ -360,7 +360,7 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
       job({ id: 's4', name: 'חדשה' }),
     ],
     statuses: {
-      s1: status({ copiedTotal: 12340, copied: 5, failed: 2, lastId: 45210, latestId: 50000, runMillis: 8045000,
+      s1: status({ copiedTotal: 12340, copied: 5, failed: 1234, lastId: 45210, latestId: 50000, runMillis: 8045000,
         lastLink: 'https://t.me/c/100/45210' }),
       s2: status({ copiedTotal: 1234567, lastId: 987654, runMillis: 90061000 }),
       s3: status({ latestId: 50000 }),
@@ -370,13 +370,13 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
   await expect(page.locator('.jobs-summary')).toHaveText('⚪ עצור · הועתקו: 1,246,907');
 
   const c1 = card(page, 'מלאה');
-  await expect(c1).toContainText('הועתקו: 12,340 · נכשלו: 2');
+  await expect(c1).toContainText('הועתקו: 12,340 · נכשלו: 1,234');
   await expect(c1.locator('.last')).toHaveText('אוחז ב-id 45,210 מתוך 50,000');
   await expect(c1.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
   // Read right to left: אוחז ב-id, 45,210, מתוך, 50,000; and ⏱ רץ: then the time, הועתקו: then the count.
   expect(await visualOrder(c1.locator('.last'), ['אוחז ב-', 'id', '45,210', 'מתוך', '50,000'])).toBe(true);
   expect(await visualOrder(c1.locator('.run-time'), ['⏱', 'רץ:', '2:14:05'])).toBe(true);
-  expect(await visualOrder(c1.locator('.copied'), ['הועתקו:', '12,340', '·', 'נכשלו:', '2'])).toBe(true);
+  expect(await visualOrder(c1.locator('.copied'), ['הועתקו:', '12,340', '·', 'נכשלו:', '1,234'])).toBe(true);
   expect(await visualOrder(card(page, 'בלי אחרון').locator('.last'), ['אוחז ב-', 'id', '987,654'])).toBe(true);
   // The link is on X only.
   const last = c1.getByRole('link', { name: '45,210', exact: true });

@@ -236,7 +236,7 @@ function jobCard(job, status, accounts, state) {
     h('hr'),
     running ? maybeLink('phase', status.lastTargetLink, status.phase) : null,
     h('div', { class: 'copied' }, 'הועתקו: ', h('bdi', {}, formatCount(status.copiedTotal)),
-      status.failed > 0 ? [' · נכשלו: ', h('bdi', {}, status.failed)] : null),
+      status.failed > 0 ? [' · נכשלו: ', h('bdi', {}, formatCount(status.failed))] : null),
     positionLine,
     clock,
     h('div', { class: 'row' },
