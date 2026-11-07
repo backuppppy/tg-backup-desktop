@@ -246,6 +246,35 @@ async function fakeStream(page, patch, { skew = null, statuses = null } = {}) {
   });
 }
 
+/**
+ * True when `parts`, in the order they are read (right to left), are laid out from right to left on the screen:
+ * each part's box (found in the line's text) lies left of the one read before it.
+ */
+async function visualOrder(line, parts) {
+  return line.evaluate((el, parts) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let text = '';
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) { nodes.push([n, text.length]); text += n.data; }
+    const at = (i) => { const [n, start] = nodes.findLast(([, s]) => s <= i); return [n, i - start]; };
+    let from = 0;
+    const boxes = parts.map((p) => {
+      const i = text.indexOf(p, from);
+      if (i < 0) throw new Error(`${p} not in ${text}`);
+      from = i + p.length;
+      const r = document.createRange();
+      r.setStart(...at(i));
+      r.setEnd(...at(i + p.length - 1));
+      const end = document.createRange();
+      end.setStart(...at(i + p.length - 1));
+      end.setEnd(...at(i + p.length - 1).map((v, k) => (k === 1 ? v + 1 : v)));
+      const rects = [...r.getClientRects(), ...end.getClientRects()].filter((b) => b.width > 0);
+      return { left: Math.min(...rects.map((b) => b.left)), right: Math.max(...rects.map((b) => b.right)) };
+    });
+    return boxes.every((b, k) => k === 0 || b.right <= boxes[k - 1].left + 1);
+  }, parts);
+}
+
 const status = (over) => ({
   running: false, paused: false, phase: '', lastId: 0, sourceChatId: 0, sourceTitle: '', isProtected: false,
   copied: 0, failed: 0, targetChatId: 0, lastTargetId: 0, lastLink: null, lastTargetLink: null,
@@ -289,7 +318,9 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(phase).toHaveAttribute('href', 'https://t.me/c/200/5');
   await expect(phase).toHaveAttribute('target', '_blank');
   await expect(phase).toHaveAttribute('rel', 'noopener');
-  const last = c1.getByRole('link', { name: 'אוחז ב-id 77' });
+  // The link is on the number only.
+  await expect(c1.locator('.last')).toHaveText('אוחז ב-id 77');
+  const last = c1.getByRole('link', { name: '77', exact: true });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(last).toHaveAttribute('target', '_blank');
   await expect(c1.getByRole('button', { name: '▶ המשך' })).toBeVisible();
@@ -340,9 +371,16 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
 
   const c1 = card(page, 'מלאה');
   await expect(c1).toContainText('הועתקו: 12,340 · נכשלו: 2');
-  const last = c1.getByRole('link', { name: 'אוחז ב-id 45,210 מתוך 50,000', exact: true });
-  await expect(last).toHaveAttribute('href', 'https://t.me/c/100/45210');
+  await expect(c1.locator('.last')).toHaveText('אוחז ב-id 45,210 מתוך 50,000');
   await expect(c1.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
+  // Read right to left: אוחז ב-id, 45,210, מתוך, 50,000; and ⏱ רץ: then the time, הועתקו: then the count.
+  expect(await visualOrder(c1.locator('.last'), ['אוחז ב-', 'id', '45,210', 'מתוך', '50,000'])).toBe(true);
+  expect(await visualOrder(c1.locator('.run-time'), ['⏱', 'רץ:', '2:14:05'])).toBe(true);
+  expect(await visualOrder(c1.locator('.copied'), ['הועתקו:', '12,340', '·', 'נכשלו:', '2'])).toBe(true);
+  expect(await visualOrder(card(page, 'בלי אחרון').locator('.last'), ['אוחז ב-', 'id', '987,654'])).toBe(true);
+  // The link is on X only.
+  const last = c1.getByRole('link', { name: '45,210', exact: true });
+  await expect(last).toHaveAttribute('href', 'https://t.me/c/100/45210');
 
   const c2 = card(page, 'בלי אחרון');
   await expect(c2).toContainText('הועתקו: 1,234,567');

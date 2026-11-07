@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatCount, formatRunTime, runMillisAt, positionText, runTimeShown,
+  formatCount, formatRunTime, runMillisAt, positionText, positionParts, runTimeShown,
 } from '../../desktop/src/main/resources/web/lib/jobsFormat.js';
 
 test('formatCount puts a comma between thousands', () => {
@@ -51,4 +51,11 @@ test('positionText: "of" the latest id only when it is known; nothing when neith
   assert.equal(positionText(0, 50000), 'אוחז ב-id 0 מתוך 50,000');
   assert.equal(positionText(0, 0), null);
   assert.equal(positionText(undefined, undefined), null);
+});
+
+test('positionParts: the formatted numbers the screen puts in their own <bdi>', () => {
+  assert.deepEqual(positionParts(45210, 50000), { last: '45,210', latest: '50,000' });
+  assert.deepEqual(positionParts(45210, 0), { last: '45,210', latest: null });
+  assert.deepEqual(positionParts(0, 50000), { last: '0', latest: '50,000' });
+  assert.equal(positionParts(0, 0), null);
 });

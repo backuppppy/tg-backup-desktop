@@ -29,10 +29,19 @@ export function runTimeShown(status) {
   return (Number(status.runMillis) || 0) > 0 || (Number(status.runningSince) || 0) > 0;
 }
 
-/** `אוחז ב-id X מתוך Y`, without `מתוך Y` while the latest id is unknown (0); null when neither is known. */
-export function positionText(lastId, latestId) {
+/**
+ * The numbers of `אוחז ב-id X מתוך Y`: `{last, latest}` formatted, `latest` null while the latest id is unknown (0);
+ * null when neither is known. The screen puts each number in its own <bdi>, so `id` and X read in order in RTL.
+ */
+export function positionParts(lastId, latestId) {
   const last = Number(lastId) || 0;
   const latest = Number(latestId) || 0;
   if (last <= 0 && latest <= 0) return null;
-  return `אוחז ב-id ${formatCount(last)}${latest > 0 ? ` מתוך ${formatCount(latest)}` : ''}`;
+  return { last: formatCount(last), latest: latest > 0 ? formatCount(latest) : null };
+}
+
+/** `אוחז ב-id X מתוך Y` as one string, without `מתוך Y` while the latest id is unknown; null when neither is known. */
+export function positionText(lastId, latestId) {
+  const p = positionParts(lastId, latestId);
+  return p && `אוחז ב-id ${p.last}${p.latest ? ` מתוך ${p.latest}` : ''}`;
 }

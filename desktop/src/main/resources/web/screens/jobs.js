@@ -2,7 +2,7 @@
 // JobDialog, and the delete and reset dialogs. Texts and enable rules are the Android ones.
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
-import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionText } from '../lib/jobsFormat.js';
+import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionParts } from '../lib/jobsFormat.js';
 
 const MEDIA_TYPES = [
   ['VIDEO_DOC', 'וידאו + קבצים'],
@@ -74,7 +74,7 @@ export function comeBack() {
 /** The run time lines of now, text only: the cards are not drawn again (focus and selection stay). */
 function updateClocks() {
   const now = Date.now();
-  for (const { el, status } of view.clocks) el.textContent = runTimeText(status, now, view.offset);
+  for (const { el, status } of view.clocks) el.textContent = runTimeOf(status, now, view.offset);
 }
 
 /** One interval while the screen is in view and a shown job's clock runs; none otherwise. */
@@ -91,7 +91,8 @@ function schedule() {
   }, 1000);
 }
 
-const runTimeText = (status, now, offset) => `⏱ רץ: ${formatRunTime(runMillisAt(status, now, offset))}`;
+/** The run time as H:MM:SS at the page's `now`, on the server's clock by `offset`. */
+const runTimeOf = (status, now, offset) => formatRunTime(runMillisAt(status, now, offset));
 
 /** A shown job without its source's latest id asks the server to read it, once a page load; it comes by SSE. */
 function askLatest(jobs, statuses) {
@@ -167,6 +168,13 @@ function maybeLink(cls, url, text) {
     : h('div', { class: cls }, text);
 }
 
+/** The position's X: a link to the source message when there is an http(s) one, else the number alone. */
+function numberLink(url, text) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url)
+    ? h('a', { class: 'link', href: url, target: '_blank', rel: 'noopener' }, text)
+    : text;
+}
+
 function jobCard(job, status, accounts, state) {
   const running = status.running;
   const icon = running && status.paused ? '⏸' : running ? '🟢' : '⚪';
@@ -201,11 +209,17 @@ function jobCard(job, status, accounts, state) {
     ]
     : [h('button', { type: 'button', onclick: () => post(`${base}/start`) }, '▶ הפעל')];
 
-  const position = positionText(status.lastId, status.latestId);
+  // Each number in its own <bdi>: in RTL `id` stays before X (one LTR run would put X first), and the link is on X.
+  const position = positionParts(status.lastId, status.latestId);
+  const positionLine = position && h('div', { class: 'last' },
+    'אוחז ב-id ',
+    h('bdi', {}, numberLink(status.lastLink, position.last)),
+    position.latest ? [' מתוך ', h('bdi', {}, position.latest)] : null);
   let clock = null;
   if (runTimeShown(status)) {
-    clock = h('div', { class: 'run-time' }, runTimeText(status, Date.now(), view.offset));
-    view.clocks.push({ el: clock, status });
+    const time = h('bdi', {}, runTimeOf(status, Date.now(), view.offset));
+    clock = h('div', { class: 'run-time' }, '⏱ רץ: ', time);
+    view.clocks.push({ el: time, status });
   }
 
   return h('section', { class: `card job-card${running ? ' running' : ''}`, 'data-job-id': job.id },
@@ -219,8 +233,9 @@ function jobCard(job, status, accounts, state) {
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
     running ? maybeLink('phase', status.lastTargetLink, status.phase) : null,
-    h('div', { class: 'copied' }, `הועתקו: ${formatCount(status.copiedTotal)}${status.failed > 0 ? ` · נכשלו: ${status.failed}` : ''}`),
-    position ? maybeLink('last', status.lastLink, position) : null,
+    h('div', { class: 'copied' }, 'הועתקו: ', h('bdi', {}, formatCount(status.copiedTotal)),
+      status.failed > 0 ? [' · נכשלו: ', h('bdi', {}, status.failed)] : null),
+    positionLine,
     clock,
     h('div', { class: 'row' },
       actions,
