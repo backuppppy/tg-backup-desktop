@@ -226,15 +226,24 @@ test('▶ הפעל הכל shows the start errors as one toast joined by new line
   await expect.poll(() => page.locator('#toast').evaluate((el) => el.textContent)).toBe('א: חסר מקור או יעד\nב: המשימה כבר פועלת');
 });
 
-/** Serves `patch` merged over the real snapshot as the whole event stream. */
-async function fakeStream(page, patch) {
-  const real = await state(page.request);
-  const snapshot = { ...real, ...patch };
-  await page.route('**/api/events', (route) => route.fulfill({
-    status: 200,
-    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
-    body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
-  }));
+/**
+ * Serves `patch` merged over the real snapshot as the whole event stream. The snapshot has no serverNow (the page
+ * runs on its own clock, as before serverNow) unless `skew` is given: then serverNow is the time it is served plus
+ * `skew` ms, a server clock that far from the page's. `statuses`, when given, follows as a statuses event with the
+ * same serverNow.
+ */
+async function fakeStream(page, patch, { skew = null, statuses = null } = {}) {
+  const { serverNow, ...real } = await state(page.request);
+  await page.route('**/api/events', (route) => {
+    const now = skew === null ? {} : { serverNow: Date.now() + skew };
+    const snapshot = { ...real, ...patch, ...now };
+    const more = statuses ? `event: statuses\ndata: ${JSON.stringify({ statuses, ...now })}\n\n` : '';
+    return route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+      body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n${more}`,
+    });
+  });
 }
 
 const status = (over) => ({
@@ -390,6 +399,27 @@ test('run time: the clock moves once a second while running, without drawing the
   const back = await seconds();
   await expect.poll(seconds, { timeout: 4000 }).toBeGreaterThan(back);
 });
+
+for (const skew of [-60_000, 60_000]) {
+  test(`run time on the server clock: a server clock ${skew / 1000} s from the page's still shows the right time, moving each second`, async ({ page }) => {
+    await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
+    // The server's runningSince: 5 s ago on the server's clock, which is `skew` from this one.
+    const since = Date.now() + skew - 5000;
+    const running = status({ running: true, phase: 'מעתיק', runMillis: 60000, runningSince: since, lastId: 3, latestId: 9 });
+    const jobs = [job({ id: 'k1', name: 'סטייה' })];
+    // -60 s by the snapshot alone; +60 s by a statuses event after a snapshot of the job stopped.
+    if (skew < 0) await fakeStream(page, { jobs, statuses: { k1: running } }, { skew });
+    else await fakeStream(page, { jobs, statuses: { k1: status({ runMillis: 1000 }) } }, { skew, statuses: { k1: running } });
+    await page.goto('/#jobs');
+    const clock = card(page, 'סטייה').locator('.run-time');
+    // On the page's clock it would read 0:02:05 (60 s behind) or stay at 0:01:00 (60 s ahead).
+    await expect(clock).toHaveText(/^⏱ רץ: 0:01:(0[5-9]|1\d)$/);
+    const seconds = async () => Number((await clock.textContent()).split(':').pop());
+    const first = await seconds();
+    await expect.poll(seconds, { timeout: 2500 }).toBeGreaterThanOrEqual(first + 1);
+    await expect.poll(seconds, { timeout: 3500 }).toBeGreaterThanOrEqual(first + 2);
+  });
+}
 
 test('the latest id is asked once a page load for each job shown without one', async ({ page }) => {
   const asked = [];

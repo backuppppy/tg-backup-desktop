@@ -35,9 +35,11 @@ const askedLatest = new Set();
 
 export function render(root, state) {
   if (!view || view.root !== root || !root.contains(view.list)) {
-    view = { root, list: h('div', { class: 'jobs' }), shown: null, clocks: [] };
+    view = { root, list: h('div', { class: 'jobs' }), shown: null, clocks: [], offset: 0 };
     root.replaceChildren(view.list);
   }
+  // The server's clock less the page's, from the last snapshot or statuses event: runningSince is server time.
+  view.offset = Number(state.clockOffset) || 0;
   const { accounts = [], jobs = [], statuses = {} } = state;
   const shown = view.shown;
   if (shown && shown.accounts === accounts && shown.jobs === jobs && shown.statuses === statuses) {
@@ -72,7 +74,7 @@ export function comeBack() {
 /** The run time lines of now, text only: the cards are not drawn again (focus and selection stay). */
 function updateClocks() {
   const now = Date.now();
-  for (const { el, status } of view.clocks) el.textContent = runTimeText(status, now);
+  for (const { el, status } of view.clocks) el.textContent = runTimeText(status, now, view.offset);
 }
 
 /** One interval while the screen is in view and a shown job's clock runs; none otherwise. */
@@ -89,7 +91,7 @@ function schedule() {
   }, 1000);
 }
 
-const runTimeText = (status, now) => `⏱ רץ: ${formatRunTime(runMillisAt(status, now))}`;
+const runTimeText = (status, now, offset) => `⏱ רץ: ${formatRunTime(runMillisAt(status, now, offset))}`;
 
 /** A shown job without its source's latest id asks the server to read it, once a page load; it comes by SSE. */
 function askLatest(jobs, statuses) {
@@ -202,7 +204,7 @@ function jobCard(job, status, accounts, state) {
   const position = positionText(status.lastId, status.latestId);
   let clock = null;
   if (runTimeShown(status)) {
-    clock = h('div', { class: 'run-time' }, runTimeText(status, Date.now()));
+    clock = h('div', { class: 'run-time' }, runTimeText(status, Date.now(), view.offset));
     view.clocks.push({ el: clock, status });
   }
 

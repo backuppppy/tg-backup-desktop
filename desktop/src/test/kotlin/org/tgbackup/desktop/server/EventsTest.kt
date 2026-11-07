@@ -31,6 +31,7 @@ import kotlinx.serialization.json.put
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.app.data.Account
 import org.tgbackup.app.data.Job
+import org.tgbackup.app.data.Progress
 import org.tgbackup.app.engine.Level
 import org.tgbackup.desktop.DesktopApp
 import org.tgbackup.desktop.PowerRequests
@@ -141,6 +142,31 @@ class EventsTest {
             assertEquals(BuildConfig.VERSION_NAME, o["version"]!!.jsonPrimitive.content)
             assertEquals("לפני", o["log"]!!.jsonArray.last().jsonObject["msg"]!!.jsonPrimitive.content)
             for (k in listOf("accounts", "accountStates", "jobs", "statuses", "exportPrefs")) assertTrue(o.containsKey(k), k)
+        }
+    }
+
+    /** The page's run clock follows the server's clock: the snapshot and every statuses event carry the server's now. */
+    @Test
+    fun snapshotAndStatusesCarryTheServerNow() = withServer { client ->
+        val before = System.currentTimeMillis()
+        val state = TgbJson.parseToJsonElement(client.get("/api/state").bodyAsText()).jsonObject
+        val stateNow = state["serverNow"]!!.jsonPrimitive.long
+        assertTrue(stateNow in before..System.currentTimeMillis(), "$stateNow")
+        client.events { sse ->
+            val (name, data) = sse.next()
+            assertEquals("snapshot", name)
+            val snapNow = data.jsonObject["serverNow"]!!.jsonPrimitive.long
+            assertTrue(snapNow >= stateNow, "$snapNow")
+            app.store.updateConfig { it.copy(jobs = it.jobs + Job(id = "j1", name = "משימה")) }
+            app.store.saveProgress("j1") { Progress(lastId = 10, copiedTotal = 3, runMillis = 5000) }
+            val sent = System.currentTimeMillis()
+            app.jobs.showSavedProgress("j1")
+            val ev = sse.nextNamed("statuses").jsonObject
+            val evNow = ev["serverNow"]!!.jsonPrimitive.long
+            assertTrue(evNow in sent..System.currentTimeMillis(), "$evNow")
+            val j1 = ev["statuses"]!!.jsonObject["j1"]!!.jsonObject
+            assertEquals(3L, j1["copiedTotal"]!!.jsonPrimitive.long)
+            assertEquals(5000L, j1["runMillis"]!!.jsonPrimitive.long)
         }
     }
 

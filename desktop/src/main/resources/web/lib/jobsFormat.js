@@ -14,13 +14,14 @@ export function formatRunTime(ms) {
 }
 
 /**
- * The job's run time at `now` (ms): the saved time, and while `runningSince` is set the time since then. A clock
- * behind the server's adds nothing rather than taking time off.
+ * The job's run time at the page's `now` (ms): the saved time, and while `runningSince` is set the time since then.
+ * `runningSince` is the server's clock: `offset` (serverNow - Date.now() at the last receipt, 0 when unknown) turns
+ * the page's now into the server's. A clock still behind the server's adds nothing rather than taking time off.
  */
-export function runMillisAt(status, now) {
+export function runMillisAt(status, now, offset = 0) {
   const saved = Number(status.runMillis) || 0;
   const since = Number(status.runningSince) || 0;
-  return saved + (since > 0 ? Math.max(0, now - since) : 0);
+  return saved + (since > 0 ? Math.max(0, now + (Number(offset) || 0) - since) : 0);
 }
 
 /** The run time line is shown once there is a saved time or the clock runs. */

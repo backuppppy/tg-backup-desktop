@@ -68,3 +68,18 @@ test('a snapshot log over 500 is capped too', () => {
   const s = reduce({}, 'snapshot', snapshot(Array.from({ length: 501 }, (_, i) => entry(i))));
   assert.equal(s.log.length, 500);
 });
+
+test('serverNow gives the clock offset at receipt; without it the offset is 0 (the page clock)', () => {
+  let s = reduce({}, 'snapshot', { ...snapshot(), serverNow: 160_000 }, 100_000);
+  assert.equal(s.clockOffset, 60_000);
+  s = reduce(s, 'statuses', { statuses: { j: { running: true } }, serverNow: 150_000 }, 200_000);
+  assert.equal(s.statuses.j.running, true);
+  assert.equal(s.clockOffset, -50_000);
+  // A statuses event of the old shape (the map alone) keeps the offset.
+  s = reduce(s, 'statuses', { j: { running: false } }, 300_000);
+  assert.equal(s.statuses.j.running, false);
+  assert.equal(s.clockOffset, -50_000);
+  // A snapshot without serverNow: the page's own clock.
+  s = reduce(s, 'snapshot', snapshot(), 400_000);
+  assert.equal(s.clockOffset, 0);
+});

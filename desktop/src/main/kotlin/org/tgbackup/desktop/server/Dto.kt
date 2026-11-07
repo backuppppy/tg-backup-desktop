@@ -206,7 +206,13 @@ data class SnapshotDto(
     val log: List<LogEntryDto>,
     /** Accounts whose chats are loading, with the count so far (a page that reconnects mid-load needs it). */
     val chatsLoading: Map<String, Int> = emptyMap(),
+    /** The server's clock (epoch ms) when this was built: the page runs the jobs' clocks on the server's time. */
+    val serverNow: Long = 0,
 )
+
+/** The `statuses` event: the jobs' statuses and the server's clock (epoch ms) when it was sent. */
+@Serializable
+data class StatusesEventDto(val statuses: Map<String, JobStatusDto>, val serverNow: Long)
 
 /** One loaded chat. `type` is the `DialogInfo.Type` name; the MTP input peer stays on the server ([ChatHandles]). */
 @Serializable

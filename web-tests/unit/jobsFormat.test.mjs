@@ -29,6 +29,15 @@ test('runMillisAt adds the time since runningSince only while it is set', () => 
   assert.equal(runMillisAt({}, 50_000), 0);
 });
 
+test('runMillisAt on the server clock: the offset (serverNow - Date.now()) is added to the page clock', () => {
+  // The page's clock 60 s behind the server's: runningSince is 60 s ahead of the page's now.
+  assert.equal(runMillisAt({ runMillis: 1000, runningSince: 110_000 }, 55_000, 60_000), 6000);
+  // The page's clock 60 s ahead.
+  assert.equal(runMillisAt({ runMillis: 1000, runningSince: 0 + 40_000 }, 110_000, -60_000), 11_000);
+  // No offset: the page's own clock, as before.
+  assert.equal(runMillisAt({ runMillis: 1000, runningSince: 40_000 }, 50_000, undefined), 11_000);
+});
+
 test('runTimeShown: a saved time, or a running clock', () => {
   assert.equal(runTimeShown({ runMillis: 0, runningSince: 0 }), false);
   assert.equal(runTimeShown({}), false);

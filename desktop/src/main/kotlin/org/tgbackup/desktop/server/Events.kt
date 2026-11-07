@@ -22,9 +22,7 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.nullable
-import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonElement
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.app.engine.LogEntry
@@ -107,6 +105,7 @@ class Events(private val app: DesktopApp) {
             password = app.exports.password.value.toDto(),
             log = app.log.entries.value.map { it.toDto() },
             chatsLoading = HashMap(chatsLoading),
+            serverNow = System.currentTimeMillis(),
         )
     }
 
@@ -161,7 +160,12 @@ class Events(private val app: DesktopApp) {
             source.changesSince(sent).collect { send(event(name, serializer, it)) }
         }
         forward("config", ConfigDto.serializer(), configs, ConfigDto(snap.accounts, snap.jobs))
-        forward("statuses", MapSerializer(String.serializer(), JobStatusDto.serializer()), statuses, snap.statuses)
+        // The server's now is added as each one goes out, so it does not make equal statuses look changed.
+        launch {
+            statuses.changesSince(snap.statuses).collect {
+                send(event("statuses", StatusesEventDto.serializer(), StatusesEventDto(it, System.currentTimeMillis())))
+            }
+        }
         forward("accountStates", ListSerializer(AccountStateDto.serializer()), accountStates, snap.accountStates)
         forward("exportPrefs", ExportPrefsDto.serializer(), prefs, snap.exportPrefs)
         forward("export", RunningExportDto.serializer().nullable, export, snap.runningExport)

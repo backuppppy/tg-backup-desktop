@@ -7,17 +7,29 @@ const EVENTS = ['snapshot', 'config', 'statuses', 'accountStates', 'exportPrefs'
 
 const capLog = (list) => (list.length > LOG_MAX ? list.slice(list.length - LOG_MAX) : list);
 
-/** The state after event `name` with parsed `data`. `disconnected` is the page's own event. */
-export function reduce(state, name, data) {
+/** serverNow - receivedAt when the event carries the server's clock (epoch ms), else null. */
+const offsetOf = (data, receivedAt) => (typeof data?.serverNow === 'number' ? data.serverNow - receivedAt : null);
+
+/**
+ * The state after event `name` with parsed `data`, received at `receivedAt` (the page's Date.now()).
+ * `disconnected` is the page's own event. `clockOffset` is the server's clock less the page's (the jobs' run clocks).
+ */
+export function reduce(state, name, data, receivedAt = Date.now()) {
   switch (name) {
     case 'snapshot':
-      return { ...data, log: capLog(data.log ?? []), chatsLoading: { ...(data.chatsLoading ?? {}) }, connected: true };
+      return {
+        ...data, log: capLog(data.log ?? []), chatsLoading: { ...(data.chatsLoading ?? {}) }, connected: true,
+        clockOffset: offsetOf(data, receivedAt) ?? 0,
+      };
     case 'disconnected':
       return { ...state, connected: false };
     case 'config':
       return { ...state, accounts: data.accounts, jobs: data.jobs };
-    case 'statuses':
-      return { ...state, statuses: data };
+    case 'statuses': {
+      // `{statuses, serverNow}`; the map alone from a server before serverNow. A status is never a number.
+      const offset = offsetOf(data, receivedAt);
+      return offset === null ? { ...state, statuses: data } : { ...state, statuses: data.statuses, clockOffset: offset };
+    }
     case 'accountStates':
       return { ...state, accountStates: data };
     case 'exportPrefs':
@@ -51,7 +63,7 @@ export function connect(onState) {
   let state = { connected: false };
   let source = null;
   const apply = (name, data) => {
-    state = reduce(state, name, data);
+    state = reduce(state, name, data, Date.now());
     onState(state);
   };
   const lost = () => {
