@@ -4,7 +4,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.tgbackup.app.export.PasswordRequest
 import kotlin.time.Duration
@@ -22,10 +21,13 @@ internal fun CoroutineScope.boundPasswordWait(
     requests: StateFlow<PasswordRequest?>,
     timeout: Duration = PASSWORD_WAIT,
 ): Job = launch {
-    // A new request (or none) cancels the wait for the previous one.
-    requests.collectLatest { request ->
-        if (request == null) return@collectLatest
-        delay(timeout)
-        request.answer.complete(null)
+    // Each request gets its own timer: a newer request does not take the older one's away (the older one may
+    // still hold its account's lock).
+    requests.collect { request ->
+        if (request == null) return@collect
+        launch {
+            delay(timeout)
+            request.answer.complete(null)
+        }
     }
 }

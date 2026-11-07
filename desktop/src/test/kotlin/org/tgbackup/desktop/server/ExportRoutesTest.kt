@@ -227,6 +227,27 @@ class ExportRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun aNewerPasswordRequestDoesNotTakeTheOlderOnesTimerAway() = kotlinx.coroutines.test.runTest {
+        val requests = kotlinx.coroutines.flow.MutableStateFlow<org.tgbackup.app.export.PasswordRequest?>(null)
+        backgroundScope.boundPasswordWait(requests)
+        val first = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = first
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("3m"))
+        val second = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = second
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(PASSWORD_WAIT - kotlin.time.Duration.parse("3m") + kotlin.time.Duration.parse("1s"))
+        testScheduler.runCurrent()
+        assertTrue(first.answer.isCompleted)
+        assertNull(first.answer.await())
+        assertFalse(second.answer.isCompleted)
+        testScheduler.advanceTimeBy(kotlin.time.Duration.parse("3m"))
+        testScheduler.runCurrent()
+        assertNull(second.answer.await())
+    }
+
+    @Test
     fun chatsLoadingIsInTheSnapshot() {
         val events = Events(app)
         assertTrue(events.snapshot().chatsLoading.isEmpty())
