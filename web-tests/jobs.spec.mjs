@@ -425,6 +425,35 @@ test('the focus follows a button that changed its text (⏸ השהה ↔ ▶ ה�
   }
 });
 
+test('closing a dialog gives the focus to its opener drawn again while the dialog was open', async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const name = `job-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  const id = await addJob(page.request, { name, accountIds: [accId] });
+  let other = null;
+  try {
+    await open(page);
+    await card(page, name).getByRole('button', { name: 'ערוך' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => { document.activeElement.closest('.dialog') && document.querySelectorAll('.job-card').forEach((c) => { c.dataset.old = '1'; }); });
+    // Another account draws the list again behind the dialog: the button that opened it is gone from the page.
+    other = await addAccount(page.request, `acc-${uid()}`);
+    await expect(page.locator('.job-card[data-old]')).toHaveCount(0);
+    await expect(card(page, name)).toBeVisible();
+    await dialog.getByRole('button', { name: 'ביטול' }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => page.evaluate((jobId) => {
+      const el = document.activeElement;
+      return el?.isConnected && el.closest('[data-job-id]')?.dataset.jobId === jobId ? el.textContent : null;
+    }, id)).toBe('ערוך');
+  } finally {
+    await page.request.delete(`/api/jobs/${id}`);
+    await page.request.delete(`/api/accounts/${accId}`);
+    if (other) await page.request.delete(`/api/accounts/${other}`);
+  }
+});
+
 test("a start message id beyond what a number keeps exactly is refused: שמור stays disabled", async ({ page }) => {
   const acc = `acc-${uid()}`;
   const accId = await addAccount(page.request, acc);

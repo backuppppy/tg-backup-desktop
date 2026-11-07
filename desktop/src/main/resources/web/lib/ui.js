@@ -62,8 +62,14 @@ export function formDialog({ title, text, content = [], okText = 'אישור', c
   let settle;
   const result = new Promise((resolve) => { settle = resolve; });
   let done = false;
-  // The focus goes back where it was (the button that opened the dialog) when the dialog closes.
+  // The focus goes back where it was (the button that opened the dialog) when the dialog closes; when the screen drew
+  // that button again meanwhile, to the new one: the same text in the same job card (or outside any card).
   const opener = document.activeElement;
+  const openerCard = opener?.closest?.('[data-job-id]')?.dataset.jobId ?? null;
+  const openerText = opener instanceof HTMLButtonElement ? opener.textContent : null;
+  const drawnAgain = () => (openerText === null ? null : [...document.querySelectorAll('button')].find((b) => !b.disabled
+    && b.textContent === openerText && (b.closest('[data-job-id]')?.dataset.jobId ?? null) === openerCard
+    && !b.closest('.overlay')));
 
   const close = (ok) => {
     if (done) return;
@@ -71,6 +77,7 @@ export function formDialog({ title, text, content = [], okText = 'אישור', c
     overlay.remove();
     document.removeEventListener('keydown', onKey);
     if (opener && opener !== document.body && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+    else if (opener && !opener.isConnected) drawnAgain()?.focus();
     settle(ok);
   };
   const ok = async () => {
