@@ -13,7 +13,9 @@ import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.add
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.tgbackup.app.data.Config
 import org.tgbackup.app.data.Job
@@ -105,19 +107,31 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
         if (jobs.isRunning(id)) throw Refusal(HttpStatusCode.Conflict, MSG_JOB_RUNNING)
     }
 
-    /** Saves [input] as job [id]: replace the existing job, or append a new one when [create]. */
-    suspend fun save(id: String, input: JobInput, create: Boolean) = locks.job(id) {
-        requireStopped(id)
-        locks.config {
-            val cfg = store.config.value
-            if (!create) requireJob(id)
-            val job = input.toJob(id, cfg)
-            validateJob(job, cfg)
-            store.updateConfig { c ->
-                if (c.jobs.any { it.id == id }) c.copy(jobs = c.jobs.map { if (it.id == id) job else it })
-                else c.copy(jobs = c.jobs + job)
+    /**
+     * Saves [input] as job [id]: replace the existing job, or append a new one when [create]. Then reads the
+     * source's latest id in the background (nothing happens when no account of the job is logged in).
+     */
+    suspend fun save(id: String, input: JobInput, create: Boolean) {
+        locks.job(id) {
+            requireStopped(id)
+            locks.config {
+                val cfg = store.config.value
+                if (!create) requireJob(id)
+                val job = input.toJob(id, cfg)
+                validateJob(job, cfg)
+                val old = cfg.jobs.firstOrNull { it.id == id }
+                store.updateConfig { c ->
+                    if (c.jobs.any { it.id == id }) c.copy(jobs = c.jobs.map { if (it.id == id) job else it })
+                    else c.copy(jobs = c.jobs + job)
+                }
+                // The old source's newest id says nothing about the new one.
+                if (old != null && old.source != job.source && store.progress(id).latestId != 0L) {
+                    store.saveProgress(id) { it.copy(latestId = 0) }
+                    jobs.showSavedProgress(id)
+                }
             }
         }
+        app.scope.launch { jobs.refreshLatest(id) }
     }
 
     route("/api/jobs") {
@@ -189,6 +203,22 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
         }
         post("{id}/resume") {
             command { val id = idParam(); locks.job(id) { requireJob(id); jobs.resume(id) } }
+        }
+        // Reads the source's newest message id without starting the job; answers it, 0 when it could not be read
+        // (no logged-in account of the job). The value also reaches the job's status.
+        post("{id}/latest") {
+            val latest = try {
+                val id = idParam()
+                requireJob(id)
+                jobs.refreshLatest(id) ?: 0L
+            } catch (r: Refusal) {
+                call.respondError(r.status, r.message)
+                return@post
+            }
+            call.respondText(
+                buildJsonObject { put("ok", true); put("latestId", latest) }.toString(),
+                ContentType.Application.Json.withCharset(Charsets.UTF_8),
+            )
         }
         post("{id}/reset") {
             command {

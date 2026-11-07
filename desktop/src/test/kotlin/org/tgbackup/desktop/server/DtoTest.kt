@@ -47,6 +47,17 @@ class DtoTest {
     }
 
     @Test
+    fun jobStatusCarriesTheRunTotals() {
+        val dto = JobStatus(copiedTotal = 12_340, runMillis = 8_045_000, runningSince = 1_700_000_000_000, latestId = 50_000).toDto()
+        assertEquals(12_340L, dto.copiedTotal)
+        assertEquals(8_045_000L, dto.runMillis)
+        assertEquals(1_700_000_000_000L, dto.runningSince)
+        assertEquals(50_000L, dto.latestId)
+        val json = TgbJson.parseToJsonElement(TgbJson.encodeToString(JobStatusDto.serializer(), dto)).jsonObject
+        for (key in listOf("copiedTotal", "runMillis", "runningSince", "latestId")) assertTrue(key in json, "$key in $json")
+    }
+
+    @Test
     fun accountDtoNeverContainsTheApiHash() {
         val hash = "abcdef0123456789abcdef0123456789"
         val dto = Account(id = "a1", name = "n", apiId = 5, apiHash = hash, phone = "+1").toDto()

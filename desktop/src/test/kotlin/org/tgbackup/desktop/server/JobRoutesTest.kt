@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.tgbackup.app.data.Job
 import org.tgbackup.app.data.JobMode
 import org.tgbackup.app.data.MediaType
+import org.tgbackup.app.data.Progress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -94,7 +95,7 @@ class JobRoutesTest : RouteTestBase() {
         seed()
         client.putJson("/api/jobs/zz", """{"source":"@s","target":"@t","accountIds":["a1"]}""")
             .assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
-        for (path in listOf("zz/start", "zz/stop", "zz/pause", "zz/resume", "zz/reset", "all")) {
+        for (path in listOf("zz/start", "zz/stop", "zz/pause", "zz/resume", "zz/reset", "zz/latest", "all")) {
             client.postJson("/api/jobs/$path").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
         }
     }
@@ -121,6 +122,7 @@ class JobRoutesTest : RouteTestBase() {
         for (raw in listOf("%2E%2E", "..%2F..", "..%2Fsentinel", "a%2F..%2F..%2Fsentinel", "x".repeat(33))) {
             client.del("/api/jobs/$raw").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
             client.postJson("/api/jobs/$raw/reset").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+            client.postJson("/api/jobs/$raw/latest").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
         }
         assertTrue(java.nio.file.Files.exists(sentinel))
         assertTrue(java.nio.file.Files.exists(dataDir.resolve("sentinel.json")))
@@ -238,5 +240,33 @@ class JobRoutesTest : RouteTestBase() {
         val g = client.get("/api/jobs/j1/start")
         assertTrue(g.status == HttpStatusCode.NotFound || g.status == HttpStatusCode.MethodNotAllowed, g.status.toString())
         assertFalse(app.jobs.isRunning("j1"))
+    }
+
+    @Test
+    fun latestWithoutALoggedInAccountAnswersZeroAndKeepsTheSavedId() = withServer { client ->
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 10, latestId = 50) }
+        val r = client.postJson("/api/jobs/j1/latest")
+        r.assertOk()
+        // The dummy account never logs in: nothing is read, nothing changes, the job does not start.
+        assertEquals("0", TgbJson.parseToJsonElement(r.bodyAsText()).jsonObject["latestId"]?.jsonPrimitive?.content)
+        assertEquals(50L, app.store.progress("j1").latestId)
+        assertFalse(app.jobs.isRunning("j1"))
+        val g = client.get("/api/jobs/j1/latest")
+        assertTrue(g.status == HttpStatusCode.NotFound || g.status == HttpStatusCode.MethodNotAllowed, g.status.toString())
+    }
+
+    @Test
+    fun editingTheSourceForgetsTheOldSourcesLatestId() = withServer { client ->
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 10, copiedTotal = 3, latestId = 50) }
+        client.putJson("/api/jobs/j1", """{"name":"שם אחר","source":"@src","target":"@dst","accountIds":["a1"]}""").assertOk()
+        assertEquals(50L, app.store.progress("j1").latestId)
+        client.putJson("/api/jobs/j1", """{"source":"@other","target":"@dst","accountIds":["a1"]}""").assertOk()
+        val p = app.store.progress("j1")
+        assertEquals(0L, p.latestId)
+        assertEquals(0L, app.jobs.statuses.value["j1"]!!.latestId)
+        assertEquals(3L, p.copiedTotal)
+        assertEquals(10L, p.lastId)
     }
 }

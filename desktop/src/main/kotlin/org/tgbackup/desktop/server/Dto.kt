@@ -59,11 +59,19 @@ data class JobStatusDto(
     val lastTargetId: Long,
     val lastLink: String?,
     val lastTargetLink: String?,
+    /** Copied over all runs; [copied] is this run only. */
+    val copiedTotal: Long,
+    /** Saved run time; while [runningSince] > 0 the time since then comes on top. */
+    val runMillis: Long,
+    /** Epoch ms, 0 when stopped or paused. */
+    val runningSince: Long,
+    /** The source's newest message id, 0 = not known yet. */
+    val latestId: Long,
 )
 
 fun JobStatus.toDto() = JobStatusDto(
     running, paused, phase, lastId, sourceChatId, sourceTitle, isProtected, copied, failed, targetChatId, lastTargetId,
-    lastLink, lastTargetLink,
+    lastLink, lastTargetLink, copiedTotal, runMillis, runningSince, latestId,
 )
 
 @Serializable

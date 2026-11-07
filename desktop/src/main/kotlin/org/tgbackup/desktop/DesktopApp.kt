@@ -8,7 +8,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.Flow
@@ -25,6 +28,7 @@ import org.tgbackup.app.engine.JobManager
 import org.tgbackup.app.engine.LogBus
 import org.tgbackup.app.export.ExportManager
 import org.tgbackup.app.tg.AccountManager
+import org.tgbackup.app.tg.AuthUi
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
@@ -78,6 +82,27 @@ class DesktopApp(
             combine(jobs.anyRunning, exportActive) { r, e -> r || e }
                 .distinctUntilChanged()
                 .collect { active -> updateSleepGuard(active) }
+        }
+
+        // The source's latest id of every job, read without running it: whenever an account of the job logs in
+        // (which is also how a saved session comes back after launch), and right away for the jobs that have none.
+        scope.launch {
+            accounts.clients.collectLatest { clients ->
+                coroutineScope {
+                    clients.forEach { (id, client) ->
+                        launch {
+                            client.auth.map { it is AuthUi.Ready }.distinctUntilChanged().filter { it }.collect {
+                                store.config.value.jobs.filter { id in it.accountIds }.forEach { j ->
+                                    launch { jobs.refreshLatest(j.id) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        store.config.value.jobs.filter { store.progress(it.id).latestId == 0L }.forEach { j ->
+            scope.launch { jobs.refreshLatest(j.id) }
         }
 
         // What MainActivity and BackupService did on launch: bring interrupted jobs back.

@@ -98,6 +98,11 @@ internal fun seedLongNames(app: DesktopApp) {
             source = "https://t.me/c/1000000000/1", target = "https://t.me/c/2000000000/1", accountIds = listOf("long1", "long2")),
     )
     app.store.updateConfig { it.copy(accounts = accounts, jobs = jobs) }
+    // Run totals for the job cards: 2:14:05 of run time and a known latest id; the second job's latest id is not
+    // known yet and its numbers need thousands separators.
+    app.store.saveProgress("longjob1") { it.copy(lastId = 45_210, copiedTotal = 12_340, runMillis = 8_045_000, latestId = 50_000) }
+    app.store.saveProgress("longjob2") { it.copy(lastId = 987_654, copiedTotal = 1_234_567, runMillis = 90_061_000) }
+    jobs.forEach { app.jobs.showSavedProgress(it.id) }
     app.log.info("[$name120] הועתקו 1500 הודעות מתוך \u200E-1001234567890 אל \u200E-1009876543210 — Copied 1500 messages, last id 987654")
     app.log.warn("[$long] FLOOD_WAIT_120 בהעתקה מהערוץ \u200E-1001234567890, ממתין 120 שניות לפני הניסיון הבא — waiting before the next try")
     app.log.error("C:\\Users\\משתמש\\AppData\\Local\\TGBackup\\exports\\" + "Very_Long_Folder_Name_Without_Any_Spaces_".repeat(3) + "file.json")
