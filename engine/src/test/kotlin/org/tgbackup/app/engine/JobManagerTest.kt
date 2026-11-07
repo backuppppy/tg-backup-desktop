@@ -233,6 +233,32 @@ class JobManagerTest {
     }
 
     @Test
+    fun aRunCancelledBeforeItWasDispatchedLeavesNoClock() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val t = OneThread()
+        try {
+            val log = LogBus(dir)
+            val jobs = JobManager(store, AccountManager(dir, log), log, t.scope, runTick = 50) { error("unused") }
+            t.drain()
+            t.hold()
+            assertNull(jobs.start("j1"))
+            jobs.stop("j1")
+            t.release()
+            t.drain()
+
+            waitUntil("the cancelled run is shown stopped") { !jobs.status().running }
+            assertFalse(jobs.isRunning("j1"))
+            assertEquals(0L, jobs.status().runningSince)
+            val saved = store.progress("j1").runMillis
+            Thread.sleep(200)
+            assertEquals(saved, store.progress("j1").runMillis, "no clock writes the run time on")
+        } finally {
+            t.close()
+        }
+    }
+
+    @Test
     fun reporterCountsCopiesAndSavesTheLatestId() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir, Progress(copiedTotal = 7))

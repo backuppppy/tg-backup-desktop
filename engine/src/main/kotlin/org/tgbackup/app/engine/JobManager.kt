@@ -160,7 +160,7 @@ class JobManager(
         val paused = pauseFlags.getOrPut(jobId) { MutableStateFlow(false) }
         paused.value = false
 
-        // Started only once it is the job's current run, so its finally knows whether it still is.
+        // Started only once it is the job's current run, so its end knows whether it still is.
         val run = scope.launch(start = CoroutineStart.LAZY) { runJob(jobId, paused) }
         synchronized(clockLock) {
             running[jobId] = run
@@ -168,6 +168,8 @@ class JobManager(
             showSavedProgress(jobId)
             startClock(jobId, run)
         }
+        // Also when it is cancelled before it was dispatched, which skips its body and its finally.
+        run.invokeOnCompletion { finishRun(jobId, run) }
         run.start()
         return null
     }
@@ -231,7 +233,6 @@ class JobManager(
             }
         } finally {
             clock.cancel()
-            finishRun(jobId, self)
         }
     }
 
