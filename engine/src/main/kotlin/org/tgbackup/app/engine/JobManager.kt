@@ -322,15 +322,18 @@ class JobManager(
      * Reads the server id of the newest message in [jobId]'s source through one of its logged-in accounts,
      * without starting the job, and saves it (Progress.latestId). Both runners find the source with
      * TDLib's resolveChat on the job's first account, so any logged-in account of the job can read it.
-     * Returns the id, or null when no account of the job is logged in or the source cannot be read.
+     * Returns the saved id, or null when no account of the job is logged in, the source cannot be read, or the
+     * job was deleted or got another source meanwhile.
      */
     suspend fun refreshLatest(jobId: String): Long? {
         val job = store.config.value.jobs.firstOrNull { it.id == jobId } ?: return null
-        if (job.source.isBlank()) return null
+        // The source as it was when the read began: a result for it is not the latest id of a source set since.
+        val source = job.source
+        if (source.isBlank()) return null
         val ac = job.accountIds.mapNotNull { accounts[it] }.firstOrNull { it.isReady } ?: return null
         val latest = try {
             withTimeoutOrNull(30_000) {
-                val chat = ac.resolveChat(job.source).getOrNull() ?: return@withTimeoutOrNull null
+                val chat = ac.resolveChat(source).getOrNull() ?: return@withTimeoutOrNull null
                 ac.latestServerId(chat.id)?.takeIf { it > 0 } ?: chat.lastMessage?.id?.serverId()
             }
         } catch (e: CancellationException) {
@@ -338,9 +341,21 @@ class JobManager(
         } catch (e: Throwable) {
             null
         } ?: return null
-        // saveLatest skips a job deleted meanwhile.
-        saveLatest(jobId, latest)
-        return latest.takeIf { it > 0 }
+        return saveRefreshed(jobId, source, latest)
+    }
+
+    /**
+     * Saves [id], read by a refresh for [source], as [jobId]'s latest id: the higher of it and the saved one (a run
+     * may have reported a newer one while the refresh read). Nothing is saved when the job was deleted or its
+     * source is no longer [source]. Returns the saved latest id, or null when nothing was saved.
+     */
+    internal fun saveRefreshed(jobId: String, source: String, id: Long): Long? = synchronized(clockLock) {
+        if (id <= 0) return@synchronized null
+        val job = store.config.value.jobs.firstOrNull { it.id == jobId } ?: return@synchronized null
+        if (job.source != source) return@synchronized null
+        val best = maxOf(store.progress(jobId).latestId, id)
+        saveLatest(jobId, best)
+        best
     }
 
     /** Restarts jobs that were running before the process died. Safe to call repeatedly. */

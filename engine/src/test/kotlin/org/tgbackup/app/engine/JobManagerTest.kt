@@ -312,6 +312,26 @@ class JobManagerTest {
     }
 
     @Test
+    fun aRefreshKeepsTheHigherIdAndSavesOnlyForTheSourceItRead() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(latestId = 100))
+        val jobs = manager(store, dir)
+
+        // A refresh that read an older value than the one a run reported since keeps the newer one.
+        assertEquals(100L, jobs.saveRefreshed("j1", "src", 50))
+        assertEquals(100L, store.progress("j1").latestId)
+        assertEquals(150L, jobs.saveRefreshed("j1", "src", 150))
+        assertEquals(150L, store.progress("j1").latestId)
+        assertEquals(150L, jobs.status().latestId)
+
+        // The job's source changed while the refresh read the old one: its result is not this source's.
+        store.updateConfig { c -> c.copy(jobs = c.jobs.map { it.copy(source = "other") }) }
+        assertNull(jobs.saveRefreshed("j1", "src", 900))
+        assertEquals(150L, store.progress("j1").latestId)
+        assertEquals(150L, jobs.status().latestId)
+    }
+
+    @Test
     fun resetProgressClearsTheRunTotals() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir, Progress(lastId = 40, copiedTotal = 7, runMillis = 1_000, latestId = 50))
