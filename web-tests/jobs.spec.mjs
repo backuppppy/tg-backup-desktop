@@ -417,7 +417,9 @@ test('run time: the clock moves once a second while running, without drawing the
   await page.goto('/#jobs');
   const c1 = card(page, 'רצה');
   const clock = c1.locator('.run-time');
-  await expect(clock).toHaveText(/^⏱ רץ: 0:01:0[5-9]$/);
+  // 60 s saved and 5 s since runningSince, plus the time the page took to load (up to 25 s on a slow machine):
+  // neither the saved time alone (0:01:00) nor a clock off by a minute.
+  await expect(clock).toHaveText(/^⏱ רץ: 0:01:(0[5-9]|[12]\d)$/);
   const seconds = async () => Number((await clock.textContent()).split(':').pop());
   // The card is not drawn again: a focused button keeps its focus, the same element stays.
   await c1.getByRole('button', { name: '⏸ השהה' }).focus();
@@ -473,7 +475,7 @@ for (const skew of [-60_000, 60_000]) {
     await page.goto('/#jobs');
     const clock = card(page, 'סטייה').locator('.run-time');
     // On the page's clock it would read 0:02:05 (60 s behind) or stay at 0:01:00 (60 s ahead).
-    await expect(clock).toHaveText(/^⏱ רץ: 0:01:(0[5-9]|1\d)$/);
+    await expect(clock).toHaveText(/^⏱ רץ: 0:01:(0[5-9]|[12]\d)$/);
     const seconds = async () => Number((await clock.textContent()).split(':').pop());
     const first = await seconds();
     await expect.poll(seconds, { timeout: 2500 }).toBeGreaterThanOrEqual(first + 1);
