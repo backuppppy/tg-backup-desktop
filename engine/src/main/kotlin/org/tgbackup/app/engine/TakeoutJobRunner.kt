@@ -572,8 +572,7 @@ class TakeoutJobRunner(
         return false
     }
 
-    /** Downloads message [id] of the source with TDLib and uploads it to [targetChatId]. */
-    /** Returns true when the message was uploaded to the target. */
+    /** Downloads message [id] of the source with TDLib and uploads it to [targetChatId]; true when it was uploaded. */
     private suspend fun reupload(account: AccountClient, id: Int): Boolean {
         val msg = account.client.getMessage(sourceChatId, id.toLong() shl 20).getOrNull()
         val file = msg?.content?.mainFile()

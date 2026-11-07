@@ -176,7 +176,8 @@ class JobManagerTest {
         val atPause = store.progress("j1").runMillis
         assertTrue(atPause >= 100, "runMillis $atPause")
         assertEquals(atPause, jobs.status().runMillis)
-        Thread.sleep(400)
+        // Paused far longer than it runs after the resume, so a slow machine stays under the bound below.
+        Thread.sleep(2_000)
         assertEquals(atPause, store.progress("j1").runMillis)
 
         val beforeResume = System.currentTimeMillis()
@@ -186,7 +187,8 @@ class JobManagerTest {
         jobs.stop("j1")
         waitUntil("job stopped") { !jobs.status().running }
         val total = store.progress("j1").runMillis
-        assertTrue(total >= atPause + 100 && total < atPause + 400, "runMillis $total after $atPause")
+        // Counted, the 2 s paused would put it at atPause + 2100 or more.
+        assertTrue(total >= atPause + 100 && total < atPause + 1_500, "runMillis $total after $atPause")
     }
 
     /** A manager whose coroutines all run on one thread that the test can hold. */
