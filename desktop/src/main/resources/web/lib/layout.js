@@ -77,6 +77,18 @@ export function jobsColumns(count) {
   return Number.isFinite(count) && count >= JOBS_HALF_FROM ? 2 : 1;
 }
 
+/** The desktop layout's width, as app.css's @media (min-width: 900px): from it `➕ הוסף משימה` heads the job list. */
+export const DESKTOP_QUERY = '(min-width: 900px)';
+
+/**
+ * The job list's children in order (plan 3b, the user's ruling): on a desktop (`addOnTop`) the add button right after
+ * the header, before the warning and the cards, so Tab reaches it first too; under 900 px it closes the list as before.
+ * Missing parts (no warning) are left out.
+ */
+export function jobsListOrder({ header, warning = null, cards = [], add }, addOnTop) {
+  return (addOnTop ? [header, add, warning, ...cards] : [header, warning, ...cards, add]).filter(Boolean);
+}
+
 /** The pane that shows the jobs, or null. */
 function jobsSide(state) {
   return state.right === 'jobs' ? 'right' : state.left === 'jobs' ? 'left' : null;

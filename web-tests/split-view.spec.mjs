@@ -388,7 +388,7 @@ test('a drag stops when the window gets narrower than 1200 px; the ratio is not 
 // ---------------------------------------------------------------- Task 10c: the jobs pane's width by the number of jobs
 // Up to 3 jobs the jobs pane is a third of the room (one column of cards), from 4 half (two columns), on either side.
 // Plan 3b, part C: the cards fill the pane (one column the pane's width, or two that share it, no empty room beside
-// them); `➕ הוסף משימה` sits under all of them, the list's width. A divider moved by hand holds while the number of
+// them); `➕ הוסף משימה` (the user's ruling, plan 3b) heads them all, the list's width. A divider moved by hand holds while the number of
 // jobs stays the same.
 
 /** The jobs pane's share for `n` jobs. */
@@ -430,7 +430,8 @@ const paneContent = (page, side) => pane(page, side).locator('.pane-body').evalu
 
 /**
  * Every card in its own place, `cols` columns that fill the pane: each card the pane's content width (one column) or
- * that less the 12 px gap, halved (two), within 2 px; the add button under all the cards, the list's width.
+ * that less the 12 px gap, halved (two), within 2 px; the add button above all the cards (on a desktop it heads the
+ * list since plan 3b; it used to sit under them), the list's width.
  */
 async function expectCards(page, side, n, cols) {
   expect(await columns(page, side)).toBe(cols);
@@ -443,12 +444,12 @@ async function expectCards(page, side, n, cols) {
   for (const b of cards) expect(Math.abs(b.width - want), `card ${b.width} of ${room}`).toBeLessThanOrEqual(2);
   expect(new Set(cards.map((b) => Math.round(b.x))).size).toBe(Math.min(cols, n));
   const add = await box(screenIn(page, side, 'jobs').getByRole('button', { name: '➕ הוסף משימה' }));
-  for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
+  for (const b of cards) expect(b.y).toBeGreaterThanOrEqual(add.y + add.height);
   expect(Math.abs(add.width - room)).toBeLessThanOrEqual(2);
   return cards;
 }
 
-test('2 jobs on the right: the jobs pane is a third, one column of cards, the add button under the last', async ({ page }) => {
+test('2 jobs on the right: the jobs pane is a third, one column of cards, the add button above the first', async ({ page }) => {
   await openWithJobs(page, 2);
   await expectSplit(page, 'jobs', 'log');
   expect(Math.abs(await jobsShareOf(page, 'right') - 1 / 3)).toBeLessThan(0.01);
@@ -567,7 +568,7 @@ for (const n of [2, 4]) {
   });
 }
 
-test('12 jobs: two columns, the jobs pane scrolls on its own, no sideways scroll, the add button after the last card', async ({ page }) => {
+test('12 jobs: two columns, the jobs pane scrolls on its own, no sideways scroll, the add button above the first card', async ({ page }) => {
   await openWithJobs(page, 12);
   await expectSplit(page, 'jobs', 'log');
   await expectCards(page, 'right', 12, 2);
@@ -578,14 +579,16 @@ test('12 jobs: two columns, the jobs pane scrolls on its own, no sideways scroll
   const doc = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight }));
   expect(doc.sw).toBeLessThanOrEqual(1920);
   expect(doc.sh).toBeLessThanOrEqual(1040);
-  // The last card in the DOM is the last one in the list; the add button comes after it, at the end of the scroll.
+  // The add button heads the list (plan 3b; it used to close it): in view before any scroll, right after the header.
   const add = screenIn(page, 'right', 'jobs').getByRole('button', { name: '➕ הוסף משימה' });
-  expect(await screenIn(page, 'right', 'jobs').locator('.jobs > :last-child').evaluate((el) => el.matches('button.full'))).toBe(true);
-  await add.scrollIntoViewIfNeeded();
-  const last = await box(screenIn(page, 'right', 'jobs').locator('.job-card').last());
-  const a = await box(add);
-  expect(a.y).toBeGreaterThanOrEqual(last.y + last.height);
+  await expect(add).toBeInViewport();
+  expect(await screenIn(page, 'right', 'jobs').locator('.jobs-header + button.full + .job-card').count()).toBe(1);
+  const first = await box(screenIn(page, 'right', 'jobs').locator('.job-card').first());
+  expect(first.y).toBeGreaterThanOrEqual((await box(add)).y + (await box(add)).height);
+  // The last card is down the scroll of the pane alone.
+  await screenIn(page, 'right', 'jobs').locator('.job-card').last().scrollIntoViewIfNeeded();
   expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await expect(add).not.toBeInViewport();
   // The rail and the log pane did not move with the jobs pane's scroll.
   await expect(page.locator('nav.tabs')).toBeInViewport();
   await expect(screenIn(page, 'left', 'log')).toBeInViewport();
@@ -652,22 +655,137 @@ for (const n of [2, 12]) {
   });
 }
 
-test('one screen: the add button is on its own row under all the job cards', async ({ page }) => {
+// Plan 3b (the user's ruling): on a desktop the add button heads the list; these used to expect it under the cards.
+test('one screen: the add button is on its own row above all the job cards', async ({ page }) => {
   await openWithJobs(page, 4, { mode: 'single', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 });
   await expectSingle(page, 'jobs');
   const cards = [];
   for (const c of await page.locator('.job-card').all()) cards.push(await box(c));
   const add = await box(page.getByRole('button', { name: '➕ הוסף משימה' }));
-  for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
+  for (const b of cards) expect(b.y).toBeGreaterThanOrEqual(add.y + add.height);
 });
 
-test('one screen with 2 jobs: the add button does not take the free cell next to the last card', async ({ page }) => {
+test('one screen with 2 jobs: the add button does not take a cell next to a card', async ({ page }) => {
   await openWithJobs(page, 2, { mode: 'single', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 });
   await expectSingle(page, 'jobs');
   const cards = [];
   for (const c of await page.locator('.job-card').all()) cards.push(await box(c));
   const add = await box(page.getByRole('button', { name: '➕ הוסף משימה' }));
-  for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
+  for (const b of cards) expect(b.y).toBeGreaterThanOrEqual(add.y + add.height);
+});
+
+// ---------------------------------------------------------------- plan 3b: `➕ הוסף משימה` heads the list on a desktop
+// From 900 px (one screen and split) the button is in the DOM right after .jobs-header, so Tab reaches it before the
+// first card; under 900 px it closes the list as before. The header itself (summary and all-jobs buttons) is unchanged.
+
+const addButton = (scope) => scope.getByRole('button', { name: '➕ הוסף משימה' });
+
+/** In `scope` the add button is right after the header and before the first card (top), or the list's last child. */
+async function expectAddAt(scope, top) {
+  const list = scope.locator('.jobs');
+  if (top) {
+    expect(await list.locator(':scope > .jobs-header + button.full').count()).toBe(1);
+    expect(await list.evaluate((el) => {
+      const kids = [...el.children];
+      return kids.indexOf(el.querySelector(':scope > button.full')) < kids.indexOf(el.querySelector(':scope > .job-card'));
+    })).toBe(true);
+    const add = await box(addButton(scope));
+    const first = await box(scope.locator('.job-card').first());
+    expect(first.y).toBeGreaterThanOrEqual(add.y + add.height);
+  } else {
+    expect(await list.locator(':scope > :last-child').evaluate((el) => el.matches('button.full'))).toBe(true);
+    const add = await box(addButton(scope));
+    const last = await box(scope.locator('.job-card').last());
+    expect(add.y).toBeGreaterThanOrEqual(last.y + last.height);
+  }
+}
+
+/** The texts of the buttons Tab reaches from ▶ הפעל הכל, up to the first one inside a job card. */
+async function tabOrder(page, scope) {
+  await scope.getByRole('button', { name: '▶ הפעל הכל' }).focus();
+  const seen = [];
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press('Tab');
+    const at = await page.evaluate(() => ({ text: document.activeElement?.textContent ?? '', inCard: !!document.activeElement?.closest('.job-card') }));
+    seen.push(at.inCard ? `card:${at.text}` : at.text);
+    if (at.inCard) break;
+  }
+  return seen;
+}
+
+for (const where of ['split', 'single']) {
+  test(`${where === 'split' ? 'split' : 'one screen'} at 1920: the add button heads the list, Tab reaches it before the first card`, async ({ page }) => {
+    await openWithJobs(page, 3, where === 'single' ? { mode: 'single', right: 'jobs', left: 'log', active: 'right', ratio: 0.55 } : undefined);
+    const scope = where === 'split' ? screenIn(page, 'right', 'jobs') : page.locator('[data-screen="jobs"]');
+    await expect(scope).toBeVisible();
+    await expectAddAt(scope, true);
+    const order = await tabOrder(page, scope);
+    expect(order.indexOf('➕ הוסף משימה')).toBeGreaterThanOrEqual(0);
+    expect(order.at(-1)).toMatch(/^card:/);
+    expect(order.indexOf('➕ הוסף משימה')).toBe(order.length - 2);
+    // The header is as before: the summary and the all-jobs buttons on the right, the buttons on one line.
+    const head = await box(scope.locator('.jobs-header'));
+    const summary = await box(scope.locator('.jobs-summary'));
+    expect(Math.abs(summary.x + summary.width - (head.x + head.width))).toBeLessThanOrEqual(2);
+  });
+}
+
+test('one screen at 1100x750 and the rail at 960: the add button heads the list; at 899 it closes it', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 750 });
+  await openWithJobs(page, 4);
+  const scope = page.locator('[data-screen="jobs"]');
+  await expectAddAt(scope, true);
+  await page.setViewportSize({ width: 960, height: 1040 });
+  await expectAddAt(scope, true);
+  await page.setViewportSize({ width: 899, height: 1040 });
+  await expect(scope.locator('.jobs > :last-child')).toHaveClass(/full/);
+  await expectAddAt(scope, false);
+});
+
+test('the window to 390 and back: the add button closes the list on the phone and heads it again on the desktop', async ({ page }) => {
+  await openWithJobs(page, 4);
+  await expectAddAt(screenIn(page, 'right', 'jobs'), true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const scope = page.locator('[data-screen="jobs"]');
+  await expect(scope.locator('.jobs > :last-child')).toHaveClass(/full/);
+  await expectAddAt(scope, false);
+  await page.setViewportSize({ width: 1920, height: 1040 });
+  await expectSplit(page, 'jobs', 'log');
+  await expect(screenIn(page, 'right', 'jobs').locator('.jobs > .jobs-header + button.full')).toHaveCount(1);
+  await expectAddAt(screenIn(page, 'right', 'jobs'), true);
+  // The focus on the add button survives the move.
+  await addButton(screenIn(page, 'right', 'jobs')).focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(scope.locator('.jobs > :last-child')).toHaveClass(/full/);
+  await expect(addButton(scope)).toBeFocused();
+});
+
+test('the 900 px listener is there only while the jobs screen is in view', async ({ page }) => {
+  await page.addInitScript(() => {
+    const live = new Set();
+    window.__mq = () => live.size;
+    const add = MediaQueryList.prototype.addEventListener;
+    const remove = MediaQueryList.prototype.removeEventListener;
+    MediaQueryList.prototype.addEventListener = function (type, fn, ...rest) {
+      if (type === 'change' && this.media === '(min-width: 900px)') live.add(fn);
+      return add.call(this, type, fn, ...rest);
+    };
+    MediaQueryList.prototype.removeEventListener = function (type, fn, ...rest) {
+      if (type === 'change' && this.media === '(min-width: 900px)') live.delete(fn);
+      return remove.call(this, type, fn, ...rest);
+    };
+  });
+  await openWithJobs(page, 2);
+  await expect.poll(() => page.evaluate(() => window.__mq())).toBe(1);
+  // The jobs leave both panes: the left shows Accounts, the right Log.
+  await select(page, 'right').selectOption({ label: 'לוג' });
+  await select(page, 'left').selectOption({ label: 'חשבונות' });
+  await expect(page.locator('[data-screen="jobs"]')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__mq())).toBe(0);
+  await select(page, 'right').selectOption({ label: 'משימות' });
+  await expect(screenIn(page, 'right', 'jobs')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__mq())).toBe(1);
+  await expectAddAt(screenIn(page, 'right', 'jobs'), true);
 });
 
 // ---------------------------------------------------------------- final wave: the share set by hand is the jobs'

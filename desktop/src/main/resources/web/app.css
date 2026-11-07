@@ -415,14 +415,14 @@ button.chat-card:hover { background: var(--surface-variant); }
     }
     .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full) { grid-column: 1 / -1; }
     .accounts > button.full { align-self: start; }
-    /* Task 10c: the add button on its own row under all the job cards, about a card wide. */
+    /* Task 10c: the add button on its own row, about a card wide; jobs.js puts it above the cards from 900 px (plan 3b). */
     .jobs > button.full { grid-column: 1 / -1; justify-self: start; width: min(100%, 420px); }
   }
 
   /* Plan 3b, part C, split: the job cards fill the pane, no room left beside them. jobs.js sets data-cols by the
      number of jobs as lib/layout.js shares the room (jobsColumns): 1 up to 3 jobs (a third of the window), each card
      the pane's width; 2 from 4 (half), two columns sharing it, once the pane holds two cards (from 640 px; half of a
-     1200 px window does not, so one). The add button under them all, the list's width. In a narrow pane the summary
+     1200 px window does not, so one). The add button above them all (jobs.js, plan 3b), the list's width. In a narrow pane the summary
      and the all-jobs buttons wrap. */
   body[data-layout="split"] .jobs {
     display: grid;

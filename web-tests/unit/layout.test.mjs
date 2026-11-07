@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULTS, TABS, SPLIT_MIN_WIDTH, effectiveMode, choose, showInActive, resolveSplit, clampRatio, parse, serialize, load, save,
-  ratioFor, jobsShare, jobsColumns, manualRatio, seenJobs,
+  ratioFor, jobsShare, jobsColumns, DESKTOP_QUERY, jobsListOrder, manualRatio, seenJobs,
 } from '../../desktop/src/main/resources/web/lib/layout.js';
 
 const split = { ...DEFAULTS };
@@ -120,6 +120,25 @@ test('jobsColumns: one column for 0..3 jobs, two from 4, the same split as jobsS
   for (const n of [4, 5, 7, 12, 20]) assert.equal(jobsColumns(n), 2, String(n));
   for (let n = 0; n <= 30; n += 1) assert.equal(jobsColumns(n) === 2, jobsShare(n) === 0.5, String(n));
   for (const bad of [undefined, null, NaN, -1, 'x']) assert.equal(jobsColumns(bad), 1, String(bad));
+});
+
+// Plan 3b, the user's ruling: on a desktop (from 900 px) `➕ הוסף משימה` heads the list, right after the header.
+test('DESKTOP_QUERY is the 900 px of app.css', () => {
+  assert.equal(DESKTOP_QUERY, '(min-width: 900px)');
+});
+
+test('jobsListOrder: on a desktop the add button right after the header, before the warning and the cards', () => {
+  const parts = { header: 'H', warning: 'W', cards: ['c1', 'c2', 'c3'], add: 'A' };
+  assert.deepEqual(jobsListOrder(parts, true), ['H', 'A', 'W', 'c1', 'c2', 'c3']);
+  assert.deepEqual(jobsListOrder({ ...parts, warning: null }, true), ['H', 'A', 'c1', 'c2', 'c3']);
+  assert.deepEqual(jobsListOrder({ ...parts, cards: [] }, true), ['H', 'A', 'W']);
+});
+
+test('jobsListOrder: under 900 px as before, the add button after the last card', () => {
+  const parts = { header: 'H', warning: 'W', cards: ['c1', 'c2'], add: 'A' };
+  assert.deepEqual(jobsListOrder(parts, false), ['H', 'W', 'c1', 'c2', 'A']);
+  assert.deepEqual(jobsListOrder({ ...parts, warning: null, cards: [] }, false), ['H', 'A']);
+  assert.deepEqual(jobsListOrder({ header: 'H', add: 'A' }, false), ['H', 'A']);
 });
 
 test('ratioFor with jobs on the right: the right pane gets the jobs share', () => {

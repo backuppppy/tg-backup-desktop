@@ -1,9 +1,9 @@
-// Jobs screen (inventory 2a): the header with the all-jobs buttons, one card per job, `➕ הוסף משימה`,
+// Jobs screen (inventory 2a): the header with the all-jobs buttons, `➕ הוסף משימה` (above the cards from 900 px, else under them), one card per job,
 // JobDialog, and the delete and reset dialogs. Texts and enable rules are the Android ones.
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
 import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionParts } from '../lib/jobsFormat.js';
-import { jobsColumns } from '../lib/layout.js';
+import { jobsColumns, DESKTOP_QUERY, jobsListOrder } from '../lib/layout.js';
 
 const MEDIA_TYPES = [
   ['VIDEO_DOC', 'וידאו + קבצים'],
@@ -31,6 +31,8 @@ const post = (path) => api('POST', path).catch(report);
 let view = null;
 /** The one run time timer of the screen (a second apart), while a shown job's clock runs. */
 let tick = null;
+/** The 900 px media query and its change listener, while the screen is in view: the add button moves with it. */
+let desktop = null;
 /** Jobs whose source's latest id was asked this page load: once each, not on every render. */
 const askedLatest = new Set();
 
@@ -41,37 +43,63 @@ export function render(root, state) {
   }
   // The server's clock less the page's, from the last snapshot or statuses event: runningSince is server time.
   view.offset = Number(state.clockOffset) || 0;
+  view.state = state;
+  const addOnTop = listenDesktop();
   const { accounts = [], jobs = [], statuses = {} } = state;
   const shown = view.shown;
-  if (shown && shown.accounts === accounts && shown.jobs === jobs && shown.statuses === statuses) {
+  if (shown && shown.accounts === accounts && shown.jobs === jobs && shown.statuses === statuses && shown.addOnTop === addOnTop) {
     schedule();
     return;
   }
-  view.shown = { accounts, jobs, statuses };
+  view.shown = { accounts, jobs, statuses, addOnTop };
   view.clocks = [];
   askLatest(jobs, statuses);
   // The split view's columns of cards (app.css): one in a third of the room, two in half, as lib/layout.js shares it.
   view.list.dataset.cols = String(jobsColumns(jobs.length));
   const focus = focusedButton(view.list);
-  view.list.replaceChildren(...[
-    header(statuses),
-    accounts.length === 0 ? h('p', { class: 'error-text' }, "קודם הוסף חשבון בלשונית 'חשבונות'.") : null,
-    jobs.map((job) => jobCard(job, statuses[job.id] ?? IDLE, accounts, state)),
-    h('button', { type: 'button', class: 'full', onclick: () => jobDialog(NEW_JOB, state) }, '➕ הוסף משימה'),
-  ].flat().filter(Boolean));
+  // On a desktop `➕ הוסף משימה` heads the list (plan 3b), in the DOM so that Tab reaches it first too.
+  view.list.replaceChildren(...jobsListOrder({
+    header: header(statuses),
+    warning: accounts.length === 0 ? h('p', { class: 'error-text' }, "קודם הוסף חשבון בלשונית 'חשבונות'.") : null,
+    cards: jobs.map((job) => jobCard(job, statuses[job.id] ?? IDLE, accounts, state)),
+    add: h('button', { type: 'button', class: 'full', onclick: () => jobDialog(NEW_JOB, state) }, '➕ הוסף משימה'),
+  }, addOnTop));
   restoreFocus(view.list, focus);
   schedule();
 }
 
-/** The shell took the screen out of the view: no run time timer while it is away. */
+/** The shell took the screen out of the view: no run time timer and no 900 px listener while it is away. */
 export function goAway() {
+  stopTick();
+  if (desktop) desktop.query.removeEventListener('change', desktop.onChange);
+  desktop = null;
+}
+
+/** The shell put the screen back: the render that follows starts the timer and the listener again. */
+export function comeBack() {
+  goAway();
+}
+
+function stopTick() {
   if (tick) clearInterval(tick);
   tick = null;
 }
 
-/** The shell put the screen back: the render that follows starts the timer again. */
-export function comeBack() {
-  goAway();
+/**
+ * Whether the window is a desktop's (from 900 px), listening while the screen is in view: crossing 900 px draws the
+ * list again with the add button in its place.
+ */
+function listenDesktop() {
+  if (typeof matchMedia !== 'function') return false;
+  if (!desktop) {
+    const query = matchMedia(DESKTOP_QUERY);
+    const onChange = () => {
+      if (view && view.root.isConnected && view.state) render(view.root, view.state);
+    };
+    query.addEventListener('change', onChange);
+    desktop = { query, onChange };
+  }
+  return desktop.query.matches;
 }
 
 /** The run time lines of now, text only: the cards are not drawn again (focus and selection stay). */
@@ -84,14 +112,14 @@ function updateClocks() {
 function schedule() {
   const runs = view && view.root.isConnected && view.clocks.some(({ status }) => (Number(status.runningSince) || 0) > 0);
   if (!runs) {
-    goAway();
+    stopTick();
     return;
   }
   if (tick) return;
   // The time of now at once: after the screen comes back the lines would show the time it went away until the tick.
   updateClocks();
   tick = setInterval(() => {
-    if (!view || !view.root.isConnected) goAway();
+    if (!view || !view.root.isConnected) stopTick();
     else updateClocks();
   }, 1000);
 }
