@@ -212,7 +212,11 @@ class JobManager(
 
     internal fun reporter(jobId: String) = object : JobReporter {
         override fun phase(text: String) = setStatus(jobId) { it.copy(phase = text) }
-        override fun position(lastId: Long) = setStatus(jobId) { it.copy(lastId = lastId) }
+        override fun position(lastId: Long) {
+            setStatus(jobId) { it.copy(lastId = lastId) }
+            // The ordered loops read the latest id only once they caught up: a handled message past it is newer.
+            if (lastId > (_statuses.value[jobId]?.latestId ?: 0)) saveLatest(jobId, lastId)
+        }
         // The runner adds it to Progress.copiedTotal with the message's position.
         override fun copied() = setStatus(jobId) { it.copy(copied = it.copied + 1, copiedTotal = it.copiedTotal + 1) }
         override fun latest(id: Long) = saveLatest(jobId, id)

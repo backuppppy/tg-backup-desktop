@@ -205,6 +205,23 @@ class JobManagerTest {
     }
 
     @Test
+    fun aPositionPastTheLatestIdRaisesIt() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(latestId = 100))
+        val jobs = manager(store, dir)
+
+        val r = jobs.reporter("j1")
+        r.position(90)
+        assertEquals(100L, jobs.status().latestId)
+        // The ordered loops read the latest id only once they caught up; a copied message past it is newer.
+        r.position(120)
+        assertEquals(120L, jobs.status().latestId)
+        assertEquals(120L, store.progress("j1").latestId)
+        r.position(110)
+        assertEquals(120L, jobs.status().latestId)
+    }
+
+    @Test
     fun resetProgressClearsTheRunTotals() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir, Progress(lastId = 40, copiedTotal = 7, runMillis = 1_000, latestId = 50))
