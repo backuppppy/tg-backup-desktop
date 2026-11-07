@@ -118,9 +118,17 @@ class TakeoutJobRunner(
                     reportStale(TakeoutDiagnostics.staleReason(sourceChanged, existing.viaTakeout, existing.lastId), existing)
                 }
                 if (sourceChanged) {
-                    // Another source: its newest id is not the old one's.
-                    store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id).withTotalsOf(it).copy(latestId = 0) }
+                    store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id).withTotalsOf(it) }
                     log.info("[$tag] מקור שונה (${existing.sourceId} → ${source.id}) — מאפס progress ומתחיל מההתחלה")
+                    // The saved latest id may be the old source's (the desktop clears it on an edit and reads the
+                    // new one); read the new source's now, the ordered loop reads it only once it caught up.
+                    try {
+                        report.latest(workers[0].copier.latestId(workers[0].src).toLong())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        log.warn("[$tag] קריאת ID אחרון של המקור החדש נכשלה: ${e.message}")
+                    }
                 } else if (!existing.viaTakeout && existing.lastId > 0) {
                     store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id).withTotalsOf(it) }
                     log.info("[$tag] מאפס progress ממצב רגיל (lastId=${existing.lastId}) — מתחיל מההתחלה")
