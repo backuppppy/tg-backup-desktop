@@ -3,7 +3,7 @@
 
 export const LOG_MAX = 500;
 
-const EVENTS = ['snapshot', 'config', 'statuses', 'accountStates', 'exportPrefs', 'export', 'password', 'log', 'chatsProgress'];
+const EVENTS = ['snapshot', 'config', 'statuses', 'accountStates', 'exportPrefs', 'export', 'passwords', 'password', 'log', 'chatsProgress'];
 
 const capLog = (list) => (list.length > LOG_MAX ? list.slice(list.length - LOG_MAX) : list);
 
@@ -36,6 +36,8 @@ export function reduce(state, name, data, receivedAt = Date.now()) {
       return { ...state, exportPrefs: data };
     case 'export':
       return { ...state, runningExport: data };
+    case 'passwords':
+      return { ...state, passwords: data, password: data[0] ?? null };
     case 'password':
       return { ...state, password: data };
     case 'log':

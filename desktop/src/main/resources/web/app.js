@@ -3,6 +3,7 @@
 import { connect } from './lib/store.js';
 import { api } from './lib/api.js';
 import { h, formDialog, toast } from './lib/ui.js';
+import { nextPassword, passwordAsker } from './lib/password.js';
 import * as jobs from './screens/jobs.js';
 import * as accounts from './screens/accounts.js';
 import * as exportScreen from './screens/export.js';
@@ -259,7 +260,7 @@ function onState(next) {
   if (state.connected) seenSnapshot = true;
   title.textContent = state.version ? `TG Backup  v${state.version}` : 'TG Backup';
   banner.hidden = !seenSnapshot || state.connected;
-  passwordDialog(state.password);
+  passwordDialog(nextPassword(state, answered));
   if (seenSnapshot) {
     // A job added or deleted: a share set by hand for the old number of jobs gives way to the automatic one.
     let next = layout;
@@ -275,7 +276,9 @@ function onState(next) {
 }
 
 // The export session asks for the account's 2FA password; the answer (or null = cancel) goes back by id.
-// An answered id never opens again: the request stays in the state until the server's `password: null` arrives.
+// A job and the export screen may wait at once: the dialog shows the oldest request not answered yet, and once it is
+// answered or cancelled the next one. An answered id never opens again, though it stays in the state until the
+// server drops it.
 let open = null;
 const answered = new Set();
 
@@ -295,12 +298,15 @@ function passwordDialog(request) {
       if (e.status === 409) return;
       toast(e.message);
       answered.delete(id);
-      passwordDialog(state.password);
+      passwordDialog(nextPassword(state, answered));
     });
+  const asker = passwordAsker(request, state.accounts);
+  const askerLine = asker && h('p', { class: 'password-asker' }, `מבקש: ${asker.who}`,
+    ...(asker.account ? [' · חשבון: ', h('bdi', {}, asker.account)] : []));
   const dialog = formDialog({
     title: 'סיסמת אימות דו-שלבי',
     text: 'סשן הייצוא צריך את הסיסמה של החשבון.' + (hint && hint.trim() ? `\nרמז: ${hint}` : ''),
-    content: [field],
+    content: askerLine ? [askerLine, field] : [field],
   });
   open = { id, dialog };
   dialog.result.then((ok) => {
@@ -309,6 +315,8 @@ function passwordDialog(request) {
     open = null;
     answered.add(id);
     answer(ok ? field.value : null);
+    // The next waiting request, if any, opens now (it needs no further event).
+    passwordDialog(nextPassword(state, answered));
   });
 }
 

@@ -146,6 +146,41 @@ test('the export 2FA dialog shows on every tab and sends the password', async ({
   await expect.poll(() => answers).toEqual([{ id: 'p1', password: 'secret' }]);
 });
 
+test('two 2FA requests at once: the dialog shows the oldest, then the next, each answered by its id', async ({ page }) => {
+  const real = await (await page.request.get('/api/state')).json();
+  const account = { id: 'acc-2fa', name: 'דני', apiId: 1, hasApiHash: true, phone: '' };
+  const passwords = [
+    { id: 'q1', hint: 'ראשון', accountId: 'acc-2fa', origin: 'job' },
+    { id: 'q2', hint: 'שני', accountId: 'acc-other', origin: 'screen' },
+  ];
+  const answers = await fakeStream(page, {
+    accounts: [...(real.accounts ?? []), account], passwords, password: passwords[0],
+  });
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await expect(dialog).toHaveCount(1);
+  await expect(dialog).toContainText('רמז: ראשון');
+  await expect(dialog.locator('.password-asker')).toHaveText('מבקש: משימה · חשבון: דני');
+  await dialog.locator('input').fill('pw-job');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  // The next one opens with no further event from the server.
+  await expect(dialog).toContainText('רמז: שני');
+  await expect(dialog).toHaveCount(1);
+  await expect(dialog.locator('.password-asker')).toHaveText('מבקש: ייצוא · חשבון: acc-other');
+  await expect(dialog.locator('input')).toHaveValue('');
+  await dialog.getByRole('button', { name: 'ביטול' }).click();
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => answers).toEqual([{ id: 'q1', password: 'pw-job' }, { id: 'q2', password: null }]);
+});
+
+test('a 2FA request from an older server (no origin) shows no asker line', async ({ page }) => {
+  await fakeStream(page, { passwords: [], password: { id: 'p0', hint: '' } });
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.password-asker')).toHaveCount(0);
+});
+
 test('cancelling the 2FA dialog sends null', async ({ page }) => {
   const answers = await fakeStream(page, { password: { id: 'p2', hint: '' } });
   await page.goto('/#jobs');

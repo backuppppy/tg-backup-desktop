@@ -222,6 +222,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .dialog .body { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 0; flex: 0 1 auto; }
 /* As in Android's AlertDialog, the fields scroll and the title and buttons stay. */
 .dialog h2, .dialog p.text, .dialog .actions { flex: none; }
+/* The 2FA dialog: who asks (a job or the export screen) and for which account. */
+.dialog p.password-asker { margin: 0; color: var(--on-surface-dim); font-size: 14px; }
 .dialog .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 [hidden] { display: none !important; }
