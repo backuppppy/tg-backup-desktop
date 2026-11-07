@@ -53,8 +53,43 @@ data class ExportPrefs(
     val availableAt: Map<String, Int> = emptyMap(),
 )
 
+/** Who asks for the 2FA password: the export screen (its login/check) or a copying job (copyClient). */
+enum class PasswordOrigin { Screen, Job }
+
 /** Asked from the UI when the export session needs the 2FA password. */
-class PasswordRequest(val hint: String, val answer: CompletableDeferred<String?>)
+class PasswordRequest(
+    val hint: String,
+    val answer: CompletableDeferred<String?>,
+    val accountId: String = "",
+    val origin: PasswordOrigin = PasswordOrigin.Screen,
+)
+
+/**
+ * The 2FA requests waiting for an answer, oldest first: each ask adds its own and removes it when it ends,
+ * so a job's request and the screen's request never overwrite each other.
+ */
+class PasswordQueue {
+    private val _all = MutableStateFlow<List<PasswordRequest>>(emptyList())
+    val all: StateFlow<List<PasswordRequest>> = _all.asStateFlow()
+    private val _first = MutableStateFlow<PasswordRequest?>(null)
+    val first: StateFlow<PasswordRequest?> = _first.asStateFlow()
+
+    private fun change(f: (List<PasswordRequest>) -> List<PasswordRequest>) = synchronized(this) {
+        _all.value = f(_all.value)
+        _first.value = _all.value.firstOrNull()
+    }
+
+    /** Waits for the answer to a new request; null is the dialog's cancel. */
+    suspend fun ask(accountId: String, origin: PasswordOrigin, hint: String): String? {
+        val request = PasswordRequest(hint, CompletableDeferred(), accountId, origin)
+        change { it + request }
+        try {
+            return request.answer.await()
+        } finally {
+            change { list -> list.filter { it !== request } }
+        }
+    }
+}
 
 class RunningExport(
     val accountId: String,
@@ -81,8 +116,15 @@ class ExportManager(
     private val _prefs = MutableStateFlow(loadPrefs())
     val prefs: StateFlow<ExportPrefs> = _prefs.asStateFlow()
 
-    private val _password = MutableStateFlow<PasswordRequest?>(null)
-    val password: StateFlow<PasswordRequest?> = _password.asStateFlow()
+    private val passwordQueue = PasswordQueue()
+    /** Every 2FA request waiting for an answer, oldest first. */
+    val passwords: StateFlow<List<PasswordRequest>> = passwordQueue.all
+    /** The oldest of [passwords] (kept for the single-dialog callers). */
+    val password: StateFlow<PasswordRequest?> = passwordQueue.first
+
+    /** Asks for the 2FA password of [accountId]; null is the dialog's cancel. */
+    suspend fun askPassword(accountId: String, origin: PasswordOrigin, hint: String): String? =
+        passwordQueue.ask(accountId, origin, hint)
 
     private val _running = MutableStateFlow<RunningExport?>(null)
     val running: StateFlow<RunningExport?> = _running.asStateFlow()
@@ -145,7 +187,7 @@ class ExportManager(
     suspend fun isLoggedIn(account: Account): Boolean = MtpLogin(client(account)).isLoggedIn
 
     /** Logs the export session in by confirming a QR token with the account's TDLib session. */
-    suspend fun login(account: Account): Result<Unit> = runCatching {
+    suspend fun login(account: Account, origin: PasswordOrigin = PasswordOrigin.Screen): Result<Unit> = runCatching {
         val tdlib = accounts[account.id] ?: error("החשבון לא מחובר ב-TG Backup")
         if (!tdlib.isReady) error("החשבון לא מחובר ב-TG Backup")
         val me = tdlib.client.getMe().getOrNull() ?: error("לא ניתן לקרוא את פרטי החשבון")
@@ -160,21 +202,13 @@ class ExportManager(
                     is TdlResult.Success -> log.info("[${tdlib.tag}] סשן הייצוא אושר")
                 }
             },
-            password = { hint ->
-                val request = PasswordRequest(hint, CompletableDeferred())
-                _password.value = request
-                try {
-                    request.answer.await() ?: error("ההתחברות בוטלה")
-                } finally {
-                    _password.value = null
-                }
-            },
+            password = { hint -> askPassword(account.id, origin, hint) ?: error("ההתחברות בוטלה") },
         )
         log.success("[${tdlib.tag}] סשן הייצוא מחובר")
     }
 
     /** The account's export session, logged in, for copying jobs (see TakeoutJobRunner). */
-    suspend fun copyClient(account: Account): Result<MtpClient> = login(account).map { client(account) }
+    suspend fun copyClient(account: Account): Result<MtpClient> = login(account, PasswordOrigin.Job).map { client(account) }
 
     /**
      * Tries to open (and immediately close) a takeout session to verify readiness.
@@ -182,7 +216,7 @@ class ExportManager(
      * On success, clears any stored availableAt delay for this account.
      */
     suspend fun checkTakeoutReady(account: Account): Result<Boolean> = runCatching {
-        login(account).getOrThrow()
+        login(account, PasswordOrigin.Screen).getOrThrow()
         val copier = TakeoutCopier(client(account))
         try {
             copier.begin()
