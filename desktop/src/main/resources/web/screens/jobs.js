@@ -85,6 +85,8 @@ function schedule() {
     return;
   }
   if (tick) return;
+  // The time of now at once: after the screen comes back the lines would show the time it went away until the tick.
+  updateClocks();
   tick = setInterval(() => {
     if (!view || !view.root.isConnected) goAway();
     else updateClocks();

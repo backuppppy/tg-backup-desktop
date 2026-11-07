@@ -438,6 +438,28 @@ test('run time: the clock moves once a second while running, without drawing the
   await expect.poll(seconds, { timeout: 4000 }).toBeGreaterThan(back);
 });
 
+test('run time: back on the screen the clock shows the time of now at once, not a second later', async ({ page }) => {
+  await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
+  // The page's clock is a fake one: no tick comes unless the test moves the time on.
+  const t0 = Date.parse('2026-11-07T10:00:00Z');
+  await page.clock.install({ time: t0 });
+  await fakeStream(page, {
+    jobs: [job({ id: 'b1', name: 'חוזרת' })],
+    statuses: { b1: status({ running: true, phase: 'מעתיק', runMillis: 60000, runningSince: t0 - 5000, lastId: 3, latestId: 9 }) },
+  });
+  await page.goto('/#jobs');
+  const clock = card(page, 'חוזרת').locator('.run-time');
+  await expect(clock).toBeVisible();
+  await page.clock.pauseAt(t0 + 20_000);
+  await expect(clock).toHaveText('⏱ רץ: 0:01:25');
+  await page.goto('/#accounts');
+  await expect(page.locator('[data-screen="accounts"]')).toBeVisible();
+  await page.clock.fastForward(30_000);
+  await page.goto('/#jobs');
+  // The time stands still now: only a clock drawn on the way back shows 0:01:55.
+  await expect(clock).toHaveText('⏱ רץ: 0:01:55');
+});
+
 for (const skew of [-60_000, 60_000]) {
   test(`run time on the server clock: a server clock ${skew / 1000} s from the page's still shows the right time, moving each second`, async ({ page }) => {
     await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
