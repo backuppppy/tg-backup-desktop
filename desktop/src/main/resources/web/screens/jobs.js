@@ -3,6 +3,7 @@
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
 import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionParts } from '../lib/jobsFormat.js';
+import { jobsColumns } from '../lib/layout.js';
 
 const MEDIA_TYPES = [
   ['VIDEO_DOC', 'וידאו + קבצים'],
@@ -49,6 +50,8 @@ export function render(root, state) {
   view.shown = { accounts, jobs, statuses };
   view.clocks = [];
   askLatest(jobs, statuses);
+  // The split view's columns of cards (app.css): one in a third of the room, two in half, as lib/layout.js shares it.
+  view.list.dataset.cols = String(jobsColumns(jobs.length));
   const focus = focusedButton(view.list);
   view.list.replaceChildren(...[
     header(statuses),

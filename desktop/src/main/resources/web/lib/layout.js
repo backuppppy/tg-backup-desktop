@@ -69,6 +69,14 @@ export function jobsShare(count) {
   return count >= JOBS_HALF_FROM ? 0.5 : 0.33;
 }
 
+/**
+ * The columns of job cards in the split view for `count` jobs (Plan 3b, part C): one while the jobs pane is a third,
+ * two once it is half (jobsShare's split, from JOBS_HALF_FROM). app.css reads it as the job list's data-cols.
+ */
+export function jobsColumns(count) {
+  return Number.isFinite(count) && count >= JOBS_HALF_FROM ? 2 : 1;
+}
+
 /** The pane that shows the jobs, or null. */
 function jobsSide(state) {
   return state.right === 'jobs' ? 'right' : state.left === 'jobs' ? 'left' : null;

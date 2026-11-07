@@ -263,7 +263,8 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   const auto = n >= 4 ? 0.5 : 0.33;
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratio: 0.7, jobsRatio: null, ratioJobs: null });
   // The card grid in the left pane: a third (about 600 px) is one column, half (from 4 jobs) two; in the right pane,
-  // at 70% from the arrows, at least two.
+  // at 70% from the arrows, still by the number of jobs (Plan 3b, part C): one column the pane's width up to 3, two from
+  // 4, the cards filling the pane.
   await select(page, 'left').selectOption({ label: 'משימות' });
   await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round((1 - auto) * 100)));
   expect((await screenIn(page, 'left', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(n >= 4 ? 2 : 1);
@@ -272,7 +273,10 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   await divider(page).focus();
   for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowLeft');
   await expect(divider(page)).toHaveAttribute('aria-valuenow', '70');
-  expect((await screenIn(page, 'right', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBeGreaterThanOrEqual(2);
+  expect((await screenIn(page, 'right', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(n >= 4 ? 2 : 1);
+  const room = await paneContent(page, 'right');
+  const card = await box(screenIn(page, 'right', 'jobs').locator('.job-card').first());
+  expect(Math.abs(card.width - (n >= 4 ? (room - 12) / 2 : room))).toBeLessThanOrEqual(2);
 });
 
 test('what is typed survives a screen leaving the view: 960 px and back, one screen and back, the Export search', async ({ page }) => {
@@ -383,8 +387,9 @@ test('a drag stops when the window gets narrower than 1200 px; the ratio is not 
 
 // ---------------------------------------------------------------- Task 10c: the jobs pane's width by the number of jobs
 // Up to 3 jobs the jobs pane is a third of the room (one column of cards), from 4 half (two columns), on either side.
-// The cards have a fixed width; `➕ הוסף משימה` sits under all of them. A divider moved by hand holds while the number
-// of jobs stays the same.
+// Plan 3b, part C: the cards fill the pane (one column the pane's width, or two that share it, no empty room beside
+// them); `➕ הוסף משימה` sits under all of them, the list's width. A divider moved by hand holds while the number of
+// jobs stays the same.
 
 /** The jobs pane's share for `n` jobs. */
 const share = (n) => (n >= 4 ? 0.5 : 0.33);
@@ -417,20 +422,29 @@ async function jobsShareOf(page, side) {
 const columns = async (page, side) => (await screenIn(page, side, 'jobs').locator('.jobs')
   .evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length;
 
-/** Every card in its own place, `cols` columns, and the add button under all the cards. */
+/** The width inside the pane's padding, the room the job list has. */
+const paneContent = (page, side) => pane(page, side).locator('.pane-body').evaluate((el) => {
+  const st = getComputedStyle(el);
+  return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
+});
+
+/**
+ * Every card in its own place, `cols` columns that fill the pane: each card the pane's content width (one column) or
+ * that less the 12 px gap, halved (two), within 2 px; the add button under all the cards, the list's width.
+ */
 async function expectCards(page, side, n, cols) {
   expect(await columns(page, side)).toBe(cols);
+  await expect(screenIn(page, side, 'jobs').locator('.jobs')).toHaveAttribute('data-cols', String(n >= 4 ? 2 : 1));
+  const room = await paneContent(page, side);
   const cards = [];
   for (const c of await screenIn(page, side, 'jobs').locator('.job-card').all()) cards.push(await box(c));
   expect(cards).toHaveLength(n);
-  for (const b of cards) {
-    expect(b.width).toBeGreaterThanOrEqual(319);
-    expect(b.width).toBeLessThanOrEqual(441);
-  }
+  const want = (room - 12 * (cols - 1)) / cols;
+  for (const b of cards) expect(Math.abs(b.width - want), `card ${b.width} of ${room}`).toBeLessThanOrEqual(2);
   expect(new Set(cards.map((b) => Math.round(b.x))).size).toBe(Math.min(cols, n));
   const add = await box(screenIn(page, side, 'jobs').getByRole('button', { name: '➕ הוסף משימה' }));
   for (const b of cards) expect(add.y).toBeGreaterThanOrEqual(b.y + b.height);
-  expect(add.width).toBeLessThanOrEqual(441);
+  expect(Math.abs(add.width - room)).toBeLessThanOrEqual(2);
   return cards;
 }
 
@@ -540,13 +554,101 @@ for (const n of [2, 4]) {
     expect(r.out).toEqual([]);
     expect(r.scroll).toBeLessThanOrEqual(r.client);
     expect(r.doc).toBeLessThanOrEqual(1200);
+    // Half of 1200 px holds no two cards side by side: one column, the pane's width.
     expect(await columns(page, 'right')).toBe(1);
+    const room = await paneContent(page, 'right');
+    for (const c of await page.locator('.job-card').all()) expect(Math.abs((await box(c)).width - room)).toBeLessThanOrEqual(2);
     // The all-jobs buttons do not fit one line in a third of 1200 px: they wrap.
     if (n === 2) {
       const tops = new Set();
       for (const b of await page.locator('.jobs-header button').all()) tops.add(Math.round((await box(b)).y));
       expect(tops.size).toBeGreaterThan(1);
     }
+  });
+}
+
+test('12 jobs: two columns, the jobs pane scrolls on its own, no sideways scroll, the add button after the last card', async ({ page }) => {
+  await openWithJobs(page, 12);
+  await expectSplit(page, 'jobs', 'log');
+  await expectCards(page, 'right', 12, 2);
+  const body = pane(page, 'right').locator('.pane-body');
+  const m = await body.evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight, sw: el.scrollWidth, cw: el.clientWidth }));
+  expect(m.sh).toBeGreaterThan(m.ch);
+  expect(m.sw).toBeLessThanOrEqual(m.cw);
+  const doc = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight }));
+  expect(doc.sw).toBeLessThanOrEqual(1920);
+  expect(doc.sh).toBeLessThanOrEqual(1040);
+  // The last card in the DOM is the last one in the list; the add button comes after it, at the end of the scroll.
+  const add = screenIn(page, 'right', 'jobs').getByRole('button', { name: '➕ הוסף משימה' });
+  expect(await screenIn(page, 'right', 'jobs').locator('.jobs > :last-child').evaluate((el) => el.matches('button.full'))).toBe(true);
+  await add.scrollIntoViewIfNeeded();
+  const last = await box(screenIn(page, 'right', 'jobs').locator('.job-card').last());
+  const a = await box(add);
+  expect(a.y).toBeGreaterThanOrEqual(last.y + last.height);
+  expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  // The rail and the log pane did not move with the jobs pane's scroll.
+  await expect(page.locator('nav.tabs')).toBeInViewport();
+  await expect(screenIn(page, 'left', 'log')).toBeInViewport();
+});
+
+test('half of 1920 px with 5 jobs: two columns that fill the pane, no room beside them', async ({ page }) => {
+  await openWithJobs(page, 5);
+  expect(Math.abs(await jobsShareOf(page, 'right') - 0.5)).toBeLessThan(0.01);
+  const cards = await expectCards(page, 'right', 5, 2);
+  // The two columns reach both edges of the pane's content: no room left beside them.
+  const room = await paneContent(page, 'right');
+  const xs = cards.map((b) => b.x);
+  const rights = cards.map((b) => b.x + b.width);
+  expect(Math.abs(Math.max(...rights) - Math.min(...xs) - room)).toBeLessThanOrEqual(2);
+});
+
+/** The job list's own content width (inside its padding), the room its cards share. */
+const listContent = (page, side) => screenIn(page, side, 'jobs').locator('.jobs').evaluate((el) => {
+  const st = getComputedStyle(el);
+  return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
+});
+
+// The window the user saw: Windows maximised, 1936x1040. A third of it held a narrow card and empty room beside it.
+for (const n of [1, 2, 3, 4, 6]) {
+  test(`1936x1040 with ${n} jobs: the cards fill the jobs pane (${n >= 4 ? 'two columns, half' : 'one column, a third'})`, async ({ page }) => {
+    await page.setViewportSize({ width: 1936, height: 1040 });
+    await openWithJobs(page, n);
+    await expectSplit(page, 'jobs', 'log');
+    expect(Math.abs(await jobsShareOf(page, 'right') - share(n))).toBeLessThan(0.01);
+    const cols = n >= 4 ? 2 : 1;
+    const cards = await expectCards(page, 'right', n, cols);
+    const list = await listContent(page, 'right');
+    expect(Math.abs(list - await paneContent(page, 'right'))).toBeLessThanOrEqual(2);
+    for (const b of cards) expect(Math.abs(b.width - (list - 12 * (cols - 1)) / cols), `card ${b.width} of ${list}`).toBeLessThanOrEqual(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1936);
+  });
+}
+
+// Unchanged by part C (measured before it): one screen on a desktop and the phone keep their card widths.
+test('one screen at 1100x750 keeps its two 480 px columns of cards', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 750 });
+  await openWithJobs(page, 4);
+  const widths = [];
+  for (const c of await page.locator('.job-card').all()) widths.push(Math.round((await box(c)).width));
+  expect(widths).toEqual([480, 480, 480, 480]);
+  expect(await page.locator('.jobs:visible').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).toBe('480px 480px');
+  expect(Math.round((await box(page.getByRole('button', { name: '➕ הוסף משימה' }))).width)).toBe(420);
+});
+
+for (const n of [2, 12]) {
+  test(`390x844 with ${n} jobs: the phone keeps its cards 366 px wide, one under another, the add button too`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWithJobs(page, n);
+    const boxes = [];
+    for (const c of await page.locator('.job-card').all()) boxes.push(await box(c));
+    for (const b of boxes) {
+      expect(Math.round(b.width)).toBe(366);
+      expect(Math.round(b.x)).toBe(12);
+    }
+    for (let i = 1; i < boxes.length; i += 1) expect(boxes[i].y).toBeGreaterThanOrEqual(boxes[i - 1].y + boxes[i - 1].height);
+    expect(await page.locator('.jobs:visible').evaluate((el) => getComputedStyle(el).display)).toBe('flex');
+    expect(Math.round((await box(page.getByRole('button', { name: '➕ הוסף משימה' }))).width)).toBe(366);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 }
 
