@@ -155,7 +155,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
         post("{accountId}/login") {
             command {
                 forAccount { acc, _ ->
-                    withBoundedPasswordWait(exports.password) { exports.login(acc) }
+                    withBoundedPasswordWait(exports.passwords) { exports.login(acc) }
                         .onFailure { if (it is CancellationException) throw it; throw it.failure("ההתחברות נכשלה") }
                 }
             }
@@ -165,7 +165,7 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
             answer {
                 forAccount { acc, _ ->
                     // Its login asks for the 2FA password as the login route does.
-                    val ready = withBoundedPasswordWait(exports.password) { exports.checkTakeoutReady(acc) }
+                    val ready = withBoundedPasswordWait(exports.passwords) { exports.checkTakeoutReady(acc) }
                         .getOrElse { if (it is CancellationException) throw it; throw it.failure("בדיקה נכשלה") }
                     ReadyDto(ready)
                 }
@@ -269,9 +269,9 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
         post("password") {
             command {
                 val input = call.receive<ExportPasswordInput>()
-                val request = exports.password.value
-                // Only the request the page was shown may be answered; an old or unknown id is refused.
-                if (request == null || events.passwordId(request) != input.id || !request.answer.complete(input.password)) {
+                // Only a request the page was shown may be answered, the one with its id; an old or unknown id is refused.
+                val request = events.passwordRequest(input.id)
+                if (request == null || !request.answer.complete(input.password)) {
                     throw Refusal(HttpStatusCode.Conflict, MSG_REQUEST_HANDLED)
                 }
             }

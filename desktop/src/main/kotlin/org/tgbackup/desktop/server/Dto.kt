@@ -181,8 +181,9 @@ data class RunningExportDto(val accountId: String, val title: String, val state:
 
 fun RunningExport.toDto(state: ExportState = controller.state.value) = RunningExportDto(accountId, title, state.toDto())
 
+/** [origin] is "screen" (the export screen's login) or "job" (a copying job's login). */
 @Serializable
-data class PasswordRequestDto(val id: String, val hint: String)
+data class PasswordRequestDto(val id: String, val hint: String, val accountId: String = "", val origin: String = "screen")
 
 @Serializable
 data class LogEntryDto(val seq: Long, val time: String, val level: String, val msg: String)
@@ -202,7 +203,10 @@ data class SnapshotDto(
     val statuses: Map<String, JobStatusDto>,
     val exportPrefs: ExportPrefsDto,
     val runningExport: RunningExportDto? = null,
+    /** The oldest of [passwords] (what the page read before there was a list). */
     val password: PasswordRequestDto? = null,
+    /** Every 2FA request waiting for an answer, oldest first. */
+    val passwords: List<PasswordRequestDto> = emptyList(),
     val log: List<LogEntryDto>,
     /** Accounts whose chats are loading, with the count so far (a page that reconnects mid-load needs it). */
     val chatsLoading: Map<String, Int> = emptyMap(),

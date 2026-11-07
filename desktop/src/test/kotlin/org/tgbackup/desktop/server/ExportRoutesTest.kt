@@ -12,7 +12,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import org.tgbackup.app.export.ExportManager
+import org.tgbackup.app.export.PasswordOrigin
+import org.tgbackup.app.export.PasswordRequest
 import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -192,13 +197,16 @@ class ExportRoutesTest : RouteTestBase() {
         isForum = false, archived = false, input = org.tgbackup.mtproto.tl.MTPDinputPeerEmpty,
     )
 
+    private fun request(origin: PasswordOrigin = PasswordOrigin.Screen, accountId: String = "a1") =
+        PasswordRequest("", CompletableDeferred(), accountId, origin)
+
     @Test
     fun anUnansweredPasswordRequestIsCancelledAfterTenMinutes() = kotlinx.coroutines.test.runTest {
         assertEquals(kotlin.time.Duration.parse("10m"), PASSWORD_WAIT)
-        val requests = kotlinx.coroutines.flow.MutableStateFlow<org.tgbackup.app.export.PasswordRequest?>(null)
+        val requests = MutableStateFlow<List<PasswordRequest>>(emptyList())
         backgroundScope.boundPasswordWait(requests)
-        val first = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
-        requests.value = first
+        val first = request()
+        requests.value = listOf(first)
         testScheduler.runCurrent()
         testScheduler.advanceTimeBy(PASSWORD_WAIT - kotlin.time.Duration.parse("1s"))
         testScheduler.runCurrent()
@@ -208,15 +216,15 @@ class ExportRoutesTest : RouteTestBase() {
         assertTrue(first.answer.isCompleted)
         assertNull(first.answer.await())
         // Answered in time: kept as answered; the next request gets its own ten minutes.
-        val second = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
-        requests.value = second
+        val second = request()
+        requests.value = listOf(second)
         testScheduler.runCurrent()
         testScheduler.advanceTimeBy(kotlin.time.Duration.parse("5m"))
         second.answer.complete("pw")
-        requests.value = null
-        val third = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = emptyList()
+        val third = request()
         testScheduler.advanceTimeBy(kotlin.time.Duration.parse("1m"))
-        requests.value = third
+        requests.value = listOf(third)
         testScheduler.runCurrent()
         testScheduler.advanceTimeBy(kotlin.time.Duration.parse("9m"))
         testScheduler.runCurrent()
@@ -229,14 +237,14 @@ class ExportRoutesTest : RouteTestBase() {
 
     @Test
     fun aNewerPasswordRequestDoesNotTakeTheOlderOnesTimerAway() = kotlinx.coroutines.test.runTest {
-        val requests = kotlinx.coroutines.flow.MutableStateFlow<org.tgbackup.app.export.PasswordRequest?>(null)
+        val requests = MutableStateFlow<List<PasswordRequest>>(emptyList())
         backgroundScope.boundPasswordWait(requests)
-        val first = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
-        requests.value = first
+        val first = request()
+        requests.value = listOf(first)
         testScheduler.runCurrent()
         testScheduler.advanceTimeBy(kotlin.time.Duration.parse("3m"))
-        val second = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
-        requests.value = second
+        val second = request()
+        requests.value = listOf(first, second)
         testScheduler.runCurrent()
         testScheduler.advanceTimeBy(PASSWORD_WAIT - kotlin.time.Duration.parse("3m") + kotlin.time.Duration.parse("1s"))
         testScheduler.runCurrent()
@@ -249,15 +257,41 @@ class ExportRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun onlyTheScreensRequestIsCutWhileAJobsRequestOfTheSameTimeKeepsWaiting() = kotlinx.coroutines.test.runTest {
+        val timeout = kotlin.time.Duration.parse("2s")
+        val requests = MutableStateFlow<List<PasswordRequest>>(emptyList())
+        val job = request(PasswordOrigin.Job)
+        val screen = request(PasswordOrigin.Screen)
+        val login = async {
+            withBoundedPasswordWait(requests, timeout) {
+                // Both come while the screen's login runs, the job's first: the job's is not bounded all the same.
+                requests.value = listOf(job)
+                testScheduler.runCurrent()
+                requests.value = listOf(job, screen)
+                screen.answer.await()
+            }
+        }
+        testScheduler.runCurrent()
+        assertEquals(listOf(job, screen), requests.value)
+        testScheduler.advanceTimeBy(timeout + kotlin.time.Duration.parse("1s"))
+        testScheduler.runCurrent()
+        assertNull(login.await())
+        assertFalse(job.answer.isCompleted)
+        testScheduler.advanceTimeBy(timeout * 100)
+        testScheduler.runCurrent()
+        assertFalse(job.answer.isCompleted)
+    }
+
+    @Test
     fun onlyTheExportScreensLoginHasItsPasswordWaitBounded() = kotlinx.coroutines.test.runTest {
-        val requests = kotlinx.coroutines.flow.MutableStateFlow<org.tgbackup.app.export.PasswordRequest?>(null)
+        val requests = MutableStateFlow<List<PasswordRequest>>(emptyList())
         // A copying job's request, there before the screen's login starts: it waits without a bound.
-        val job = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
-        requests.value = job
-        val screen = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        val job = request(PasswordOrigin.Job)
+        requests.value = listOf(job)
+        val screen = request(PasswordOrigin.Screen)
         val login = async {
             withBoundedPasswordWait(requests) {
-                requests.value = screen
+                requests.value = listOf(job, screen)
                 screen.answer.await()
             }
         }
@@ -267,8 +301,8 @@ class ExportRoutesTest : RouteTestBase() {
         assertNull(login.await())
         assertFalse(job.answer.isCompleted)
         // After the screen's login: a job's new request waits without a bound too.
-        val later = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
-        requests.value = later
+        val later = request(PasswordOrigin.Job)
+        requests.value = listOf(job, later)
         testScheduler.advanceTimeBy(PASSWORD_WAIT * 3)
         testScheduler.runCurrent()
         assertFalse(job.answer.isCompleted)
@@ -280,7 +314,40 @@ class ExportRoutesTest : RouteTestBase() {
         val source = java.io.File("src/main/kotlin/org/tgbackup/desktop/server/ApiServer.kt").readText()
         assertFalse("boundPasswordWait(" in source, "the bound is per login of the export screen, not the whole server")
         val routes = java.io.File("src/main/kotlin/org/tgbackup/desktop/server/ExportRoutes.kt").readText()
-        assertEquals(2, Regex("""withBoundedPasswordWait\(exports\.password\)""").findAll(routes).count())
+        assertEquals(2, Regex("""withBoundedPasswordWait\(exports\.passwords\)""").findAll(routes).count())
+    }
+
+    @Test
+    fun aJobsAndTheScreensRequestsAreBothListedAndAnAnswerByIdReachesTheRightOne() = withServer { client ->
+        kotlinx.coroutines.coroutineScope { answerById(client) }
+    }
+
+    private suspend fun kotlinx.coroutines.CoroutineScope.answerById(client: io.ktor.client.HttpClient) {
+        val events = Events(app)
+        val job = async { app.exports.askPassword("a1", PasswordOrigin.Job, "hint-job") }
+        val screen = async { app.exports.askPassword("a2", PasswordOrigin.Screen, "hint-screen") }
+        kotlinx.coroutines.withTimeout(5_000) { app.exports.passwords.first { it.size == 2 } }
+        val listed = events.snapshot().passwords
+        assertEquals(listOf("hint-job", "hint-screen"), listed.map { it.hint })
+        assertEquals(listOf("a1" to "job", "a2" to "screen"), listed.map { it.accountId to it.origin })
+        assertEquals(listed.first(), events.snapshot().password)
+        assertEquals(2, listed.map { it.id }.toSet().size)
+
+        // The API's own Events gives the ids the page sees: read them from /api/state.
+        val state = TgbJson.decodeFromString(SnapshotDto.serializer(), client.get("/api/state").bodyAsText())
+        val (jobId, screenId) = state.passwords.map { it.id }
+        client.postJson("/api/export/password", """{"id":"$screenId","password":"screen-pw"}""").assertOk()
+        assertEquals("screen-pw", screen.await())
+        assertFalse(job.isCompleted)
+        // Answered: the same id is refused now, and the job's request is the only one left.
+        client.postJson("/api/export/password", """{"id":"$screenId","password":"again"}""")
+            .assertError(HttpStatusCode.Conflict, MSG_REQUEST_HANDLED)
+        val after = TgbJson.decodeFromString(SnapshotDto.serializer(), client.get("/api/state").bodyAsText())
+        assertEquals(listOf(jobId), after.passwords.map { it.id })
+        assertEquals(jobId, after.password?.id)
+        client.postJson("/api/export/password", """{"id":"$jobId","password":null}""").assertOk()
+        assertNull(job.await())
+        assertTrue(app.exports.passwords.value.isEmpty())
     }
 
     @Test

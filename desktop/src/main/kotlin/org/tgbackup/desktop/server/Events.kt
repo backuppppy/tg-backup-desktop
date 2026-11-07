@@ -26,11 +26,13 @@ import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.json.JsonElement
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.app.engine.LogEntry
+import org.tgbackup.app.export.PasswordOrigin
 import org.tgbackup.app.export.PasswordRequest
 import org.tgbackup.app.export.RunningExport
 import org.tgbackup.desktop.DesktopApp
 import org.tgbackup.export.ExportState
 import java.security.SecureRandom
+import java.util.IdentityHashMap
 
 /** The one [Events] of a `tgbModule`, for route files that publish (e.g. `chatsProgress`). */
 val EventsKey = AttributeKey<Events>("tgb.events")
@@ -74,25 +76,35 @@ class Events(private val app: DesktopApp) {
         publish("chatsProgress", TgbJson.encodeToJsonElement(ChatsProgressDto.serializer(), ChatsProgressDto(accountId, last, done = true)))
     }
 
-    private var passwordRequest: PasswordRequest? = null
-    private var passwordRequestId = ""
+    /** A random id per [PasswordRequest] instance, kept while it is listed: the same request keeps its id. */
+    private val passwordIds = IdentityHashMap<PasswordRequest, String>()
 
-    /** A random id per [PasswordRequest] instance: the same request keeps its id, a new one gets a new id. */
     @Synchronized
-    fun passwordId(request: PasswordRequest): String {
-        if (request !== passwordRequest) {
-            passwordRequest = request
-            passwordRequestId = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
-        }
-        return passwordRequestId
+    fun passwordId(request: PasswordRequest): String = passwordIds.getOrPut(request) {
+        ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     }
 
-    private fun PasswordRequest?.toDto(): PasswordRequestDto? = this?.let { PasswordRequestDto(passwordId(it), it.hint) }
+    /** The waiting request with [id], or null (answered, gone, or never there). */
+    fun passwordRequest(id: String): PasswordRequest? = app.exports.passwords.value.firstOrNull { passwordId(it) == id }
+
+    @Synchronized
+    private fun List<PasswordRequest>.toDtos(): List<PasswordRequestDto> {
+        // Ids of requests no longer waiting go (a request never comes back once it left). Checked against the
+        // engine's list now, not this one: a connection mapping an older list must not drop a newer request's id.
+        val now = app.exports.passwords.value
+        passwordIds.keys.retainAll { kept -> now.any { it === kept } || any { it === kept } }
+        return map { it.toDto() }
+    }
+
+    private fun PasswordRequest.toDto() = PasswordRequestDto(
+        passwordId(this), hint, accountId, if (origin == PasswordOrigin.Job) "job" else "screen",
+    )
 
     private fun exportPrefs() = app.exports.prefs.value.toDto(app.exports.defaultPath())
 
     fun snapshot(): SnapshotDto {
         val config = app.store.config.value
+        val waiting = app.exports.passwords.value.toDtos()
         return SnapshotDto(
             version = BuildConfig.VERSION_NAME,
             tdlibVersion = TdlibVersion,
@@ -102,7 +114,8 @@ class Events(private val app: DesktopApp) {
             statuses = app.jobs.statuses.value.mapValues { it.value.toDto() },
             exportPrefs = exportPrefs(),
             runningExport = app.exports.running.value?.toDto(),
-            password = app.exports.password.value.toDto(),
+            passwords = waiting,
+            password = waiting.firstOrNull(),
             log = app.log.entries.value.map { it.toDto() },
             chatsLoading = HashMap(chatsLoading),
             serverNow = System.currentTimeMillis(),
@@ -144,7 +157,7 @@ class Events(private val app: DesktopApp) {
     private fun exportOf(running: RunningExport): Flow<RunningExportDto> =
         sampledExportStates(running.controller.state).map { RunningExportDto(running.accountId, running.title, it) }
 
-    private val passwords: Flow<PasswordRequestDto?> = app.exports.password.map { it.toDto() }
+    private val passwords: Flow<List<PasswordRequestDto>> = app.exports.passwords.map { it.toDtos() }
 
     /** One SSE connection: `snapshot`, then changes. Cancelled with the collector (the connection). */
     fun stream(): Flow<ServerSentEvent> = channelFlow {
@@ -169,7 +182,13 @@ class Events(private val app: DesktopApp) {
         forward("accountStates", ListSerializer(AccountStateDto.serializer()), accountStates, snap.accountStates)
         forward("exportPrefs", ExportPrefsDto.serializer(), prefs, snap.exportPrefs)
         forward("export", RunningExportDto.serializer().nullable, export, snap.runningExport)
-        forward("password", PasswordRequestDto.serializer().nullable, passwords, snap.password)
+        // `passwords` is the list; `password` (its oldest) is kept for pages that read only that.
+        launch {
+            passwords.changesSince(snap.passwords).collect {
+                send(event("passwords", ListSerializer(PasswordRequestDto.serializer()), it))
+                send(event("password", PasswordRequestDto.serializer().nullable, it.firstOrNull()))
+            }
+        }
 
         launch {
             var lastSeq: Long? = snap.log.lastOrNull()?.seq

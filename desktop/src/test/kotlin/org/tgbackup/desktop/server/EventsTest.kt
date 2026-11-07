@@ -16,7 +16,10 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
@@ -167,6 +170,28 @@ class EventsTest {
             val j1 = ev["statuses"]!!.jsonObject["j1"]!!.jsonObject
             assertEquals(3L, j1["copiedTotal"]!!.jsonPrimitive.long)
             assertEquals(5000L, j1["runMillis"]!!.jsonPrimitive.long)
+        }
+    }
+
+    @Test
+    fun twoPasswordRequestsGoOutAsTheListAndItsOldest() = withServer { client ->
+        client.events { sse ->
+            assertEquals("snapshot", sse.next().first)
+            val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+            try {
+                scope.launch { app.exports.askPassword("a1", org.tgbackup.app.export.PasswordOrigin.Job, "h1") }
+                withTimeout(5_000) { app.exports.passwords.first { it.size == 1 } }
+                scope.launch { app.exports.askPassword("a2", org.tgbackup.app.export.PasswordOrigin.Screen, "h2") }
+                var list = sse.nextNamed("passwords").jsonArray
+                while (list.size < 2) list = sse.nextNamed("passwords").jsonArray
+                assertEquals(listOf("job", "screen"), list.map { it.jsonObject["origin"]!!.jsonPrimitive.content })
+                assertEquals(listOf("a1", "a2"), list.map { it.jsonObject["accountId"]!!.jsonPrimitive.content })
+                // `password`, the oldest, follows each list.
+                val first = sse.nextNamed("password").jsonObject
+                assertEquals(list[0].jsonObject["id"], first["id"])
+            } finally {
+                scope.cancel()
+            }
         }
     }
 
