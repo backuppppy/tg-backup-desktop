@@ -93,12 +93,14 @@ class JobManager(
     }
 
     /** Shows the saved position and run totals of [jobId] in its status. */
-    fun showSavedProgress(jobId: String) {
+    fun showSavedProgress(jobId: String) = synchronized(clockLock) {
+        // runMillis and runningSince together: a clock flush between them would count its segment twice.
         val p = store.progress(jobId)
+        val since = runSegments[jobId]?.since ?: 0
         setStatus(jobId) {
             it.copy(
                 lastId = p.lastId, copiedTotal = p.copiedTotal, runMillis = p.runMillis, latestId = p.latestId,
-                runningSince = runSegments[jobId]?.since ?: 0,
+                runningSince = since,
             )
         }
     }
