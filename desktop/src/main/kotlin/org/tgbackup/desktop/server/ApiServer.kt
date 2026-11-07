@@ -94,8 +94,6 @@ fun Application.tgbModule(
     install(SSE)
     val events = Events(app).also { attributes.put(EventsKey, it) }
     val locks = CommandLocks()
-    // Stops with the server (the application's scope).
-    boundPasswordWait(app.exports.password)
 
     routing {
         // Public: the only route that needs no session cookie (see installSecurity).

@@ -155,7 +155,8 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
         post("{accountId}/login") {
             command {
                 forAccount { acc, _ ->
-                    exports.login(acc).onFailure { if (it is CancellationException) throw it; throw it.failure("ההתחברות נכשלה") }
+                    withBoundedPasswordWait(exports.password) { exports.login(acc) }
+                        .onFailure { if (it is CancellationException) throw it; throw it.failure("ההתחברות נכשלה") }
                 }
             }
         }
@@ -163,7 +164,8 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
         post("{accountId}/check") {
             answer {
                 forAccount { acc, _ ->
-                    val ready = exports.checkTakeoutReady(acc)
+                    // Its login asks for the 2FA password as the login route does.
+                    val ready = withBoundedPasswordWait(exports.password) { exports.checkTakeoutReady(acc) }
                         .getOrElse { if (it is CancellationException) throw it; throw it.failure("בדיקה נכשלה") }
                     ReadyDto(ready)
                 }

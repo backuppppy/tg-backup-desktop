@@ -7,6 +7,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
@@ -245,6 +246,41 @@ class ExportRoutesTest : RouteTestBase() {
         testScheduler.advanceTimeBy(kotlin.time.Duration.parse("3m"))
         testScheduler.runCurrent()
         assertNull(second.answer.await())
+    }
+
+    @Test
+    fun onlyTheExportScreensLoginHasItsPasswordWaitBounded() = kotlinx.coroutines.test.runTest {
+        val requests = kotlinx.coroutines.flow.MutableStateFlow<org.tgbackup.app.export.PasswordRequest?>(null)
+        // A copying job's request, there before the screen's login starts: it waits without a bound.
+        val job = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = job
+        val screen = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        val login = async {
+            withBoundedPasswordWait(requests) {
+                requests.value = screen
+                screen.answer.await()
+            }
+        }
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(PASSWORD_WAIT + kotlin.time.Duration.parse("1s"))
+        testScheduler.runCurrent()
+        assertNull(login.await())
+        assertFalse(job.answer.isCompleted)
+        // After the screen's login: a job's new request waits without a bound too.
+        val later = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred())
+        requests.value = later
+        testScheduler.advanceTimeBy(PASSWORD_WAIT * 3)
+        testScheduler.runCurrent()
+        assertFalse(job.answer.isCompleted)
+        assertFalse(later.answer.isCompleted)
+    }
+
+    @Test
+    fun theServerDoesNotBoundAJobsPasswordWait() {
+        val source = java.io.File("src/main/kotlin/org/tgbackup/desktop/server/ApiServer.kt").readText()
+        assertFalse("boundPasswordWait(" in source, "the bound is per login of the export screen, not the whole server")
+        val routes = java.io.File("src/main/kotlin/org/tgbackup/desktop/server/ExportRoutes.kt").readText()
+        assertEquals(2, Regex("""withBoundedPasswordWait\(exports\.password\)""").findAll(routes).count())
     }
 
     @Test
