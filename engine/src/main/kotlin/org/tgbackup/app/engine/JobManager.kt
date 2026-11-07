@@ -64,6 +64,8 @@ class JobManager(
     private val scope: CoroutineScope,
     /** How often a running job's run time is written to its progress. */
     private val runTick: Long = 10_000,
+    /** How often a running job reads its source's latest id again (refreshLatest). */
+    private val latestTick: Long = 3_600_000,
     private val exports: () -> ExportManager,
 ) {
     private val _statuses = MutableStateFlow<Map<String, JobStatus>>(emptyMap())
@@ -74,6 +76,9 @@ class JobManager(
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     private val running = ConcurrentHashMap<String, CoJob>()
+
+    /** What a running job does every [latestTick]; a test replaces it. */
+    internal var periodicRefresh: suspend (String) -> Unit = { refreshLatest(it) }
     private val pauseFlags = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
 
     /** A run's clock: since when its time is not in Progress.runMillis yet. */
@@ -185,6 +190,20 @@ class JobManager(
                 flushRunTime(jobId, goOn = true, run = self)
             }
         }
+        // The newest id of the source while the job runs (a caught-up ordered loop reads it as well).
+        val latestClock = scope.launch {
+            while (isActive) {
+                delay(latestTick)
+                if (running[jobId] !== self) break
+                try {
+                    periodicRefresh(jobId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    log.warn("[$jobId] קריאת ID אחרון נכשלה: ${e.message}")
+                }
+            }
+        }
         try {
             while (isActive) {
                 val current = store.config.value.jobs.firstOrNull { it.id == jobId } ?: break
@@ -235,6 +254,7 @@ class JobManager(
             }
         } finally {
             clock.cancel()
+            latestClock.cancel()
         }
     }
 

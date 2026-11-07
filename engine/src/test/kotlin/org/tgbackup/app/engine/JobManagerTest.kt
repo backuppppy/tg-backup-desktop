@@ -14,6 +14,7 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,10 +31,10 @@ class JobManagerTest {
     private fun dataDir(): File =
         Files.createTempDirectory("jobs").resolve("תיקייה עם רווח").toFile().apply { mkdirs() }
 
-    private fun manager(store: Store, dir: File): JobManager {
+    private fun manager(store: Store, dir: File, latestTick: Long = 3_600_000): JobManager {
         val log = LogBus(dir)
         // No account is configured, so no job reaches the runner and exports is never invoked.
-        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50) { error("unused") }
+        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50, latestTick = latestTick) { error("unused") }
     }
 
     private fun waitUntil(what: String, timeoutMs: Long = 5_000, cond: () -> Boolean) {
@@ -329,6 +330,27 @@ class JobManagerTest {
         assertNull(jobs.saveRefreshed("j1", "src", 900))
         assertEquals(150L, store.progress("j1").latestId)
         assertEquals(150L, jobs.status().latestId)
+    }
+
+    @Test
+    fun onlyARunningJobRefreshesItsLatestIdPeriodically() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val jobs = manager(store, dir, latestTick = 50)
+        val refreshes = AtomicInteger()
+        jobs.periodicRefresh = { id -> assertEquals("j1", id); refreshes.incrementAndGet() }
+
+        Thread.sleep(300)
+        assertEquals(0, refreshes.get(), "a stopped job is not refreshed")
+
+        assertNull(jobs.start("j1"))
+        waitUntil("the running job is refreshed again and again") { refreshes.get() >= 2 }
+
+        jobs.stop("j1")
+        waitUntil("job stopped") { !jobs.status().running }
+        val atStop = refreshes.get()
+        Thread.sleep(300)
+        assertEquals(atStop, refreshes.get(), "the refresh ends with the run")
     }
 
     @Test
