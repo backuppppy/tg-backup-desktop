@@ -2,6 +2,7 @@ package org.tgbackup.app.engine
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -75,8 +76,15 @@ class JobManager(
     private val running = ConcurrentHashMap<String, CoJob>()
     private val pauseFlags = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
 
-    /** Per running, unpaused job: when its run time was last added to Progress.runMillis. */
-    private val runSegments = ConcurrentHashMap<String, Long>()
+    /** A run's clock: since when its time is not in Progress.runMillis yet. */
+    private class Segment(val run: CoJob, val since: Long)
+
+    /**
+     * Per running, unpaused job: its current run's segment. A run touches only its own segment, so a run that
+     * ends after a newer one started (stop, then a quick start) cannot stop the newer one's clock.
+     */
+    private val runSegments = ConcurrentHashMap<String, Segment>()
+    /** Guards the run clocks and which run is the current one of a job ([running]). */
     private val clockLock = Any()
 
     init {
@@ -90,28 +98,43 @@ class JobManager(
         setStatus(jobId) {
             it.copy(
                 lastId = p.lastId, copiedTotal = p.copiedTotal, runMillis = p.runMillis, latestId = p.latestId,
-                runningSince = runSegments[jobId] ?: 0,
+                runningSince = runSegments[jobId]?.since ?: 0,
             )
         }
     }
 
     /**
      * Adds the time since the current run segment began to Progress.runMillis. With [goOn] the clock keeps
-     * running from now; otherwise it stops (pause, stop). Does nothing while the clock is stopped.
+     * running from now; otherwise it stops (pause, stop). Does nothing while the clock is stopped, or when
+     * [run] is given and the segment is another run's.
      */
-    private fun flushRunTime(jobId: String, goOn: Boolean) = synchronized(clockLock) {
-        val since = runSegments[jobId] ?: return@synchronized
+    private fun flushRunTime(jobId: String, goOn: Boolean, run: CoJob? = null) = synchronized(clockLock) {
+        val seg = runSegments[jobId] ?: return@synchronized
+        if (run != null && seg.run !== run) return@synchronized
         val now = System.currentTimeMillis()
-        store.saveProgress(jobId) { it.copy(runMillis = it.runMillis + (now - since).coerceAtLeast(0)) }
-        if (goOn) runSegments[jobId] = now else runSegments.remove(jobId)
+        store.saveProgress(jobId) { it.copy(runMillis = it.runMillis + (now - seg.since).coerceAtLeast(0)) }
+        if (goOn) runSegments[jobId] = Segment(seg.run, now) else runSegments.remove(jobId)
         val total = store.progress(jobId).runMillis
         setStatus(jobId) { it.copy(runMillis = total, runningSince = if (goOn) now else 0) }
     }
 
-    private fun startClock(jobId: String) = synchronized(clockLock) {
+    private fun startClock(jobId: String, run: CoJob) = synchronized(clockLock) {
+        // A segment left by an older run is added first, so its time is not lost.
+        flushRunTime(jobId, goOn = false)
         val now = System.currentTimeMillis()
-        runSegments[jobId] = now
+        runSegments[jobId] = Segment(run, now)
         setStatus(jobId) { it.copy(runningSince = now) }
+    }
+
+    /** [run] ended: when it is still [jobId]'s current run, its clock stops and the job shows as stopped. */
+    private fun finishRun(jobId: String, run: CoJob) = synchronized(clockLock) {
+        if (!running.remove(jobId, run)) return@synchronized
+        flushRunTime(jobId, goOn = false, run = run)
+        // A job forgotten while it stopped keeps no status.
+        if (jobId in _statuses.value) {
+            setStatus(jobId) { it.copy(running = false, paused = false, phase = "עצור") }
+            showSavedProgress(jobId)
+        }
     }
 
     private fun setStatus(id: String, transform: (JobStatus) -> JobStatus) =
@@ -136,78 +159,80 @@ class JobManager(
         store.updateConfig { it.copy(autoResume = it.autoResume + jobId) }
         val paused = pauseFlags.getOrPut(jobId) { MutableStateFlow(false) }
         paused.value = false
-        setStatus(jobId) { it.copy(running = true, paused = false, phase = "מתחיל…", copied = 0, failed = 0) }
-        showSavedProgress(jobId)
-        startClock(jobId)
 
-        running[jobId] = scope.launch {
-            // Time spent in FLOOD_WAIT, retries and waiting for an account counts: the job is running.
-            val clock = scope.launch {
-                while (isActive) {
-                    delay(runTick)
-                    flushRunTime(jobId, goOn = true)
-                }
-            }
-            try {
-                while (isActive) {
-                    val current = store.config.value.jobs.firstOrNull { it.id == jobId } ?: break
-                    val label = current.name.ifBlank { current.id }
-                    try {
-                        // Right after process start the account clients may still be spinning up.
-                        withTimeoutOrNull(10_000) {
-                            accounts.clients.first { m -> current.accountIds.any { it in m } }
-                        }
-                        val clients = current.accountIds.mapNotNull { accounts[it] }
-                        if (clients.isEmpty()) error("אף אחד מהחשבונות של המשימה לא מוגדר עם API ID")
-                        log.info("[$label] מתחיל…")
-                        val clearStartFrom = {
-                            store.updateConfig { c ->
-                                c.copy(jobs = c.jobs.map { if (it.id == jobId) it.copy(startFromId = 0) else it })
-                            }
-                        }
-                        if (current.viaTakeout) {
-                            TakeoutJobRunner(
-                                job = current,
-                                accounts = clients,
-                                exports = exports(),
-                                store = store,
-                                log = log,
-                                paused = paused,
-                                report = reporter(jobId),
-                                clearStartFrom = clearStartFrom,
-                            ).run()
-                        } else {
-                            JobRunner(
-                                job = current,
-                                accounts = clients,
-                                store = store,
-                                log = log,
-                                paused = paused,
-                                report = reporter(jobId),
-                                clearStartFrom = clearStartFrom,
-                            ).run()
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        SentryOnce.exception("job-crash|$jobId|${e::class.java.name}|${e.message}", e) { s -> s.setTag("job", label) }
-                        log.error("[$label] ${e.message ?: e::class.simpleName} — מפעיל מחדש בעוד 15 שנ'")
-                        setStatus(jobId) { it.copy(phase = "שגיאה — מפעיל מחדש בעוד 15 שנ'") }
-                        delay(15_000)
-                    }
-                }
-            } finally {
-                clock.cancel()
-                flushRunTime(jobId, goOn = false)
-                running.remove(jobId)
-                // A job forgotten while it stopped keeps no status.
-                if (jobId in _statuses.value) {
-                    setStatus(jobId) { it.copy(running = false, paused = false, phase = "עצור") }
-                    showSavedProgress(jobId)
-                }
+        // Started only once it is the job's current run, so its finally knows whether it still is.
+        val run = scope.launch(start = CoroutineStart.LAZY) { runJob(jobId, paused) }
+        synchronized(clockLock) {
+            running[jobId] = run
+            setStatus(jobId) { it.copy(running = true, paused = false, phase = "מתחיל…", copied = 0, failed = 0) }
+            showSavedProgress(jobId)
+            startClock(jobId, run)
+        }
+        run.start()
+        return null
+    }
+
+    private suspend fun CoroutineScope.runJob(jobId: String, paused: MutableStateFlow<Boolean>) {
+        val self = coroutineContext[CoJob]!!
+        // Time spent in FLOOD_WAIT, retries and waiting for an account counts: the job is running.
+        val clock = scope.launch {
+            while (isActive) {
+                delay(runTick)
+                flushRunTime(jobId, goOn = true, run = self)
             }
         }
-        return null
+        try {
+            while (isActive) {
+                val current = store.config.value.jobs.firstOrNull { it.id == jobId } ?: break
+                val label = current.name.ifBlank { current.id }
+                try {
+                    // Right after process start the account clients may still be spinning up.
+                    withTimeoutOrNull(10_000) {
+                        accounts.clients.first { m -> current.accountIds.any { it in m } }
+                    }
+                    val clients = current.accountIds.mapNotNull { accounts[it] }
+                    if (clients.isEmpty()) error("אף אחד מהחשבונות של המשימה לא מוגדר עם API ID")
+                    log.info("[$label] מתחיל…")
+                    val clearStartFrom = {
+                        store.updateConfig { c ->
+                            c.copy(jobs = c.jobs.map { if (it.id == jobId) it.copy(startFromId = 0) else it })
+                        }
+                    }
+                    if (current.viaTakeout) {
+                        TakeoutJobRunner(
+                            job = current,
+                            accounts = clients,
+                            exports = exports(),
+                            store = store,
+                            log = log,
+                            paused = paused,
+                            report = reporter(jobId),
+                            clearStartFrom = clearStartFrom,
+                        ).run()
+                    } else {
+                        JobRunner(
+                            job = current,
+                            accounts = clients,
+                            store = store,
+                            log = log,
+                            paused = paused,
+                            report = reporter(jobId),
+                            clearStartFrom = clearStartFrom,
+                        ).run()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    SentryOnce.exception("job-crash|$jobId|${e::class.java.name}|${e.message}", e) { s -> s.setTag("job", label) }
+                    log.error("[$label] ${e.message ?: e::class.simpleName} — מפעיל מחדש בעוד 15 שנ'")
+                    setStatus(jobId) { it.copy(phase = "שגיאה — מפעיל מחדש בעוד 15 שנ'") }
+                    delay(15_000)
+                }
+            }
+        } finally {
+            clock.cancel()
+            finishRun(jobId, self)
+        }
     }
 
     internal fun reporter(jobId: String) = object : JobReporter {
@@ -229,7 +254,11 @@ class JobManager(
 
     fun stop(jobId: String) {
         store.updateConfig { it.copy(autoResume = it.autoResume - jobId) }
-        running[jobId]?.cancel()
+        running[jobId]?.let { run ->
+            // The time up to now is the run's; a new run may start before this one's finally runs.
+            flushRunTime(jobId, goOn = false, run = run)
+            run.cancel()
+        }
         log.warn("[$jobId] נעצר")
     }
 
@@ -244,7 +273,10 @@ class JobManager(
     fun resume(jobId: String) {
         pauseFlags[jobId]?.value = false
         setStatus(jobId) { it.copy(paused = false, phase = "ממשיך…") }
-        if (isRunning(jobId) && !runSegments.containsKey(jobId)) startClock(jobId)
+        synchronized(clockLock) {
+            val run = running[jobId]
+            if (run != null && run.isActive && !runSegments.containsKey(jobId)) startClock(jobId, run)
+        }
     }
 
     fun startAll(): List<String> = store.config.value.jobs.filter { !isRunning(it.id) }.mapNotNull { j ->
@@ -261,7 +293,7 @@ class JobManager(
     fun resetProgress(jobId: String) = synchronized(clockLock) {
         store.clearProgress(jobId)
         // A running clock starts over from now.
-        if (runSegments.containsKey(jobId)) runSegments[jobId] = System.currentTimeMillis()
+        runSegments[jobId]?.let { runSegments[jobId] = Segment(it.run, System.currentTimeMillis()) }
         showSavedProgress(jobId)
     }
 

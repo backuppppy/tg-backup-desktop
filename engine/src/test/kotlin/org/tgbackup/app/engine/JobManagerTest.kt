@@ -3,6 +3,7 @@ package org.tgbackup.app.engine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.tgbackup.app.data.Job
@@ -11,6 +12,8 @@ import org.tgbackup.app.data.Store
 import org.tgbackup.app.tg.AccountManager
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -183,6 +186,50 @@ class JobManagerTest {
         waitUntil("job stopped") { !jobs.status().running }
         val total = store.progress("j1").runMillis
         assertTrue(total >= atPause + 100 && total < atPause + 400, "runMillis $total after $atPause")
+    }
+
+    /** A manager whose coroutines all run on one thread that the test can hold. */
+    private class OneThread {
+        val exec = Executors.newSingleThreadExecutor()
+        val scope = CoroutineScope(SupervisorJob() + exec.asCoroutineDispatcher())
+        private var gate: CountDownLatch? = null
+
+        /** Waits until everything queued on the thread so far has run. */
+        fun drain() = exec.submit {}.get()
+        fun hold() { gate = CountDownLatch(1).also { g -> exec.submit { g.await() } } }
+        fun release() { gate?.countDown(); drain() }
+        fun close() { scope.cancel(); exec.shutdownNow() }
+    }
+
+    @Test
+    fun aStopAndAQuickStartKeepTheNewRun() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val t = OneThread()
+        try {
+            val log = LogBus(dir)
+            val jobs = JobManager(store, AccountManager(dir, log), log, t.scope, runTick = 50) { error("unused") }
+            assertNull(jobs.start("j1"))
+            t.drain() // the run waits for its accounts
+            // The old run's finally runs only after the new run started, as when it is slow.
+            t.hold()
+            jobs.stop("j1")
+            assertNull(jobs.start("j1"))
+            t.release()
+            t.drain()
+
+            assertTrue(jobs.isRunning("j1"), "the new run is still known")
+            assertTrue(jobs.status().running)
+            assertTrue(jobs.status().runningSince > 0, "the new run's clock goes on")
+            val r0 = store.progress("j1").runMillis
+            waitUntil("the new run's clock counts") { store.progress("j1").runMillis > r0 }
+
+            jobs.stop("j1")
+            waitUntil("the new run stopped") { !jobs.isRunning("j1") && !jobs.status().running }
+            assertEquals(0L, jobs.status().runningSince)
+        } finally {
+            t.close()
+        }
     }
 
     @Test
