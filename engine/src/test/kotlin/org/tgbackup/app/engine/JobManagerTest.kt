@@ -4,7 +4,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import org.tgbackup.app.data.Job
+import org.tgbackup.app.data.Progress
 import org.tgbackup.app.data.Store
 import org.tgbackup.app.tg.AccountManager
 import java.io.File
@@ -13,6 +15,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class JobManagerTest {
@@ -27,8 +30,29 @@ class JobManagerTest {
     private fun manager(store: Store, dir: File): JobManager {
         val log = LogBus(dir)
         // No account is configured, so no job reaches the runner and exports is never invoked.
-        return JobManager(store, AccountManager(dir, log), log, scope) { error("unused") }
+        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50) { error("unused") }
     }
+
+    private fun waitUntil(what: String, timeoutMs: Long = 5_000, cond: () -> Boolean) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (!cond()) {
+            if (System.currentTimeMillis() > end) throw AssertionError("timed out waiting for: $what")
+            Thread.sleep(20)
+        }
+    }
+
+    /**
+     * A job that runs without a configured account: the runner never starts, the job stays in its
+     * "restart in 15 s" loop, which is enough for the run clock.
+     */
+    private fun storeWithIdleJob(dir: File, progress: Progress = Progress()): Store {
+        val store = Store(dir)
+        store.updateConfig { it.copy(jobs = listOf(Job(id = "j1", source = "src", target = "dst", accountIds = listOf("a")))) }
+        store.saveProgress("j1") { progress }
+        return store
+    }
+
+    private fun JobManager.status(id: String = "j1") = statuses.value.getValue(id)
 
     @Test
     fun startRejectsAJobWithoutAccounts() {
@@ -83,5 +107,132 @@ class JobManagerTest {
         jobs.stop("j1")
 
         assertTrue(store.config.value.autoResume.isEmpty())
+    }
+
+    @Test
+    fun idleJobShowsTheSavedTotals() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(lastId = 40, copiedTotal = 7, runMillis = 1_000, latestId = 50))
+        val s = manager(store, dir).status()
+
+        assertEquals(40L, s.lastId)
+        assertEquals(7L, s.copiedTotal)
+        assertEquals(1_000L, s.runMillis)
+        assertEquals(50L, s.latestId)
+        assertEquals(0L, s.runningSince)
+    }
+
+    @Test
+    fun stopAndStartAgainKeepCopiedTotalAndRunTime() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(copiedTotal = 7, runMillis = 1_000, latestId = 50))
+        val jobs = manager(store, dir)
+
+        val before = System.currentTimeMillis()
+        assertNull(jobs.start("j1"))
+        assertTrue(jobs.status().running)
+        assertTrue(jobs.status().runningSince >= before, "runningSince ${jobs.status().runningSince}")
+        assertEquals(7L, jobs.status().copiedTotal)
+        // The clock is written while the job runs, not only when it stops.
+        waitUntil("run time saved while running") { store.progress("j1").runMillis > 1_000 }
+        Thread.sleep(300)
+        jobs.stop("j1")
+        waitUntil("job stopped") { !jobs.status().running }
+
+        val first = store.progress("j1")
+        assertTrue(first.runMillis >= 1_300, "runMillis ${first.runMillis}")
+        assertEquals(7L, first.copiedTotal)
+        assertEquals(50L, first.latestId)
+        assertEquals(first.runMillis, jobs.status().runMillis)
+        assertEquals(0L, jobs.status().runningSince)
+        assertEquals(7L, jobs.status().copiedTotal)
+
+        // Started again, the clock goes on from the same total.
+        assertNull(jobs.start("j1"))
+        assertEquals(first.runMillis, jobs.status().runMillis)
+        assertEquals(7L, jobs.status().copiedTotal)
+        Thread.sleep(200)
+        jobs.stop("j1")
+        waitUntil("job stopped again") { !jobs.status().running }
+        val second = store.progress("j1")
+        assertTrue(second.runMillis >= first.runMillis + 200, "runMillis ${second.runMillis} after ${first.runMillis}")
+        assertEquals(7L, second.copiedTotal)
+    }
+
+    @Test
+    fun pausedTimeIsNotCounted() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val jobs = manager(store, dir)
+
+        assertNull(jobs.start("j1"))
+        Thread.sleep(100)
+        jobs.pause("j1")
+        assertEquals(0L, jobs.status().runningSince)
+        val atPause = store.progress("j1").runMillis
+        assertTrue(atPause >= 100, "runMillis $atPause")
+        assertEquals(atPause, jobs.status().runMillis)
+        Thread.sleep(400)
+        assertEquals(atPause, store.progress("j1").runMillis)
+
+        val beforeResume = System.currentTimeMillis()
+        jobs.resume("j1")
+        assertTrue(jobs.status().runningSince >= beforeResume)
+        Thread.sleep(100)
+        jobs.stop("j1")
+        waitUntil("job stopped") { !jobs.status().running }
+        val total = store.progress("j1").runMillis
+        assertTrue(total >= atPause + 100 && total < atPause + 400, "runMillis $total after $atPause")
+    }
+
+    @Test
+    fun reporterCountsCopiesAndSavesTheLatestId() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(copiedTotal = 7))
+        val jobs = manager(store, dir)
+
+        val r = jobs.reporter("j1")
+        r.copied()
+        r.copied()
+        r.latest(500)
+
+        assertEquals(2, jobs.status().copied)
+        assertEquals(9L, jobs.status().copiedTotal)
+        assertEquals(500L, jobs.status().latestId)
+        assertEquals(500L, store.progress("j1").latestId)
+        // Saved, so a stopped job and the next launch show it too.
+        assertEquals(500L, manager(store, dir).status().latestId)
+    }
+
+    @Test
+    fun resetProgressClearsTheRunTotals() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(lastId = 40, copiedTotal = 7, runMillis = 1_000, latestId = 50))
+        val jobs = manager(store, dir)
+
+        jobs.resetProgress("j1")
+
+        val p = store.progress("j1")
+        assertEquals(listOf(0L, 0L, 0L, 0L), listOf(p.lastId, p.copiedTotal, p.runMillis, p.latestId))
+        val s = jobs.status()
+        assertEquals(listOf(0L, 0L, 0L, 0L), listOf(s.lastId, s.copiedTotal, s.runMillis, s.latestId))
+    }
+
+    @Test
+    fun refreshLatestWithoutALoggedInAccountDoesNothing() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(latestId = 50))
+        store.updateConfig { it.copy(jobs = it.jobs + Job(id = "noacc", source = "src", target = "dst")) }
+        val jobs = manager(store, dir)
+
+        runBlocking {
+            assertNull(jobs.refreshLatest("j1"))
+            assertNull(jobs.refreshLatest("noacc"))
+            assertNull(jobs.refreshLatest("missing"))
+        }
+
+        assertEquals(50L, store.progress("j1").latestId)
+        assertEquals(50L, jobs.status().latestId)
+        assertFalse(jobs.isRunning("j1"))
     }
 }

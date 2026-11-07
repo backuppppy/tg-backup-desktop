@@ -15,6 +15,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.tgbackup.app.data.Store
+import org.tgbackup.app.tg.serverId
 import org.tgbackup.app.export.ExportManager
 import org.tgbackup.app.tg.AccountManager
 import java.util.concurrent.ConcurrentHashMap
@@ -33,6 +34,14 @@ data class JobStatus(
     /** Last message delivered to the target in this run (server id). */
     val targetChatId: Long = 0,
     val lastTargetId: Long = 0,
+    /** Messages copied over all runs (Progress.copiedTotal, plus this run's copies as they happen). */
+    val copiedTotal: Long = 0,
+    /** Saved run time; while running, the time since [runningSince] comes on top of it. */
+    val runMillis: Long = 0,
+    /** Epoch ms since which the job runs without the time being in [runMillis]; 0 when stopped or paused. */
+    val runningSince: Long = 0,
+    /** Server id of the source's newest message; 0 = not known yet. */
+    val latestId: Long = 0,
 ) {
     /** The last handled message in the source. */
     val lastLink: String? get() = messageLink(sourceChatId, lastId)
@@ -52,6 +61,8 @@ class JobManager(
     private val accounts: AccountManager,
     private val log: LogBus,
     private val scope: CoroutineScope,
+    /** How often a running job's run time is written to its progress. */
+    private val runTick: Long = 10_000,
     private val exports: () -> ExportManager,
 ) {
     private val _statuses = MutableStateFlow<Map<String, JobStatus>>(emptyMap())
@@ -64,9 +75,43 @@ class JobManager(
     private val running = ConcurrentHashMap<String, CoJob>()
     private val pauseFlags = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
 
+    /** Per running, unpaused job: when its run time was last added to Progress.runMillis. */
+    private val runSegments = ConcurrentHashMap<String, Long>()
+    private val clockLock = Any()
+
     init {
         // Show saved progress for idle jobs as well.
-        store.config.value.jobs.forEach { j -> setStatus(j.id) { it.copy(lastId = store.progress(j.id).lastId) } }
+        store.config.value.jobs.forEach { j -> showSavedProgress(j.id) }
+    }
+
+    /** Shows the saved position and run totals of [jobId] in its status. */
+    fun showSavedProgress(jobId: String) {
+        val p = store.progress(jobId)
+        setStatus(jobId) {
+            it.copy(
+                lastId = p.lastId, copiedTotal = p.copiedTotal, runMillis = p.runMillis, latestId = p.latestId,
+                runningSince = runSegments[jobId] ?: 0,
+            )
+        }
+    }
+
+    /**
+     * Adds the time since the current run segment began to Progress.runMillis. With [goOn] the clock keeps
+     * running from now; otherwise it stops (pause, stop). Does nothing while the clock is stopped.
+     */
+    private fun flushRunTime(jobId: String, goOn: Boolean) = synchronized(clockLock) {
+        val since = runSegments[jobId] ?: return@synchronized
+        val now = System.currentTimeMillis()
+        store.saveProgress(jobId) { it.copy(runMillis = it.runMillis + (now - since).coerceAtLeast(0)) }
+        if (goOn) runSegments[jobId] = now else runSegments.remove(jobId)
+        val total = store.progress(jobId).runMillis
+        setStatus(jobId) { it.copy(runMillis = total, runningSince = if (goOn) now else 0) }
+    }
+
+    private fun startClock(jobId: String) = synchronized(clockLock) {
+        val now = System.currentTimeMillis()
+        runSegments[jobId] = now
+        setStatus(jobId) { it.copy(runningSince = now) }
     }
 
     private fun setStatus(id: String, transform: (JobStatus) -> JobStatus) =
@@ -92,8 +137,17 @@ class JobManager(
         val paused = pauseFlags.getOrPut(jobId) { MutableStateFlow(false) }
         paused.value = false
         setStatus(jobId) { it.copy(running = true, paused = false, phase = "מתחיל…", copied = 0, failed = 0) }
+        showSavedProgress(jobId)
+        startClock(jobId)
 
         running[jobId] = scope.launch {
+            // Time spent in FLOOD_WAIT, retries and waiting for an account counts: the job is running.
+            val clock = scope.launch {
+                while (isActive) {
+                    delay(runTick)
+                    flushRunTime(jobId, goOn = true)
+                }
+            }
             try {
                 while (isActive) {
                     val current = store.config.value.jobs.firstOrNull { it.id == jobId } ?: break
@@ -143,17 +197,25 @@ class JobManager(
                     }
                 }
             } finally {
+                clock.cancel()
+                flushRunTime(jobId, goOn = false)
                 running.remove(jobId)
-                setStatus(jobId) { it.copy(running = false, paused = false, phase = "עצור") }
+                // A job forgotten while it stopped keeps no status.
+                if (jobId in _statuses.value) {
+                    setStatus(jobId) { it.copy(running = false, paused = false, phase = "עצור") }
+                    showSavedProgress(jobId)
+                }
             }
         }
         return null
     }
 
-    private fun reporter(jobId: String) = object : JobReporter {
+    internal fun reporter(jobId: String) = object : JobReporter {
         override fun phase(text: String) = setStatus(jobId) { it.copy(phase = text) }
         override fun position(lastId: Long) = setStatus(jobId) { it.copy(lastId = lastId) }
-        override fun copied() = setStatus(jobId) { it.copy(copied = it.copied + 1) }
+        // The runner adds it to Progress.copiedTotal with the message's position.
+        override fun copied() = setStatus(jobId) { it.copy(copied = it.copied + 1, copiedTotal = it.copiedTotal + 1) }
+        override fun latest(id: Long) = saveLatest(jobId, id)
         override fun delivered(chatId: Long, serverId: Long) =
             setStatus(jobId) { it.copy(targetChatId = chatId, lastTargetId = serverId) }
         override fun failed() = setStatus(jobId) { it.copy(failed = it.failed + 1) }
@@ -171,11 +233,14 @@ class JobManager(
         if (!isRunning(jobId)) return
         pauseFlags[jobId]?.value = true
         setStatus(jobId) { it.copy(paused = true, phase = "מושהה") }
+        // Paused time is not run time.
+        flushRunTime(jobId, goOn = false)
     }
 
     fun resume(jobId: String) {
         pauseFlags[jobId]?.value = false
         setStatus(jobId) { it.copy(paused = false, phase = "ממשיך…") }
+        if (isRunning(jobId) && !runSegments.containsKey(jobId)) startClock(jobId)
     }
 
     fun startAll(): List<String> = store.config.value.jobs.filter { !isRunning(it.id) }.mapNotNull { j ->
@@ -188,15 +253,52 @@ class JobManager(
 
     fun stopAll() = store.config.value.jobs.forEach { if (isRunning(it.id)) stop(it.id) }
 
-    fun resetProgress(jobId: String) {
+    /** A full reset: the position and the run totals (copied, run time, latest id). */
+    fun resetProgress(jobId: String) = synchronized(clockLock) {
         store.clearProgress(jobId)
-        setStatus(jobId) { it.copy(lastId = 0) }
+        // A running clock starts over from now.
+        if (runSegments.containsKey(jobId)) runSegments[jobId] = System.currentTimeMillis()
+        showSavedProgress(jobId)
     }
 
     fun forget(jobId: String) {
+        // Its clock must not write the progress back after it is cleared.
+        synchronized(clockLock) { runSegments.remove(jobId) }
         stop(jobId)
         store.clearProgress(jobId)
         _statuses.update { it - jobId }
+    }
+
+    private fun saveLatest(jobId: String, id: Long) {
+        if (id <= 0) return
+        if (store.progress(jobId).latestId != id) store.saveProgress(jobId) { it.copy(latestId = id) }
+        setStatus(jobId) { it.copy(latestId = id) }
+    }
+
+    /**
+     * Reads the server id of the newest message in [jobId]'s source through one of its logged-in accounts,
+     * without starting the job, and saves it (Progress.latestId). Both runners find the source with
+     * TDLib's resolveChat on the job's first account, so any logged-in account of the job can read it.
+     * Returns the id, or null when no account of the job is logged in or the source cannot be read.
+     */
+    suspend fun refreshLatest(jobId: String): Long? {
+        val job = store.config.value.jobs.firstOrNull { it.id == jobId } ?: return null
+        if (job.source.isBlank()) return null
+        val ac = job.accountIds.mapNotNull { accounts[it] }.firstOrNull { it.isReady } ?: return null
+        val latest = try {
+            withTimeoutOrNull(30_000) {
+                val chat = ac.resolveChat(job.source).getOrNull() ?: return@withTimeoutOrNull null
+                ac.latestServerId(chat.id)?.takeIf { it > 0 } ?: chat.lastMessage?.id?.serverId()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            null
+        } ?: return null
+        // The job may have been deleted meanwhile.
+        if (store.config.value.jobs.none { it.id == jobId }) return null
+        saveLatest(jobId, latest)
+        return latest.takeIf { it > 0 }
     }
 
     /** Restarts jobs that were running before the process died. Safe to call repeatedly. */

@@ -28,4 +28,32 @@ class StoreTest {
 
         assertEquals(20L, Store(dir).progress("j1").lastId)
     }
+
+    @Test
+    fun progressWrittenBeforeTheRunTotalsLoadsWithZeros() {
+        val dir = dataDir()
+        // A progress file from before copiedTotal, runMillis and latestId existed.
+        File(dir, "progress").apply { mkdirs() }.resolve("j1.json").writeText(
+            """{"lastId": 123, "waveStart": 0, "waveEnd": 0, "workerLast": {}, "viaTakeout": true, "sourceId": -1001}""",
+        )
+        val p = Store(dir).progress("j1")
+
+        assertEquals(123L, p.lastId)
+        assertEquals(true, p.viaTakeout)
+        assertEquals(-1001L, p.sourceId)
+        assertEquals(0L, p.copiedTotal)
+        assertEquals(0L, p.runMillis)
+        assertEquals(0L, p.latestId)
+    }
+
+    @Test
+    fun runTotalsSurviveAReload() {
+        val dir = dataDir()
+        Store(dir).saveProgress("j1") { it.copy(copiedTotal = 5, runMillis = 60_000, latestId = 900) }
+        val p = Store(dir).progress("j1")
+
+        assertEquals(5L, p.copiedTotal)
+        assertEquals(60_000L, p.runMillis)
+        assertEquals(900L, p.latestId)
+    }
 }

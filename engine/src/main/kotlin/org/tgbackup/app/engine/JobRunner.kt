@@ -60,6 +60,9 @@ interface JobReporter {
     fun position(lastId: Long)
     fun copied()
 
+    /** The source's newest message is [id] (server id), as read by latestServerId. */
+    fun latest(id: Long)
+
     /** A message was sent to [chatId]; [serverId] is its id as shown in t.me links. */
     fun delivered(chatId: Long, serverId: Long)
     fun failed()
@@ -107,7 +110,7 @@ class JobRunner(
         if (protected) log.warn("[$tag] ערוץ המקור מוגן — מצב הורדה והעלאה מחדש")
 
         if (job.startFromId > 0) {
-            store.saveProgress(job.id) { Progress(lastId = job.startFromId - 1) }
+            store.saveProgress(job.id) { Progress(lastId = job.startFromId - 1).withTotalsOf(it) }
             clearStartFrom()
             log.info("[$tag] מתחיל מהודעה ${job.startFromId}")
         }
@@ -149,7 +152,7 @@ class JobRunner(
             } ?: continue
 
             if (batch.isEmpty()) {
-                val latest = sender.latestServerId(src) ?: last
+                val latest = sender.latestServerId(src)?.also { report.latest(it) } ?: last
                 if (latest <= last) {
                     report.phase("מעודכן — ממתין להודעות חדשות")
                     delay(60_000)
@@ -178,11 +181,12 @@ class JobRunner(
             for (msg in batch) {
                 ensureActive()
                 awaitNotPaused()
+                var sent = 0
                 val idx = wanted.indexOf(msg)
                 if (idx >= 0) {
                     if (window > 0) startPrefetch(this, wanted, idx, window, prefetch)
                     report.phase("מעתיק הודעה ${msg.id.serverId()}")
-                    deliver(sender, dst, msg, prefetch.remove(msg.id))
+                    if (deliver(sender, dst, msg, prefetch.remove(msg.id))) sent = 1
                 } else {
                     log.info(
                         "[$tag] דילוג על ${msg.id.serverId()} " +
@@ -190,7 +194,7 @@ class JobRunner(
                     )
                 }
                 last = msg.id.serverId()
-                store.saveProgress(job.id) { it.copy(lastId = last) }
+                store.saveProgress(job.id) { it.copy(lastId = last, copiedTotal = it.copiedTotal + sent) }
                 report.position(last)
             }
             prefetch.values.forEach { it.cancel() }
@@ -236,7 +240,7 @@ class JobRunner(
             var p = store.progress(job.id)
             report.position(p.lastId)
             if (p.waveEnd <= p.lastId) {
-                val latest = accounts[0].latestServerId(chats[0].source.id)
+                val latest = accounts[0].latestServerId(chats[0].source.id)?.also { report.latest(it) }
                 if (latest == null) {
                     report.phase("שגיאת רשת — מנסה שוב")
                     delay(30_000)
@@ -297,12 +301,13 @@ class JobRunner(
             if (inRange.isEmpty()) break
             for (msg in inRange) {
                 awaitNotPaused()
+                var sent = 0
                 if (msg.content.matches(job.mediaType)) {
                     if (isArabicSkipped(msg)) log.info("[$tag · ${ac.tag}] דילוג על ${msg.id.serverId()} (ערבית)")
-                    else deliver(ac, chats.target.id, msg, null)
+                    else if (deliver(ac, chats.target.id, msg, null)) sent = 1
                 }
                 last = msg.id.serverId()
-                store.saveProgress(job.id) { it.copy(workerLast = it.workerLast + (i to last)) }
+                store.saveProgress(job.id) { it.copy(workerLast = it.workerLast + (i to last), copiedTotal = it.copiedTotal + sent) }
             }
         }
     }

@@ -108,7 +108,7 @@ class TakeoutJobRunner(
 
         try {
             if (job.startFromId > 0) {
-                store.saveProgress(job.id) { Progress(lastId = job.startFromId - 1, viaTakeout = true, sourceId = source.id) }
+                store.saveProgress(job.id) { Progress(lastId = job.startFromId - 1, viaTakeout = true, sourceId = source.id).withTotalsOf(it) }
                 clearStartFrom()
                 log.info("[$tag] מתחיל מהודעה ${job.startFromId}")
             } else {
@@ -118,10 +118,11 @@ class TakeoutJobRunner(
                     reportStale(TakeoutDiagnostics.staleReason(sourceChanged, existing.viaTakeout, existing.lastId), existing)
                 }
                 if (sourceChanged) {
-                    store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id) }
+                    // Another source: its newest id is not the old one's.
+                    store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id).withTotalsOf(it).copy(latestId = 0) }
                     log.info("[$tag] מקור שונה (${existing.sourceId} → ${source.id}) — מאפס progress ומתחיל מההתחלה")
                 } else if (!existing.viaTakeout && existing.lastId > 0) {
-                    store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id) }
+                    store.saveProgress(job.id) { Progress(viaTakeout = true, sourceId = source.id).withTotalsOf(it) }
                     log.info("[$tag] מאפס progress ממצב רגיל (lastId=${existing.lastId}) — מתחיל מההתחלה")
                 } else if (existing.sourceId == 0L) {
                     store.saveProgress(job.id) { it.copy(sourceId = source.id) }
@@ -174,7 +175,7 @@ class TakeoutJobRunner(
             }
             if (batch.isEmpty()) {
                 val latest = try {
-                    w.copier.latestId(w.src).toLong()
+                    w.copier.latestId(w.src).toLong().also { report.latest(it) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -200,14 +201,15 @@ class TakeoutJobRunner(
                 coroutineContext.ensureActive()
                 awaitNotPaused()
                 val id = TakeoutCopier.idOf(m)
+                var sent = 0
                 if (m is MTPDmessage) {
                     val kind = TakeoutCopier.kindOf(m)
                     if (!kind.matches(job.mediaType)) log.info("[$tag] דילוג על $id (לא תואם לסינון)")
                     else if (job.skipArabic && containsArabic(m.vmessage)) log.info("[$tag] דילוג על $id (ערבית)")
-                    else deliver(w, m)
+                    else if (deliver(w, m)) sent = 1
                 }
                 last = id.toLong()
-                store.saveProgress(job.id) { it.copy(lastId = last, viaTakeout = true) }
+                store.saveProgress(job.id) { it.copy(lastId = last, viaTakeout = true, copiedTotal = it.copiedTotal + sent) }
                 report.position(last)
             }
         }
@@ -230,7 +232,7 @@ class TakeoutJobRunner(
             val resumed = p.waveEnd > p.lastId
             if (!resumed) {
                 val latest = try {
-                    workers[0].copier.latestId(workers[0].src).toLong()
+                    workers[0].copier.latestId(workers[0].src).toLong().also { report.latest(it) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -305,7 +307,7 @@ class TakeoutJobRunner(
                 log.info("[$tag] ממשיך סבב קיים: ${p.waveStart}–${p.waveEnd}")
                 if (!fastStartSent) {
                     try {
-                        latestKnown = workers[0].copier.latestId(workers[0].src).toLong()
+                        latestKnown = workers[0].copier.latestId(workers[0].src).toLong().also { report.latest(it) }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -409,18 +411,21 @@ class TakeoutJobRunner(
                 if (TakeoutDiagnostics.outsideSlice(id.toLong(), rs, re)) {
                     anomaly("outside-slice", acc, rs, re, firstId, last, last, sent, mapOf("id" to id.toString()))
                 }
+                var copied = 0
                 if (m is MTPDmessage && TakeoutCopier.kindOf(m).matches(job.mediaType)) {
                     if (job.skipArabic && containsArabic(m.vmessage)) {
                         log.info("[$tag·${w.account.tag}] דילוג על $id (ערבית)")
-                    } else {
-                        deliver(w, m)
+                    } else if (deliver(w, m)) {
+                        copied = 1
                     }
                 } else if (m is MTPDmessage) {
                     log.info("[$tag·${w.account.tag}] דילוג על $id (לא תואם לסינון)")
                 }
                 last = id.toLong()
                 sent++
-                store.saveProgress(job.id) { it.copy(workerLast = it.workerLast + (i to last), viaTakeout = true) }
+                store.saveProgress(job.id) {
+                    it.copy(workerLast = it.workerLast + (i to last), viaTakeout = true, copiedTotal = it.copiedTotal + copied)
+                }
             }
         }
         return SliceResult(last, firstId, sent, endedNormally)
@@ -428,7 +433,8 @@ class TakeoutJobRunner(
 
     // ── Delivery ───────────────────────────────────────────────────────────────
 
-    private suspend fun deliver(w: Worker, m: MTPDmessage) {
+    /** Returns true when the message was copied to the target. */
+    private suspend fun deliver(w: Worker, m: MTPDmessage): Boolean {
         val who = if (accounts.size > 1) "$tag·${w.account.tag}" else tag
         var attempts = 0
         while (true) {
@@ -438,34 +444,35 @@ class TakeoutJobRunner(
             }
             report.phase("מעתיק הודעה ${m.vid}")
             try {
-                when (val r = w.copier.send(w.src, w.dst, m, job.stripLinks)) {
+                return when (val r = w.copier.send(w.src, w.dst, m, job.stripLinks)) {
                     is TakeoutCopier.Sent.Ok -> {
                         report.copied()
                         if (r.messageId > 0) report.delivered(targetChatId, r.messageId.toLong())
                         log.success("[$who] הועתקה הודעה ${m.vid} (בלי הורדה)")
                         delay(Random.nextLong(1_400, 3_800))
+                        true
                     }
-                    is TakeoutCopier.Sent.Skipped -> log.info("[$who] דילוג על ${m.vid} (${r.why})")
+                    is TakeoutCopier.Sent.Skipped -> {
+                        log.info("[$who] דילוג על ${m.vid} (${r.why})")
+                        false
+                    }
                 }
-                return
             } catch (e: CancellationException) {
                 throw e
             } catch (e: TakeoutCopier.ForwardsRestricted) {
                 log.warn("[$who] טלגרם חוסם שליחה בלי הורדה של הודעה ${m.vid} (${e.reason}) — מוריד ומעלה מחדש")
                 reportReupload(w, m, e.reason, e.details, e.cause?.message ?: "")
-                reupload(w.account, m.vid)
-                return
+                return reupload(w.account, m.vid)
             } catch (e: RpcError) {
                 if (e.type != "CHAT_FORWARDS_RESTRICTED") {
-                    if (fail(m, who, "${e.code} ${e.type}", ++attempts)) return
+                    if (fail(m, who, "${e.code} ${e.type}", ++attempts)) return false
                     continue
                 }
                 log.warn("[$who] טלגרם חוסם שליחה בלי הורדה של הודעה ${m.vid} — מוריד ומעלה מחדש")
                 reportReupload(w, m, "restricted-without-check", emptyMap(), "${e.code} ${e.type}")
-                reupload(w.account, m.vid)
-                return
+                return reupload(w.account, m.vid)
             } catch (e: Exception) {
-                if (fail(m, who, e.message ?: e.javaClass.simpleName, ++attempts)) return
+                if (fail(m, who, e.message ?: e.javaClass.simpleName, ++attempts)) return false
             }
         }
     }
@@ -558,7 +565,8 @@ class TakeoutJobRunner(
     }
 
     /** Downloads message [id] of the source with TDLib and uploads it to [targetChatId]. */
-    private suspend fun reupload(account: AccountClient, id: Int) {
+    /** Returns true when the message was uploaded to the target. */
+    private suspend fun reupload(account: AccountClient, id: Int): Boolean {
         val msg = account.client.getMessage(sourceChatId, id.toLong() shl 20).getOrNull()
         val file = msg?.content?.mainFile()
         if (msg == null || file == null) {
@@ -570,7 +578,7 @@ class TakeoutJobRunner(
             )
             log.error("[$tag] הודעה $id לא נטענה ב-TDLib — לא ניתן להוריד אותה")
             report.failed()
-            return
+            return false
         }
         var fileId = 0
         var copy: File? = null
@@ -590,7 +598,7 @@ class TakeoutJobRunner(
                         problem("download-failed|$downloadError", "download for re-upload failed: $downloadError", SentryLevel.ERROR,
                             mapOf("message_id" to id.toString(), "size" to file.size.toString()))
                         report.failed()
-                        return
+                        return false
                     }
                     delay(5_000)
                     continue
@@ -606,7 +614,7 @@ class TakeoutJobRunner(
                     problem("reupload-unsupported|${msg.content.javaClass.simpleName}", "re-upload skipped, content type not supported",
                         SentryLevel.INFO, mapOf("message_id" to id.toString()))
                     log.info("[$tag] דילוג על $id (סוג שלא ניתן להעלות)")
-                    return
+                    return false
                 }
                 report.phase("מעלה הודעה $id")
                 when (val r = account.sendAndWait(targetChatId, content)) {
@@ -614,7 +622,7 @@ class TakeoutJobRunner(
                         report.copied()
                         report.delivered(targetChatId, r.messageId.serverId())
                         log.success("[$tag] הועתקה הודעה $id (הורדה והעלאה)")
-                        return
+                        return true
                     }
                     is SendOutcome.Failed -> {
                         if (r.retryAfterSec > 0) {
@@ -627,7 +635,7 @@ class TakeoutJobRunner(
                             problem("upload-failed|${r.code}|${r.message}", "re-upload failed: ${r.code} ${r.message}", SentryLevel.ERROR,
                                 mapOf("message_id" to id.toString()))
                             report.failed()
-                            return
+                            return false
                         }
                         delay(3_000L * attempts)
                     }
