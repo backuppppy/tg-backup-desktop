@@ -462,6 +462,61 @@ test('run time: back on the screen the clock shows the time of now at once, not 
   await expect(clock).toHaveText('⏱ רץ: 0:01:55');
 });
 
+/** Counts the page's one second intervals (only the jobs screen's run clock uses one): created and still active. */
+async function countIntervals(page) {
+  await page.addInitScript(() => {
+    const counts = { created: 0, active: new Set() };
+    window.__intervals = () => ({ created: counts.created, active: counts.active.size });
+    const set = window.setInterval;
+    const clear = window.clearInterval;
+    window.setInterval = function (fn, ms, ...rest) {
+      const id = set.call(this, fn, ms, ...rest);
+      if (ms === 1000) { counts.created += 1; counts.active.add(id); }
+      return id;
+    };
+    window.clearInterval = function (id) {
+      counts.active.delete(id);
+      return clear.call(this, id);
+    };
+  });
+  return () => page.evaluate(() => window.__intervals());
+}
+
+test('run time: the timer stops while the screen is away and runs again when it is back', async ({ page }) => {
+  await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
+  const intervals = await countIntervals(page);
+  await fakeStream(page, {
+    jobs: [job({ id: 'w1', name: 'נעלמת' })],
+    statuses: { w1: status({ running: true, phase: 'מעתיק', runMillis: 1000, runningSince: Date.now(), lastId: 3, latestId: 9 }) },
+  });
+  await page.goto('/#jobs');
+  await expect(card(page, 'נעלמת').locator('.run-time')).toBeVisible();
+  await expect.poll(intervals).toEqual({ created: 1, active: 1 });
+  await page.goto('/#accounts');
+  await expect(page.locator('[data-screen="accounts"]')).toBeVisible();
+  await expect.poll(intervals).toEqual({ created: 1, active: 0 });
+  await page.waitForTimeout(1500);
+  expect(await intervals()).toEqual({ created: 1, active: 0 });
+  await page.goto('/#jobs');
+  await expect.poll(intervals).toEqual({ created: 2, active: 1 });
+});
+
+test('run time: the timer stops once no shown job runs, and the clock stays at the saved time', async ({ page }) => {
+  await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
+  const intervals = await countIntervals(page);
+  const jobs = [job({ id: 'e1', name: 'נגמרת' })];
+  // The snapshot shows it running; the statuses event right after it shows it stopped with its time saved.
+  await fakeStream(page, {
+    jobs, statuses: { e1: status({ running: true, phase: 'מעתיק', runMillis: 1000, runningSince: Date.now(), lastId: 3, latestId: 9 }) },
+  }, { skew: 0, statuses: { e1: status({ runMillis: 4000, lastId: 3, latestId: 9 }) } });
+  await page.goto('/#jobs');
+  const clock = card(page, 'נגמרת').locator('.run-time');
+  await expect(clock).toHaveText('⏱ רץ: 0:00:04');
+  await expect.poll(intervals).toEqual({ created: 1, active: 0 });
+  await page.waitForTimeout(1500);
+  await expect(clock).toHaveText('⏱ רץ: 0:00:04');
+});
+
 for (const skew of [-60_000, 60_000]) {
   test(`run time on the server clock: a server clock ${skew / 1000} s from the page's still shows the right time, moving each second`, async ({ page }) => {
     await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
