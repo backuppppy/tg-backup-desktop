@@ -58,15 +58,25 @@ function focusedButton(list) {
   return { jobId: scope === list ? null : scope.dataset.jobId, text: el.textContent, index: buttonsIn(scope, list).indexOf(el) };
 }
 
-/** The same button after the list was drawn again; when its text changed (⏸ השהה → ▶ המשך), the one in its place. */
+/** A card button that only changes its text: each text and the other one it becomes, in the same place. */
+const SWAPPED = {
+  '⏸ השהה': '▶ המשך', '▶ המשך': '⏸ השהה',
+  '▶ הפעל': '⏹ עצור', '⏹ עצור': '▶ הפעל',
+};
+
+/**
+ * The same button after the list was drawn again; when its text changed (⏸ השהה → ▶ המשך), the one in its place.
+ * A button that became disabled (ערוך once the job runs) passes the focus to no other button.
+ */
 function restoreFocus(list, focus) {
   if (!focus) return;
   const scope = focus.jobId === null ? list
     : [...list.querySelectorAll('[data-job-id]')].find((c) => c.dataset.jobId === focus.jobId);
   if (!scope) return;
   const buttons = buttonsIn(scope, list);
+  const inPlace = buttons[focus.index];
   const target = buttons.find((b) => b.textContent === focus.text && !b.disabled)
-    ?? buttons.slice(focus.index).find((b) => !b.disabled);
+    ?? (inPlace && !inPlace.disabled && inPlace.textContent === SWAPPED[focus.text] ? inPlace : null);
   target?.focus({ preventScroll: true });
 }
 

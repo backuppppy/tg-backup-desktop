@@ -387,6 +387,44 @@ test('the keyboard focus on a card button survives the list being drawn again', 
   }
 });
 
+test('the focus follows a button that changed its text (⏸ השהה ↔ ▶ המשך), not one that became disabled', async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const name = `job-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  const id = await addJob(page.request, { name, accountIds: [accId] });
+  const focused = () => page.evaluate((jobId) => {
+    const el = document.activeElement;
+    return el?.closest('[data-job-id]')?.dataset.jobId === jobId ? el.textContent : null;
+  }, id);
+  try {
+    await open(page);
+    const c = card(page, name);
+    // ערוך becomes disabled when the job starts: the focus does not move to ⏸ השהה in its place.
+    const edit = c.getByRole('button', { name: 'ערוך' });
+    await edit.focus();
+    await expect(edit).toBeFocused();
+    await page.request.post(`/api/jobs/${id}/start`);
+    await expect(edit).toBeDisabled();
+    await expect(c.getByRole('button', { name: '⏸ השהה' })).toBeVisible();
+    expect(await focused()).toBeNull();
+    // The same button with its other text keeps the focus, both ways.
+    await c.getByRole('button', { name: '⏸ השהה' }).click();
+    await expect(c.getByRole('button', { name: '▶ המשך' })).toBeVisible();
+    await expect.poll(focused).toBe('▶ המשך');
+    await c.getByRole('button', { name: '▶ המשך' }).click();
+    await expect(c.getByRole('button', { name: '⏸ השהה' })).toBeVisible();
+    await expect.poll(focused).toBe('⏸ השהה');
+    // ⏹ עצור becomes ▶ הפעל in its place.
+    await c.getByRole('button', { name: '⏹ עצור' }).click();
+    await expect(c.getByRole('button', { name: '▶ הפעל' })).toBeVisible();
+    await expect.poll(focused).toBe('▶ הפעל');
+  } finally {
+    await page.request.post(`/api/jobs/${id}/stop`);
+    await page.request.delete(`/api/jobs/${id}`);
+    await page.request.delete(`/api/accounts/${accId}`);
+  }
+});
+
 test("a start message id beyond what a number keeps exactly is refused: שמור stays disabled", async ({ page }) => {
   const acc = `acc-${uid()}`;
   const accId = await addAccount(page.request, acc);
