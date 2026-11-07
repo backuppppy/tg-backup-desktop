@@ -2,6 +2,7 @@
 // JobDialog, and the delete and reset dialogs. Texts and enable rules are the Android ones.
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
+import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionText } from '../lib/jobsFormat.js';
 
 const MEDIA_TYPES = [
   ['VIDEO_DOC', 'וידאו + קבצים'],
@@ -19,23 +20,33 @@ const NEW_JOB = {
   id: '', name: '', source: '', target: '', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [],
   startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false,
 };
-const IDLE = { running: false, paused: false, phase: '', lastId: 0, sourceTitle: '', isProtected: false, copied: 0, failed: 0, lastLink: null, lastTargetLink: null };
+const IDLE = { running: false, paused: false, phase: '', lastId: 0, sourceTitle: '', isProtected: false, copied: 0, failed: 0, lastLink: null, lastTargetLink: null,
+  copiedTotal: 0, runMillis: 0, runningSince: 0, latestId: 0 };
 
 const blank = (s) => !s || !s.trim();
 const report = (e) => toast(e.message);
 const post = (path) => api('POST', path).catch(report);
 
 let view = null;
+/** The one run time timer of the screen (a second apart), while a shown job's clock runs. */
+let tick = null;
+/** Jobs whose source's latest id was asked this page load: once each, not on every render. */
+const askedLatest = new Set();
 
 export function render(root, state) {
   if (!view || view.root !== root || !root.contains(view.list)) {
-    view = { root, list: h('div', { class: 'jobs' }), shown: null };
+    view = { root, list: h('div', { class: 'jobs' }), shown: null, clocks: [] };
     root.replaceChildren(view.list);
   }
   const { accounts = [], jobs = [], statuses = {} } = state;
   const shown = view.shown;
-  if (shown && shown.accounts === accounts && shown.jobs === jobs && shown.statuses === statuses) return;
+  if (shown && shown.accounts === accounts && shown.jobs === jobs && shown.statuses === statuses) {
+    schedule();
+    return;
+  }
   view.shown = { accounts, jobs, statuses };
+  view.clocks = [];
+  askLatest(jobs, statuses);
   const focus = focusedButton(view.list);
   view.list.replaceChildren(...[
     header(statuses),
@@ -44,6 +55,49 @@ export function render(root, state) {
     h('button', { type: 'button', class: 'full', onclick: () => jobDialog(NEW_JOB, state) }, '➕ הוסף משימה'),
   ].flat().filter(Boolean));
   restoreFocus(view.list, focus);
+  schedule();
+}
+
+/** The shell took the screen out of the view: no run time timer while it is away. */
+export function goAway() {
+  if (tick) clearInterval(tick);
+  tick = null;
+}
+
+/** The shell put the screen back: the render that follows starts the timer again. */
+export function comeBack() {
+  goAway();
+}
+
+/** The run time lines of now, text only: the cards are not drawn again (focus and selection stay). */
+function updateClocks() {
+  const now = Date.now();
+  for (const { el, status } of view.clocks) el.textContent = runTimeText(status, now);
+}
+
+/** One interval while the screen is in view and a shown job's clock runs; none otherwise. */
+function schedule() {
+  const runs = view && view.root.isConnected && view.clocks.some(({ status }) => (Number(status.runningSince) || 0) > 0);
+  if (!runs) {
+    goAway();
+    return;
+  }
+  if (tick) return;
+  tick = setInterval(() => {
+    if (!view || !view.root.isConnected) goAway();
+    else updateClocks();
+  }, 1000);
+}
+
+const runTimeText = (status, now) => `⏱ רץ: ${formatRunTime(runMillisAt(status, now))}`;
+
+/** A shown job without its source's latest id asks the server to read it, once a page load; it comes by SSE. */
+function askLatest(jobs, statuses) {
+  for (const job of jobs) {
+    if ((Number(statuses[job.id]?.latestId) || 0) > 0 || askedLatest.has(job.id)) continue;
+    askedLatest.add(job.id);
+    api('POST', `/api/jobs/${encodeURIComponent(job.id)}/latest`).catch(() => {});
+  }
 }
 
 /** The scope of a button in the list: its job card, or else the list itself (the all-jobs and add buttons). */
@@ -83,10 +137,10 @@ function restoreFocus(list, focus) {
 function header(statuses) {
   const all = Object.values(statuses);
   const active = all.filter((s) => s.running);
-  const total = all.reduce((n, s) => n + s.copied, 0);
+  const total = formatCount(all.reduce((n, s) => n + (Number(s.copiedTotal) || 0), 0));
   const summary = active.length === 0
-    ? `⚪ עצור · הועתקו בהרצה זו: ${total}`
-    : `🟢 ${active.length} משימות פעילות · הועתקו בהרצה זו: ${total}`;
+    ? `⚪ עצור · הועתקו: ${total}`
+    : `🟢 ${active.length} משימות פעילות · הועתקו: ${total}`;
   const startAll = () => api('POST', '/api/jobs/all/start')
     .then((r) => { if (r.errors?.length) toast(r.errors.join('\n')); })
     .catch(report);
@@ -145,6 +199,13 @@ function jobCard(job, status, accounts, state) {
     ]
     : [h('button', { type: 'button', onclick: () => post(`${base}/start`) }, '▶ הפעל')];
 
+  const position = positionText(status.lastId, status.latestId);
+  let clock = null;
+  if (runTimeShown(status)) {
+    clock = h('div', { class: 'run-time' }, runTimeText(status, Date.now()));
+    view.clocks.push({ el: clock, status });
+  }
+
   return h('section', { class: `card job-card${running ? ' running' : ''}`, 'data-job-id': job.id },
     h('h3', { class: 'job-title' }, `${icon} ${blank(job.name) ? `משימה ${job.id}` : job.name}`),
     // RTL as in Android: source on the right, the arrow toward the target; each id keeps its own direction.
@@ -156,8 +217,9 @@ function jobCard(job, status, accounts, state) {
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
     running ? maybeLink('phase', status.lastTargetLink, status.phase) : null,
-    h('div', {}, `הועתקו בהרצה זו: ${status.copied}${status.failed > 0 ? ` · נכשלו: ${status.failed}` : ''}`),
-    status.lastId > 0 ? maybeLink('last', status.lastLink, `הודעה אחרונה שטופלה: ${status.lastId}`) : null,
+    h('div', { class: 'copied' }, `הועתקו: ${formatCount(status.copiedTotal)}${status.failed > 0 ? ` · נכשלו: ${status.failed}` : ''}`),
+    position ? maybeLink('last', status.lastLink, position) : null,
+    clock,
     h('div', { class: 'row' },
       actions,
       h('button', { type: 'button', class: 'outlined', disabled: running, onclick: () => jobDialog(job, state) }, 'ערוך'),

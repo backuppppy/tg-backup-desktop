@@ -139,6 +139,26 @@ for (const tab of TABS) {
   });
 }
 
+// Plan 3b section b, at every width (390, 1100, 1920) and the same on each: the fixture's run totals on the cards.
+test('the run totals on the fixture cards: copied, position and run time, inside their cards', async ({ page }) => {
+  const fx = await fixtureState(page.request);
+  await openWith(page, fx.real, 'jobs', { mode: 'single', right: 'jobs', left: 'log', active: 'right' });
+  const one = page.locator('.job-card[data-job-id="longjob1"]');
+  const two = page.locator('.job-card[data-job-id="longjob2"]');
+  await expect(one).toContainText('הועתקו: 12,340');
+  await expect(one.locator('.last')).toHaveText('אוחז ב-id 45,210 מתוך 50,000');
+  await expect(one.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
+  await expect(two).toContainText('הועתקו: 1,234,567');
+  await expect(two.locator('.last')).toHaveText('אוחז ב-id 987,654');
+  await expect(two.locator('.run-time')).toHaveText('⏱ רץ: 25:01:01');
+  await expect(page.locator('.jobs-summary')).toContainText('הועתקו: 1,246,907');
+  for (const c of [one, two]) {
+    await expectFits(c.locator('.last'), c);
+    await expectFits(c.locator('.run-time'), c);
+  }
+  await expectNoOverflow(page);
+});
+
 test('the long job in its edit dialog and in the delete question: everything inside the window', async ({ page }) => {
   const fx = await fixtureState(page.request);
   await openWith(page, fx.real, 'jobs', { mode: 'single', right: 'jobs', left: 'log', active: 'right' });

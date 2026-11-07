@@ -67,7 +67,7 @@ test('addJobFlow: שמור stays disabled until source, target and an account ar
   await expect(c.locator('.job-title')).toHaveText(`⚪ ${name}`);
   await expect(c).toContainText('@src_chan  ←  @dst_chan');
   await expect(c).toContainText(`וידאו + קבצים · מסודר · חשבונות: ${acc}`);
-  await expect(c).toContainText('הועתקו בהרצה זו: 0');
+  await expect(c).toContainText('הועתקו: 0');
   const saved = (await state(page.request)).jobs.find((j) => j.name === name);
   expect(saved.perMinuteLimit).toBe(25);
   expect(saved.stripLinks).toBe(true);
@@ -149,7 +149,7 @@ test('startShowsRunningCard: ▶ הפעל becomes ⏹ עצור on a surfaceVaria
     await expect(c.getByRole('button', { name: 'אפס התקדמות' })).toBeDisabled();
     await expect(c.getByRole('button', { name: 'מחק' })).toBeDisabled();
     await expect(c.locator('.job-title')).toHaveText(`🟢 ${name}`);
-    await expect(page.locator('.jobs-summary')).toHaveText(/^🟢 \d+ משימות פעילות · הועתקו בהרצה זו: \d+$/);
+    await expect(page.locator('.jobs-summary')).toHaveText(/^🟢 \d+ משימות פעילות · הועתקו: [\d,]+$/);
     await expect(page.getByRole('button', { name: '⏹ עצור הכל' })).toBeEnabled();
     await expect(page.getByRole('button', { name: '⏸ השהה הכל' })).toBeEnabled();
     await c.getByRole('button', { name: '⏸ השהה' }).click();
@@ -239,7 +239,8 @@ async function fakeStream(page, patch) {
 
 const status = (over) => ({
   running: false, paused: false, phase: '', lastId: 0, sourceChatId: 0, sourceTitle: '', isProtected: false,
-  copied: 0, failed: 0, targetChatId: 0, lastTargetId: 0, lastLink: null, lastTargetLink: null, ...over,
+  copied: 0, failed: 0, targetChatId: 0, lastTargetId: 0, lastLink: null, lastTargetLink: null,
+  copiedTotal: 0, runMillis: 0, runningSince: 0, latestId: 0, ...over,
 });
 const job = (over) => ({
   id: 'x', name: '', source: 's', target: 't', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [],
@@ -255,14 +256,14 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
       job({ id: 'f3', name: 'שלישית' }),
     ],
     statuses: {
-      f1: status({ running: true, paused: true, phase: 'מעתיק', copied: 3, failed: 2, lastId: 77,
+      f1: status({ running: true, paused: true, phase: 'מעתיק', copied: 3, copiedTotal: 3, failed: 2, lastId: 77,
         lastLink: 'https://t.me/c/100/77', lastTargetLink: 'https://t.me/c/200/5', sourceTitle: 'ערוץ מקור' }),
-      f2: status({ running: true, phase: 'ממתין', copied: 4, isProtected: true }),
+      f2: status({ running: true, phase: 'ממתין', copied: 4, copiedTotal: 4, isProtected: true }),
       f3: status({ lastId: 9 }),
     },
   });
   await page.goto('/#jobs');
-  await expect(page.locator('.jobs-summary')).toHaveText('🟢 2 משימות פעילות · הועתקו בהרצה זו: 7');
+  await expect(page.locator('.jobs-summary')).toHaveText('🟢 2 משימות פעילות · הועתקו: 7');
   await expect(page.getByText("קודם הוסף חשבון בלשונית 'חשבונות'.")).toBeVisible();
   await expect(page.getByRole('button', { name: '▶ הפעל הכל' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '⏸ השהה הכל' })).toBeEnabled();
@@ -274,12 +275,12 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c1).toContainText('ערוץ מקור  ←  t');
   await expect(c1).toContainText('הכל · מהיר · 📡 בלי הורדה · חשבונות: —');
   await expect(c1).toContainText('📡 קריאה דרך סשן הייצוא ושליחה בלי הורדה');
-  await expect(c1).toContainText('הועתקו בהרצה זו: 3 · נכשלו: 2');
+  await expect(c1).toContainText('הועתקו: 3 · נכשלו: 2');
   const phase = c1.getByRole('link', { name: 'מעתיק' });
   await expect(phase).toHaveAttribute('href', 'https://t.me/c/200/5');
   await expect(phase).toHaveAttribute('target', '_blank');
   await expect(phase).toHaveAttribute('rel', 'noopener');
-  const last = c1.getByRole('link', { name: 'הודעה אחרונה שטופלה: 77' });
+  const last = c1.getByRole('link', { name: 'אוחז ב-id 77' });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(last).toHaveAttribute('target', '_blank');
   await expect(c1.getByRole('button', { name: '▶ המשך' })).toBeVisible();
@@ -292,7 +293,7 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c2.getByRole('button', { name: '⏸ השהה' })).toBeVisible();
 
   const c3 = card(page, 'שלישית');
-  await expect(c3.getByText('הודעה אחרונה שטופלה: 9')).toBeVisible();
+  await expect(c3.getByText('אוחז ב-id 9')).toBeVisible();
   await expect(c3.getByRole('link')).toHaveCount(0);
   await expect(c3).not.toContainText('נכשלו');
 });
@@ -300,11 +301,116 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
 test('with nothing running, the all-jobs buttons but ▶ הפעל הכל are disabled', async ({ page }) => {
   await fakeStream(page, { jobs: [job({ id: 'g1', name: 'עצורה' })], statuses: {} });
   await page.goto('/#jobs');
-  await expect(page.locator('.jobs-summary')).toHaveText('⚪ עצור · הועתקו בהרצה זו: 0');
+  await expect(page.locator('.jobs-summary')).toHaveText('⚪ עצור · הועתקו: 0');
   await expect(page.getByRole('button', { name: '▶ הפעל הכל' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '⏸ השהה הכל' })).toBeDisabled();
   await expect(page.getByRole('button', { name: '▶ המשך הכל' })).toBeDisabled();
   await expect(page.getByRole('button', { name: '⏹ עצור הכל' })).toBeDisabled();
+});
+
+// Plan 3b section b: the run totals. The copied count and the run time are the job's totals (kept over a stop), the
+// position is the last handled id of the source's latest one.
+test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ רץ, and the summary sums the totals', async ({ page }) => {
+  await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
+  await fakeStream(page, {
+    jobs: [
+      job({ id: 's1', name: 'מלאה' }),
+      job({ id: 's2', name: 'בלי אחרון' }),
+      job({ id: 's3', name: 'רק אחרון' }),
+      job({ id: 's4', name: 'חדשה' }),
+    ],
+    statuses: {
+      s1: status({ copiedTotal: 12340, copied: 5, failed: 2, lastId: 45210, latestId: 50000, runMillis: 8045000,
+        lastLink: 'https://t.me/c/100/45210' }),
+      s2: status({ copiedTotal: 1234567, lastId: 987654, runMillis: 90061000 }),
+      s3: status({ latestId: 50000 }),
+    },
+  });
+  await page.goto('/#jobs');
+  await expect(page.locator('.jobs-summary')).toHaveText('⚪ עצור · הועתקו: 1,246,907');
+
+  const c1 = card(page, 'מלאה');
+  await expect(c1).toContainText('הועתקו: 12,340 · נכשלו: 2');
+  const last = c1.getByRole('link', { name: 'אוחז ב-id 45,210 מתוך 50,000', exact: true });
+  await expect(last).toHaveAttribute('href', 'https://t.me/c/100/45210');
+  await expect(c1.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
+
+  const c2 = card(page, 'בלי אחרון');
+  await expect(c2).toContainText('הועתקו: 1,234,567');
+  await expect(c2).not.toContainText('נכשלו');
+  await expect(c2.locator('.last')).toHaveText('אוחז ב-id 987,654');
+  await expect(c2.locator('.run-time')).toHaveText('⏱ רץ: 25:01:01');
+
+  const c3 = card(page, 'רק אחרון');
+  await expect(c3.locator('.last')).toHaveText('אוחז ב-id 0 מתוך 50,000');
+  await expect(c3.locator('.run-time')).toHaveCount(0);
+
+  // A job with no status yet: nothing copied, no position, no run time.
+  const c4 = card(page, 'חדשה');
+  await expect(c4).toContainText('הועתקו: 0');
+  await expect(c4.locator('.last')).toHaveCount(0);
+  await expect(c4.locator('.run-time')).toHaveCount(0);
+
+  // A stopped job's clock does not move.
+  await page.waitForTimeout(1500);
+  await expect(c1.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
+});
+
+test('run time: the clock moves once a second while running, without drawing the card again, and after the screen comes back', async ({ page }) => {
+  await page.route('**/api/jobs/*/latest', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' }));
+  // The page runs on this machine's clock, as the server does.
+  const since = Date.now() - 5000;
+  await fakeStream(page, {
+    jobs: [job({ id: 't1', name: 'רצה' }), job({ id: 't2', name: 'מושהית' })],
+    statuses: {
+      t1: status({ running: true, phase: 'מעתיק', runMillis: 60000, runningSince: since, lastId: 3, latestId: 9 }),
+      t2: status({ running: true, paused: true, phase: 'מושהה', runMillis: 7000, lastId: 1, latestId: 9 }),
+    },
+  });
+  await page.goto('/#jobs');
+  const c1 = card(page, 'רצה');
+  const clock = c1.locator('.run-time');
+  await expect(clock).toHaveText(/^⏱ רץ: 0:01:0[5-9]$/);
+  const seconds = async () => Number((await clock.textContent()).split(':').pop());
+  // The card is not drawn again: a focused button keeps its focus, the same element stays.
+  await c1.getByRole('button', { name: '⏸ השהה' }).focus();
+  await c1.evaluate((el) => { el.dataset.marked = '1'; });
+  const first = await seconds();
+  await expect.poll(seconds, { timeout: 4000 }).toBeGreaterThanOrEqual(first + 2);
+  await expect(c1).toHaveAttribute('data-marked', '1');
+  await expect(c1.getByRole('button', { name: '⏸ השהה' })).toBeFocused();
+  // A paused job (runningSince 0) stays at its saved time.
+  await expect(card(page, 'מושהית').locator('.run-time')).toHaveText('⏱ רץ: 0:00:07');
+
+  // Away and back: the clock goes on.
+  await page.goto('/#accounts');
+  await expect(page.locator('[data-screen="accounts"]')).toBeVisible();
+  await page.goto('/#jobs');
+  await expect(clock).toBeVisible();
+  const back = await seconds();
+  await expect.poll(seconds, { timeout: 4000 }).toBeGreaterThan(back);
+});
+
+test('the latest id is asked once a page load for each job shown without one', async ({ page }) => {
+  const asked = [];
+  await page.route('**/api/jobs/*/latest', (route) => {
+    asked.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"latestId":0}' });
+  });
+  await fakeStream(page, {
+    jobs: [job({ id: 'u1', name: 'בלי' }), job({ id: 'u2', name: 'עם' }), job({ id: 'u 3', name: 'רווח' })],
+    statuses: { u1: status({ lastId: 4 }), u2: status({ lastId: 4, latestId: 10 }) },
+  });
+  await page.goto('/#jobs');
+  await expect(page.locator('.job-card')).toHaveCount(3);
+  await expect.poll(() => asked.length).toBe(2);
+  // Drawn again (away and back, a focus move): no more requests.
+  await page.goto('/#accounts');
+  await expect(page.locator('[data-screen="accounts"]')).toBeVisible();
+  await page.goto('/#jobs');
+  await expect(page.locator('.job-card')).toHaveCount(3);
+  await page.waitForTimeout(500);
+  expect(asked.sort()).toEqual(['POST /api/jobs/u%203/latest', 'POST /api/jobs/u1/latest']);
 });
 
 test('the dialog with no accounts shows the warning, and via-takeout shows its help text', async ({ page }) => {
@@ -355,7 +461,7 @@ test('a link that is not http(s) is shown as plain text', async ({ page }) => {
   });
   await page.goto('/#jobs');
   const c = card(page, 'סכמה');
-  await expect(c.getByText('הודעה אחרונה שטופלה: 5')).toBeVisible();
+  await expect(c.getByText('אוחז ב-id 5')).toBeVisible();
   await expect(c.getByText('שלב')).toBeVisible();
   await expect(page.locator('a[href^="javascript" i]')).toHaveCount(0);
   await expect(c.getByRole('link')).toHaveCount(0);
