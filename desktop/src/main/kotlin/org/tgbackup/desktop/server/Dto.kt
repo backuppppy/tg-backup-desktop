@@ -10,6 +10,7 @@ import org.tgbackup.app.data.MediaType
 import org.tgbackup.app.engine.JobStatus
 import org.tgbackup.app.engine.LogEntry
 import org.tgbackup.app.export.ExportPrefs
+import org.tgbackup.desktop.DesktopPrefsData
 import org.tgbackup.app.export.RunningExport
 import org.tgbackup.app.tg.AccountClient
 import org.tgbackup.app.tg.AuthUi
@@ -212,6 +213,8 @@ data class SnapshotDto(
     val chatsLoading: Map<String, Int> = emptyMap(),
     /** The server's clock (epoch ms) when this was built: the page runs the jobs' clocks on the server's time. */
     val serverNow: Long = 0,
+    /** Settings: start with Windows and keep awake (also `GET /api/desktop-prefs`). */
+    val desktopPrefs: DesktopPrefsData = DesktopPrefsData(),
 )
 
 /** The `statuses` event: the jobs' statuses and the server's clock (epoch ms) when it was sent. */

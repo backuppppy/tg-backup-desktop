@@ -30,6 +30,7 @@ import org.tgbackup.app.export.PasswordOrigin
 import org.tgbackup.app.export.PasswordRequest
 import org.tgbackup.app.export.RunningExport
 import org.tgbackup.desktop.DesktopApp
+import org.tgbackup.desktop.DesktopPrefsData
 import org.tgbackup.export.ExportState
 import java.security.SecureRandom
 import java.util.IdentityHashMap
@@ -119,6 +120,7 @@ class Events(private val app: DesktopApp) {
             log = app.log.entries.value.map { it.toDto() },
             chatsLoading = HashMap(chatsLoading),
             serverNow = System.currentTimeMillis(),
+            desktopPrefs = app.prefs.value.value,
         )
     }
 
@@ -181,6 +183,7 @@ class Events(private val app: DesktopApp) {
         }
         forward("accountStates", ListSerializer(AccountStateDto.serializer()), accountStates, snap.accountStates)
         forward("exportPrefs", ExportPrefsDto.serializer(), prefs, snap.exportPrefs)
+        forward("desktopPrefs", DesktopPrefsData.serializer(), app.prefs.value, snap.desktopPrefs)
         forward("export", RunningExportDto.serializer().nullable, export, snap.runningExport)
         // `passwords` is the list; `password` (its oldest) is kept for pages that read only that.
         launch {

@@ -3,6 +3,8 @@ package org.tgbackup.desktop
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -16,6 +18,7 @@ import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopAppTest {
@@ -81,6 +84,67 @@ class DesktopAppTest {
         app.start()
         app.close()
         app.close()
+    }
+
+    @Test
+    fun keepAwakeOffReleasesTheGuardWhileWorkRuns() = runBlocking {
+        val power = Recorder()
+        val guard = SleepGuard(power)
+        val jobs = MutableStateFlow(false)
+        val export = MutableStateFlow(false)
+        val keepAwake = MutableStateFlow(true)
+        val seen = MutableStateFlow(false)
+        val collector = launch(Dispatchers.Default) {
+            sleepSignal(jobs, export, keepAwake).collect { guard.update(it); seen.value = it }
+        }
+        suspend fun expect(v: Boolean) = withTimeout(5_000) { while (seen.value != v) yield() }
+        jobs.value = true
+        expect(true)
+        keepAwake.value = false
+        expect(false)
+        export.value = true
+        repeat(20) { yield() }
+        keepAwake.value = true
+        expect(true)
+        jobs.value = false
+        export.value = false
+        expect(false)
+        collector.cancel()
+        assertEquals(listOf(true, false, true, false), power.calls.toList())
+    }
+
+    @Test
+    fun keepAwakeOffWithNothingRunningNeverAsks() = runBlocking {
+        val values = sleepSignal(MutableStateFlow(true), MutableStateFlow(true), MutableStateFlow(false))
+        assertEquals(false, withTimeout(5_000) { values.first() })
+    }
+
+    /** A Run value in memory. */
+    private class FakeRunKey : RunKey {
+        @Volatile var value: String? = null
+        override fun get(): String? = value
+        override fun set(command: String) { value = command }
+        override fun remove() { value = null }
+    }
+
+    @Test
+    fun autostartFollowsThePrefsFromStart() {
+        val dir = dataDir()
+        Files.createDirectories(dir)
+        DesktopPrefs(dir.toFile()).update { it.copy(autostart = true) }
+        val key = FakeRunKey()
+        val app = DesktopApp(dir, Recorder(), Autostart(key, "C:\\TG\\TGBackup.exe"))
+        try {
+            assertTrue(app.prefs.value.value.autostart)
+            app.start()
+            runBlocking { withTimeout(5_000) { while (key.value == null) yield() } }
+            assertEquals("\"C:\\TG\\TGBackup.exe\" --minimized", key.value)
+            app.prefs.update { it.copy(autostart = false) }
+            runBlocking { withTimeout(5_000) { while (key.value != null) yield() } }
+            assertNull(key.value)
+        } finally {
+            app.close()
+        }
     }
 
     @Test

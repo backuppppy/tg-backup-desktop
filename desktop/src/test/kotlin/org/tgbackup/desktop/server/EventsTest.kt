@@ -209,6 +209,19 @@ class EventsTest {
     }
 
     @Test
+    fun desktopPrefsChangeSendsItsEvent() = withServer { client ->
+        client.events { sse ->
+            val (name, snap) = sse.next()
+            assertEquals("snapshot", name)
+            assertEquals(true, snap.jsonObject["desktopPrefs"]!!.jsonObject["keepAwake"]!!.jsonPrimitive.boolean)
+            app.prefs.update { it.copy(keepAwake = false) }
+            val prefs = sse.nextNamed("desktopPrefs").jsonObject
+            assertEquals(false, prefs["keepAwake"]!!.jsonPrimitive.boolean)
+            assertEquals(false, prefs["autostart"]!!.jsonPrimitive.boolean)
+        }
+    }
+
+    @Test
     fun logIsIncremental() = withServer { client ->
         client.events { sse ->
             assertEquals("snapshot", sse.next().first)

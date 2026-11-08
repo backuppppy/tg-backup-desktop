@@ -5,7 +5,7 @@ export const LOG_MAX = 500;
 /** A statuses event moves the clock offset only past this much (ms): the jitter of the stream's delivery would shake the run clocks. */
 export const OFFSET_JITTER_MS = 1000;
 
-const EVENTS = ['snapshot', 'config', 'statuses', 'accountStates', 'exportPrefs', 'export', 'passwords', 'password', 'log', 'chatsProgress'];
+const EVENTS = ['snapshot', 'config', 'statuses', 'accountStates', 'exportPrefs', 'desktopPrefs', 'export', 'passwords', 'password', 'log', 'chatsProgress'];
 
 const capLog = (list) => (list.length > LOG_MAX ? list.slice(list.length - LOG_MAX) : list);
 
@@ -38,6 +38,8 @@ export function reduce(state, name, data, receivedAt = Date.now()) {
       return { ...state, accountStates: data };
     case 'exportPrefs':
       return { ...state, exportPrefs: data };
+    case 'desktopPrefs':
+      return { ...state, desktopPrefs: data };
     case 'export':
       return { ...state, runningExport: data };
     case 'passwords':

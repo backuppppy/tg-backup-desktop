@@ -44,6 +44,7 @@ import kotlin.time.Duration.Companion.seconds
 class DesktopApp(
     dataDir: Path,
     power: PowerRequests = PowerRequests.forCurrentOs(),
+    private val autostart: Autostart = Autostart.forCurrentOs(),
 ) : AutoCloseable {
 
     private val dir = Files.createDirectories(dataDir).toFile()
@@ -56,6 +57,8 @@ class DesktopApp(
     val accounts = AccountManager(dir, log)
     val exports = ExportManager(dir, accounts, log)
     val jobs = JobManager(store, accounts, log, scope) { exports }
+    /** Start with Windows and keep awake (Settings). */
+    val prefs = DesktopPrefs(dir)
 
     /** Mirrors `App.onCreate()` (without Sentry and the foreground service) plus the `jobs.restore()` call. */
     fun start() {
@@ -68,7 +71,7 @@ class DesktopApp(
             store.config.map { it.accounts }.distinctUntilChanged().collect { accounts.sync(it) }
         }
 
-        // Keep the PC awake while a job or an export runs. `exports.running` keeps a finished export until it
+        // Keep the PC awake while a job or an export runs, unless switched off in Settings. `exports.running` keeps a finished export until it
         // is dismissed, so the signal follows the export job's completion (activeWhileRunning). Power calls can block (up to 5 s) or throw:
         // they run on IO and never break the collector.
         val exportActive = exports.running.flatMapLatest { running ->
@@ -79,9 +82,16 @@ class DesktopApp(
             }
         }
         scope.launch(Dispatchers.IO) {
-            combine(jobs.anyRunning, exportActive) { r, e -> r || e }
-                .distinctUntilChanged()
+            sleepSignal(jobs.anyRunning, exportActive, prefs.value.map { it.keepAwake })
                 .collect { active -> updateSleepGuard(active) }
+        }
+
+        // The Run value follows the switch, now and on every change (a moved exe is rewritten at launch).
+        scope.launch(Dispatchers.IO) {
+            prefs.value.map { it.autostart }.distinctUntilChanged().collect { on ->
+                runCatching { autostart.apply(on) }
+                    .onFailure { log.warn("עדכון ההפעלה עם Windows נכשל: ${it.message}") }
+            }
         }
 
         // The source's latest id of every job, read without running it: whenever an account of the job logs in
@@ -140,6 +150,10 @@ class DesktopApp(
             .onFailure { log.warn("בקשת מניעת שינה נכשלה: ${it.message}") }
     }
 }
+
+/** Whether to keep the PC awake: a job or an export runs, and the Settings switch is on. */
+internal fun sleepSignal(jobs: Flow<Boolean>, export: Flow<Boolean>, keepAwake: Flow<Boolean>): Flow<Boolean> =
+    combine(jobs, export, keepAwake) { r, e, k -> (r || e) && k }.distinctUntilChanged()
 
 /**
  * `true` until [job] completes, then `false`. A lazy job that has not started yet counts as active (ExportManager

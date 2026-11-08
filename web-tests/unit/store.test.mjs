@@ -52,6 +52,8 @@ test('incremental events update their fields', () => {
   assert.equal(s.accountStates[0].auth.type, 'NeedPhone');
   s = reduce(s, 'exportPrefs', { format: 'Html' });
   assert.equal(s.exportPrefs.format, 'Html');
+  s = reduce(s, 'desktopPrefs', { autostart: true, keepAwake: false });
+  assert.deepEqual(s.desktopPrefs, { autostart: true, keepAwake: false });
   s = reduce(s, 'export', { accountId: 'a', title: 't', state: { type: 'Idle' } });
   assert.equal(s.runningExport.title, 't');
   s = reduce(s, 'password', { id: 'p1', hint: 'h' });

@@ -89,7 +89,7 @@ test('settings shows the version and the links', async ({ page }) => {
   await expect(page.locator('[data-screen="settings"]')).toBeVisible();
   await expect(page.getByText(`גרסה ${state.version} · TDLib ${state.tdlibVersion}`)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'עבודה ברקע' })).toBeVisible();
-  await expect(page.getByText('בזמן שמשימה רצה המחשב לא ייכנס למצב שינה. סגירת החלון לא עוצרת את המשימות. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.')).toBeVisible();
+  await expect(page.getByText('כשמשימה או ייצוא רצים וסוגרים את החלון, התוכנה שואלת אם להמשיך ברקע (סמל ליד השעון) או להיסגר. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'קבוצת טלגרם' })).toHaveAttribute('href', 'https://t.me/backuppppy');
   await expect(page.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/backuppppy/tg-backup-desktop');
 });
