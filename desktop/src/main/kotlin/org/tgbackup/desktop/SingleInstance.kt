@@ -17,8 +17,11 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.time.Duration
 
-/** What a second launch got from the running instance. */
-enum class HandOff { Shown, NoAnswer }
+/**
+ * What a second launch got: the running instance showed its window, it never answered, or it ended meanwhile
+ * and this launch now owns the data dir (it starts normally).
+ */
+enum class HandOff { Shown, NoAnswer, Acquired }
 
 /** The running instance's address in `instance.json`. */
 @Serializable
@@ -28,9 +31,14 @@ private data class InstanceInfo(val port: Int, val token: String)
  * One program per data dir: the owner holds `instance.lock` (an OS file lock, released by the OS when the
  * process ends, also on a crash) and publishes its server's port and instance token in `instance.json`. A second
  * launch fails [acquire] and asks the owner to show its window ([handOff]). An `instance.json` left by a dead
- * owner never blocks: the lock decides, and the next owner removes the old file.
+ * owner never blocks: the lock decides, and the next owner removes the old file. [clock] (ms) and [sleep] pace
+ * the hand-off's retries (tests pass fakes).
  */
-class SingleInstance(private val dataDir: Path) {
+class SingleInstance(
+    private val dataDir: Path,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val sleep: (Long) -> Unit = { Thread.sleep(it) },
+) {
     private val lockFile = dataDir.resolve(LOCK_NAME)
     private val infoFile = dataDir.resolve(INFO_NAME)
     private var channel: FileChannel? = null
@@ -68,10 +76,35 @@ class SingleInstance(private val dataDir: Path) {
         AtomicFiles.replace(tmp, infoFile.toFile())
     }
 
-    /** A second launch: asks the owner to show its window. Anything but a 200 within 2 s is [HandOff.NoAnswer]. */
+    /**
+     * The owner, when shutdown begins (before its server stops): a launch from now on finds no address and keeps
+     * retrying until the lock is free, instead of knocking on a port that is about to close. The lock is kept.
+     */
+    @Synchronized
+    fun unpublish() {
+        runCatching { Files.deleteIfExists(infoFile) }
+    }
+
+    /**
+     * A second launch: every [RETRY_MS] until [HANDOFF_DEADLINE_MS] have passed, takes the lock if the owner has
+     * ended ([HandOff.Acquired], this instance now owns the data dir), else asks the owner to show its window
+     * ([HandOff.Shown] on a 200, 2 s per attempt). No `instance.json` means not published yet (still starting, or
+     * shutting down): retried like a failed attempt. At the deadline: [HandOff.NoAnswer].
+     */
     fun handOff(): HandOff {
+        val deadline = clock() + HANDOFF_DEADLINE_MS
+        while (true) {
+            if (acquire()) return HandOff.Acquired
+            if (askToShow()) return HandOff.Shown
+            if (clock() >= deadline) return HandOff.NoAnswer
+            sleep(RETRY_MS)
+        }
+    }
+
+    /** One attempt: true when the published owner answered `POST /internal/show` with a 200. */
+    private fun askToShow(): Boolean {
         val info = runCatching { json.decodeFromString(InstanceInfo.serializer(), Files.readString(infoFile)) }
-            .getOrNull() ?: return HandOff.NoAnswer
+            .getOrNull() ?: return false
         return runCatching {
             val http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build()
             val request = HttpRequest.newBuilder(URI("http://127.0.0.1:${info.port}$INTERNAL_SHOW_PATH"))
@@ -79,8 +112,8 @@ class SingleInstance(private val dataDir: Path) {
                 .timeout(TIMEOUT)
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .build()
-            if (http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() == 200) HandOff.Shown else HandOff.NoAnswer
-        }.getOrDefault(HandOff.NoAnswer)
+            http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() == 200
+        }.getOrDefault(false)
     }
 
     /** Gives the data dir up (the OS does the same when the process ends). */
@@ -97,6 +130,8 @@ class SingleInstance(private val dataDir: Path) {
     companion object {
         const val LOCK_NAME = "instance.lock"
         const val INFO_NAME = "instance.json"
+        const val RETRY_MS = 500L
+        const val HANDOFF_DEADLINE_MS = 10_000L
         private val TIMEOUT: Duration = Duration.ofSeconds(2)
         private val json = Json { ignoreUnknownKeys = true }
     }

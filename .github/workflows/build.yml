@@ -374,7 +374,7 @@ jobs:
           $exe = "${{ runner.temp }}\inst\TGBackup.exe"
           $out1 = "$shots\first-stdout.txt"; $err1 = "$shots\first-stderr.txt"
           $out2 = "$shots\second-stdout.txt"; $err2 = "$shots\second-stderr.txt"
-          $env:TGB_SMOKE_HOLD_MS = '25000'
+          $env:TGB_SMOKE_HOLD_MS = '15000'
           $p1 = Start-Process -FilePath $exe -ArgumentList '--smoke' -RedirectStandardOutput $out1 -RedirectStandardError $err1 -PassThru
           $null = $p1.Handle
           $deadline = (Get-Date).AddSeconds(90)

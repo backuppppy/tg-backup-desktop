@@ -59,13 +59,15 @@ private fun run(smoke: AppSmoke): Int {
     println("DATA_DIR $dataDir")
     // One program per data dir: a second launch shows the running one's window and exits.
     val instance = SingleInstance(dataDir)
-    if (!instance.acquire()) handOff(instance, smoke)
+    if (!instance.acquire()) handOffOrOwn(instance, smoke)
     // The smoke's throw-away dir is wiped only once it is ours (never under a running smoke).
     if (smoke.enabled) wipeExceptLock(dataDir)
     val app = DesktopApp(dataDir)
     var server: ApiServer? = null
     val shutdown = {
         val started = System.nanoTime()
+        // First: a launch during shutdown keeps retrying (and then owns the dir) instead of knocking on a closing port.
+        instance.unpublish()
         Shutdown.run(listOfNotNull(app::close, server?.let { s -> s::stop }), SHUTDOWN_LIMIT_MS)
         println("SHUTDOWN_DONE ${(System.nanoTime() - started) / 1_000_000}ms")
     }
@@ -89,10 +91,15 @@ private fun run(smoke: AppSmoke): Int {
 
 /**
  * Another instance owns the data dir: asks it to show its window and exits 0 (`INSTANCE_HANDED_OFF`). When it
- * does not answer (it is still starting, or hangs), says so in a box (not under `--smoke`) and exits 0 too.
+ * does not answer within the retries (it hangs), says so in a box (not under `--smoke`) and exits 0 too. When it
+ * ended during the retries, this launch owns the data dir and returns to start normally.
  */
-private fun handOff(instance: SingleInstance, smoke: AppSmoke): Nothing {
+private fun handOffOrOwn(instance: SingleInstance, smoke: AppSmoke) {
     when (instance.handOff()) {
+        HandOff.Acquired -> {
+            println("INSTANCE_ACQUIRED_AFTER_WAIT")
+            return
+        }
         HandOff.Shown -> println("INSTANCE_HANDED_OFF")
         HandOff.NoAnswer -> {
             println("INSTANCE_NO_ANSWER")
@@ -102,7 +109,6 @@ private fun handOff(instance: SingleInstance, smoke: AppSmoke): Nothing {
     }
     System.out.flush()
     Runtime.getRuntime().halt(0)
-    error("unreachable")
 }
 
 /** Everything in [dataDir] except the lock this process holds (Windows cannot delete a locked file). */
@@ -116,7 +122,9 @@ private fun wipeExceptLock(dataDir: Path) {
 private fun showError(text: String) = showMessage(text, MB_ICONERROR)
 
 private fun showMessage(text: String, icon: Int) {
-    Native.load("user32", User32Box::class.java).MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or icon)
+    // Hebrew text: right-to-left reading order, right-aligned.
+    Native.load("user32", User32Box::class.java)
+        .MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or icon or MB_RTLREADING or MB_RIGHT)
 }
 
 private interface User32Box : Library {
@@ -126,6 +134,8 @@ private interface User32Box : Library {
 private const val MB_OK = 0x0
 private const val MB_ICONERROR = 0x10
 private const val MB_ICONINFORMATION = 0x40
+private const val MB_RIGHT = 0x80000
+private const val MB_RTLREADING = 0x100000
 
 private const val MSG_ALREADY_RUNNING = "התוכנה כבר פועלת."
 

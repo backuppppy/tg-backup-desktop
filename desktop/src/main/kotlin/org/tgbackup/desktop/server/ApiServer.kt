@@ -142,7 +142,10 @@ private fun Route.internalShowRoute(instanceToken: String?, onShow: () -> Unit) 
     }
 }
 
-/** A loopback peer address, as the engine reports it (`127.x.x.x`, `::1`; the test engine says `localhost`). */
+/**
+ * A loopback peer address, as the engine reports it (`127.x.x.x`, `::1`). `localhost` is accepted only for the
+ * Ktor test engine, which reports that name; CIO always reports the IP.
+ */
 internal fun isLoopback(address: String): Boolean {
     val a = address.trim().removePrefix("[").removeSuffix("]").lowercase()
     return a == "localhost" || a == "::1" || a == "0:0:0:0:0:0:0:1" ||

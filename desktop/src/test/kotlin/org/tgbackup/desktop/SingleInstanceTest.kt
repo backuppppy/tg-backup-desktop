@@ -34,6 +34,29 @@ class SingleInstanceTest {
 
     private fun instance() = SingleInstance(dir).also { opened += it }
 
+    /** Fake time for the hand-off's retries: each sleep advances [now] and then runs [onSleep] (its count). */
+    private var now = 0L
+    private var sleeps = 0
+    private var onSleep: (Int) -> Unit = {}
+
+    private fun launch() = SingleInstance(dir, clock = { now }, sleep = { ms ->
+        now += ms
+        sleeps++
+        onSleep(sleeps)
+    }).also { opened += it }
+
+    /** A local stand-in for the owner's server: 200 for POST /internal/show with [token], else 403. */
+    private fun showServer(token: String, calls: AtomicInteger): HttpServer =
+        HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/internal/show") { ex ->
+                val ok = ex.requestMethod == "POST" && ex.requestHeaders.getFirst("X-TGB-Instance") == token
+                if (ok) calls.incrementAndGet()
+                ex.sendResponseHeaders(if (ok) 200 else 403, -1)
+                ex.close()
+            }
+            start()
+        }
+
     @AfterTest
     fun releaseAll() = opened.forEach { it.release() }
 
@@ -83,36 +106,93 @@ class SingleInstanceTest {
     @Test
     fun handOffReachesTheRunningInstanceWithItsToken() {
         val calls = AtomicInteger()
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/internal/show") { ex ->
-            val ok = ex.requestMethod == "POST" && ex.requestHeaders.getFirst("X-TGB-Instance") == "tok"
-            if (ok) calls.incrementAndGet()
-            ex.sendResponseHeaders(if (ok) 200 else 403, -1)
-            ex.close()
-        }
-        server.start()
+        val server = showServer("tok", calls)
         try {
             val owner = instance()
             assertTrue(owner.acquire())
             owner.publish(server.address.port, "tok")
-            assertEquals(HandOff.Shown, instance().handOff())
+            assertEquals(HandOff.Shown, launch().handOff())
             assertEquals(1, calls.get())
-            owner.publish(server.address.port, "wrong")
-            assertEquals(HandOff.NoAnswer, instance().handOff())
+            assertEquals(0, sleeps, "answered at the first attempt")
         } finally {
             server.stop(0)
         }
     }
 
     @Test
+    fun aWrongTokenRetriesUntilTheDeadline() {
+        val calls = AtomicInteger()
+        val server = showServer("tok", calls)
+        try {
+            val owner = instance()
+            assertTrue(owner.acquire())
+            owner.publish(server.address.port, "wrong")
+            assertEquals(HandOff.NoAnswer, launch().handOff())
+            assertEquals(0, calls.get())
+            assertTrue(now >= SingleInstance.HANDOFF_DEADLINE_MS, "gave up at $now ms")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun anOwnerThatPublishesLateIsStillReached() {
+        val calls = AtomicInteger()
+        val server = showServer("tok", calls)
+        try {
+            val owner = instance()
+            assertTrue(owner.acquire())
+            // Not published yet (the engine is still starting): the launch retries until the address appears.
+            onSleep = { n -> if (n == 4) owner.publish(server.address.port, "tok") }
+            assertEquals(HandOff.Shown, launch().handOff())
+            assertEquals(1, calls.get())
+            assertEquals(4, sleeps)
+            assertEquals(4 * SingleInstance.RETRY_MS, now)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun anOwnerThatNeverPublishesIsNoAnswerAtTheDeadline() {
+        assertTrue(instance().acquire())
+        assertEquals(HandOff.NoAnswer, launch().handOff())
+        assertTrue(now >= SingleInstance.HANDOFF_DEADLINE_MS, "gave up at $now ms")
+        assertTrue(now < SingleInstance.HANDOFF_DEADLINE_MS + SingleInstance.RETRY_MS, "kept going until $now ms")
+        assertEquals((SingleInstance.HANDOFF_DEADLINE_MS / SingleInstance.RETRY_MS).toInt(), sleeps)
+    }
+
+    @Test
+    fun anOwnerThatEndsDuringTheRetriesLeavesTheLockToTheLaunch() {
+        val owner = instance()
+        assertTrue(owner.acquire())
+        onSleep = { n -> if (n == 3) owner.release() }
+        val second = launch()
+        assertEquals(HandOff.Acquired, second.handOff())
+        assertFalse(instance().acquire(), "the launch now holds the lock")
+        second.publish(4242, "mine")
+        assertTrue(dir.resolve("instance.json").readText().contains("4242"))
+    }
+
+    @Test
+    fun unpublishHidesTheAddressDuringShutdownButKeepsTheLock() {
+        val owner = instance()
+        assertTrue(owner.acquire())
+        owner.publish(4242, "tok")
+        owner.unpublish()
+        assertFalse(dir.resolve("instance.json").exists())
+        assertEquals(HandOff.NoAnswer, launch().handOff(), "still held, nothing to knock on")
+    }
+
+    @Test
     fun handOffWithoutARunningServerIsNoAnswer() {
-        assertEquals(HandOff.NoAnswer, instance().handOff(), "no instance.json")
         val owner = instance()
         assertTrue(owner.acquire())
         val closedPort = ServerSocket(0).use { it.localPort }
         owner.publish(closedPort, "tok")
-        assertEquals(HandOff.NoAnswer, instance().handOff(), "nothing listens on the port")
+        assertEquals(HandOff.NoAnswer, launch().handOff(), "nothing listens on the port")
+        now = 0
         dir.resolve("instance.json").writeText("not json")
-        assertEquals(HandOff.NoAnswer, instance().handOff(), "unreadable instance.json")
+        assertEquals(HandOff.NoAnswer, launch().handOff(), "unreadable instance.json")
     }
 }
