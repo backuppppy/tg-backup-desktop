@@ -215,6 +215,36 @@ class JobRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun deleteRightAfterStopLeavesNoProgress() = withServer { client ->
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 50) }
+        client.postJson("/api/jobs/j1/start").assertOk()
+        client.postJson("/api/jobs/j1/stop").assertOk()
+        client.del("/api/jobs/j1").assertOk()
+        assertTrue(app.jobs.awaitStopped("j1"), "the stopped run ended")
+        assertFalse(dataDir.resolve("progress/j1.json").toFile().exists(), "no orphan progress")
+        assertFalse("j1" in app.jobs.statuses.value)
+
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 50) }
+        client.postJson("/api/jobs/j1/start").assertOk()
+        client.postJson("/api/jobs/j1/stop").assertOk()
+        client.postJson("/api/jobs/j1/reset").assertOk()
+        assertTrue(app.jobs.awaitStopped("j1"), "the stopped run ended")
+        assertEquals(0L, app.store.progress("j1").lastId)
+        assertEquals(0L, app.jobs.statuses.value["j1"]!!.lastId)
+    }
+
+    @Test
+    fun deleteForgetsTheJobLock() = withServer { client ->
+        seed(j1)
+        client.postJson("/api/jobs/j1/stop").assertOk()
+        assertTrue(locks.hasJobLock("j1"))
+        client.del("/api/jobs/j1").assertOk()
+        assertFalse(locks.hasJobLock("j1"), "the deleted job's mutex is dropped")
+    }
+
+    @Test
     fun allCommands() = withServer { client ->
         seed(j1, Job(id = "j2", name = "", source = "", target = "@t"))
         val r = client.postJson("/api/jobs/all/start")

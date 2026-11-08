@@ -42,6 +42,14 @@ class CommandLocks {
 
     suspend fun <T> config(block: suspend () -> T): T = config.withLock { block() }
 
+    /** Drops [id]'s mutex, once the job is deleted. */
+    fun forget(id: String) {
+        perJob.remove(id)
+    }
+
+    /** Whether [id] has a mutex (tests). */
+    internal fun hasJobLock(id: String) = perJob.containsKey(id)
+
     /**
      * Held around every `jobs.start`, so the engine's "account busy in another running job" check and the start
      * are one step across jobs (legacy configs can have two jobs that share an account).

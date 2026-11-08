@@ -88,12 +88,12 @@ fun Application.tgbModule(
     allowedHosts: Set<String>,
     extraRoutes: Route.(Events) -> Unit = {},
     handles: ChatHandles = ChatHandles(),
+    locks: CommandLocks = CommandLocks(),
 ) {
     installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
     install(SSE)
     val events = Events(app).also { attributes.put(EventsKey, it) }
-    val locks = CommandLocks()
 
     routing {
         // Public: the only route that needs no session cookie (see installSecurity).

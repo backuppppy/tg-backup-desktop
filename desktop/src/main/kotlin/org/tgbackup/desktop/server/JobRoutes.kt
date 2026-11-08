@@ -106,6 +106,12 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
     fun requireStopped(id: String) {
         if (jobs.isRunning(id)) throw Refusal(HttpStatusCode.Conflict, MSG_JOB_RUNNING)
     }
+    /** A stopped run may still be cancelling: its runner must end before the progress is cleared. */
+    suspend fun requireEnded(id: String) {
+        requireStopped(id)
+        if (!jobs.awaitStopped(id)) throw Refusal(HttpStatusCode.Conflict, MSG_JOB_RUNNING)
+        requireStopped(id)
+    }
 
     /**
      * Saves [input] as job [id]: replace the existing job, or append a new one when [create]. Then reads the
@@ -176,13 +182,14 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
                 val id = idParam()
                 locks.job(id) {
                     requireJob(id)
-                    requireStopped(id)
+                    requireEnded(id)
                     locks.config {
                         requireJob(id)
                         // The config first: a refreshLatest that ends after forget sees no job and saves nothing.
                         store.updateConfig { c -> c.copy(jobs = c.jobs.filter { it.id != id }) }
                         jobs.forget(id)
                     }
+                    locks.forget(id)
                 }
             }
         }
@@ -226,7 +233,7 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
                 val id = idParam()
                 locks.job(id) {
                     requireJob(id)
-                    requireStopped(id)
+                    requireEnded(id)
                     jobs.resetProgress(id)
                 }
             }

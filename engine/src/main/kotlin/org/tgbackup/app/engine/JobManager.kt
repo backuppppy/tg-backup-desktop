@@ -77,6 +77,9 @@ class JobManager(
 
     private val running = ConcurrentHashMap<String, CoJob>()
 
+    /** Every run not completed yet, with its job: the current ones and stopped ones still cancelling. */
+    private val live = ConcurrentHashMap<CoJob, String>()
+
     /** What a running job does every [latestTick]; a test replaces it. */
     internal var periodicRefresh: suspend (String) -> Unit = { refreshLatest(it) }
     private val pauseFlags = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
@@ -136,18 +139,23 @@ class JobManager(
     /** [run] ended: when it is still [jobId]'s current run, its clock stops and the job shows as stopped. */
     private fun finishRun(jobId: String, run: CoJob) = synchronized(clockLock) {
         if (!running.remove(jobId, run)) return@synchronized
-        flushRunTime(jobId, goOn = false, run = run)
+        // A completion handler must not throw; a failed write must not leave the job shown running.
+        runCatching { flushRunTime(jobId, goOn = false, run = run) }.onFailure { e ->
+            log.error("[$jobId] שמירת זמן הריצה נכשלה: ${e.message}")
+            if (runSegments[jobId]?.run === run) runSegments.remove(jobId)
+        }
         // A job forgotten while it stopped keeps no status.
         if (jobId in _statuses.value) {
-            setStatus(jobId) { it.copy(running = false, paused = false, phase = "עצור") }
-            showSavedProgress(jobId)
+            setStatus(jobId) { it.copy(running = false, paused = false, phase = "עצור", runningSince = 0) }
+            runCatching { showSavedProgress(jobId) }.onFailure { e -> log.error("[$jobId] ${e.message}") }
         }
     }
 
     private fun setStatus(id: String, transform: (JobStatus) -> JobStatus) =
         _statuses.update { it + (id to transform(it[id] ?: JobStatus())) }
 
-    fun isRunning(id: String) = running[id]?.isActive == true
+    /** From the run's registration (before it is started) until a stop is asked; a cancelling run is not running. */
+    fun isRunning(id: String) = running[id]?.let { !it.isCancelled && !it.isCompleted } == true
 
     /** Starts a job. Returns an error message, or null when started. */
     fun start(jobId: String): String? {
@@ -170,13 +178,20 @@ class JobManager(
         // Started only once it is the job's current run, so its end knows whether it still is.
         val run = scope.launch(start = CoroutineStart.LAZY) { runJob(jobId, paused) }
         synchronized(clockLock) {
+            live[run] = jobId
             running[jobId] = run
             setStatus(jobId) { it.copy(running = true, paused = false, phase = "מתחיל…", copied = 0, failed = 0) }
             showSavedProgress(jobId)
             startClock(jobId, run)
         }
         // Also when it is cancelled before it was dispatched, which skips its body and its finally.
-        run.invokeOnCompletion { finishRun(jobId, run) }
+        run.invokeOnCompletion {
+            try {
+                finishRun(jobId, run)
+            } finally {
+                live.remove(run)
+            }
+        }
         run.start()
         return null
     }
@@ -267,13 +282,30 @@ class JobManager(
         }
         // The runner adds it to Progress.copiedTotal with the message's position.
         override fun copied() = setStatus(jobId) { it.copy(copied = it.copied + 1, copiedTotal = it.copiedTotal + 1) }
-        override fun latest(id: Long) = saveLatest(jobId, id)
+        // A source whose newest messages were deleted reads below the position: the position stays the floor,
+        // so latest and position do not swap the value (and write the progress) on every round.
+        override fun latest(id: Long) = saveLatest(jobId, maxOf(id, _statuses.value[jobId]?.lastId ?: 0))
         override fun delivered(chatId: Long, serverId: Long) =
             setStatus(jobId) { it.copy(targetChatId = chatId, lastTargetId = serverId) }
         override fun failed() = setStatus(jobId) { it.copy(failed = it.failed + 1) }
         override fun sourceInfo(chatId: Long, title: String, isProtected: Boolean) =
             setStatus(jobId) { it.copy(sourceChatId = chatId, sourceTitle = title, isProtected = isProtected) }
     }
+
+    /**
+     * Waits until no run of [id] is left, a stopped one still cancelling included. Returns false when
+     * [timeoutMs] passed first (a run that was not stopped never ends by itself).
+     */
+    suspend fun awaitStopped(id: String, timeoutMs: Long = 10_000): Boolean = withTimeoutOrNull(timeoutMs) {
+        while (true) {
+            val left = live.filterValues { it == id }.keys
+            if (left.isEmpty()) break
+            left.forEach { it.join() }
+            // Its completion handler drops it from [live] right after it completed.
+            if (left.any { live.containsKey(it) }) delay(5)
+        }
+        true
+    } ?: false
 
     fun stop(jobId: String) {
         store.updateConfig { it.copy(autoResume = it.autoResume - jobId) }

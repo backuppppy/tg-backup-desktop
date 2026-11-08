@@ -36,6 +36,8 @@ abstract class RouteTestBase {
     protected val app = DesktopApp(dataDir, PowerRequests { })
     /** The loaded chats of the export screen, shared by the export and the account routes. */
     protected val handles = ChatHandles()
+    /** The server's command locks. */
+    protected val locks = CommandLocks()
 
     /** The dummy account: valid enough for a TDLib client, reaches NeedPhone, never logs in. */
     protected fun dummy(id: String, name: String = "") =
@@ -47,7 +49,7 @@ abstract class RouteTestBase {
     }
 
     protected fun withServer(block: suspend ApplicationTestBuilder.(HttpClient) -> Unit) = testApplication {
-        application { tgbModule(app = app, token = "t1", allowedHosts = setOf("localhost:80"), handles = handles) }
+        application { tgbModule(app = app, token = "t1", allowedHosts = setOf("localhost:80"), handles = handles, locks = locks) }
         block(createClient { install(RouteDefaultsForTests) })
     }
 

@@ -12,8 +12,10 @@ import org.tgbackup.app.data.Store
 import org.tgbackup.app.tg.AccountManager
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -236,6 +238,80 @@ class JobManagerTest {
     }
 
     @Test
+    fun aRegisteredRunNotYetStartedCountsAsRunning() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        store.updateConfig { it.copy(jobs = it.jobs + Job(id = "j2", source = "src2", target = "dst2", accountIds = listOf("a"))) }
+        val t = OneThread()
+        try {
+            val log = LogBus(dir)
+            val jobs = JobManager(store, AccountManager(dir, log), log, t.scope, runTick = 50) { error("unused") }
+            t.drain()
+            // The run is registered but its body has not run yet.
+            t.hold()
+            assertNull(jobs.start("j1"))
+            assertTrue(jobs.isRunning("j1"))
+            assertEquals("המשימה כבר פועלת", jobs.start("j1"))
+            val busy = jobs.start("j2")
+            assertTrue(busy?.startsWith("החשבון ") == true, "j2: $busy")
+            t.release()
+            assertTrue(jobs.isRunning("j1"))
+            assertFalse(jobs.isRunning("j2"))
+        } finally {
+            t.close()
+        }
+    }
+
+    @Test
+    fun aCancellingRunIsAwaited() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val t = OneThread()
+        try {
+            val log = LogBus(dir)
+            val jobs = JobManager(store, AccountManager(dir, log), log, t.scope, runTick = 50) { error("unused") }
+            assertNull(jobs.start("j1"))
+            t.drain() // the run waits for its accounts
+            // The stopped run's finally waits behind the hold, as when it is slow.
+            t.hold()
+            jobs.stop("j1")
+            assertFalse(jobs.isRunning("j1"), "a cancelling run does not block a new start")
+            assertFalse(runBlocking { jobs.awaitStopped("j1", timeoutMs = 100) }, "times out while it cancels")
+            val waiter = CompletableFuture.supplyAsync { runBlocking { jobs.awaitStopped("j1") } }
+            Thread.sleep(200)
+            assertFalse(waiter.isDone, "not done before the run's finally ran")
+            t.release()
+            assertTrue(waiter.get(5, TimeUnit.SECONDS))
+            assertTrue(runBlocking { jobs.awaitStopped("j1", timeoutMs = 100) })
+        } finally {
+            t.close()
+        }
+    }
+
+    @Test
+    fun aFailingCompletionStillShowsStopped() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val log = LogBus(dir)
+        val runScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        // A slow clock: only the run's end writes the run time.
+        val jobs = JobManager(store, AccountManager(dir, log), log, runScope, runTick = 60_000) { error("unused") }
+        assertNull(jobs.start("j1"))
+        assertTrue(jobs.status().runningSince > 0)
+        // The progress cannot be written: its temp file's path is taken by a directory.
+        val blocker = File(dir, "progress/j1.json.tmp").apply { mkdirs() }
+        try {
+            // The run ends without a stop (no flush before it), so its completion flushes the clock and fails.
+            runScope.cancel()
+            waitUntil("the run shown stopped") { !jobs.status().running }
+            assertEquals("עצור", jobs.status().phase)
+            assertEquals(0L, jobs.status().runningSince)
+        } finally {
+            blocker.delete()
+        }
+    }
+
+    @Test
     fun aRunCancelledBeforeItWasDispatchedLeavesNoClock() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir)
@@ -295,6 +371,29 @@ class JobManagerTest {
         assertEquals(120L, store.progress("j1").latestId)
         r.position(110)
         assertEquals(120L, jobs.status().latestId)
+    }
+
+    @Test
+    fun latestIsNeverBelowThePosition() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val jobs = manager(store, dir)
+        val file = File(dir, "progress/j1.json")
+
+        val r = jobs.reporter("j1")
+        r.position(120)
+        assertEquals(120L, store.progress("j1").latestId)
+        // A source whose newest messages were deleted reads below the position: no swap, no second write.
+        file.setLastModified(1_000_000_000_000)
+        r.latest(100)
+        assertEquals(120L, jobs.status().latestId)
+        assertEquals(120L, store.progress("j1").latestId)
+        assertEquals(1_000_000_000_000, file.lastModified(), "latest wrote the progress again")
+        r.position(120)
+        assertEquals(1_000_000_000_000, file.lastModified(), "position wrote the progress again")
+        r.latest(200)
+        assertEquals(200L, jobs.status().latestId)
+        assertEquals(200L, store.progress("j1").latestId)
     }
 
     @Test
