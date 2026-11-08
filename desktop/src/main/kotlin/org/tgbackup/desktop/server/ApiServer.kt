@@ -2,6 +2,7 @@ package org.tgbackup.desktop.server
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.withCharset
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -16,11 +17,13 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.sse.SSE
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.tgbackup.desktop.DesktopApp
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 
@@ -34,17 +37,21 @@ val TgbJson = Json {
  * The program's internal server: it serves the screens (classpath `web/`) and the API to the program's own
  * WebView2 window, on [host] only. A new [sessionToken] is made on every launch; the window opens [entryUrl].
  * [extraRoutes] are installed with the others (behind the same security); the program passes none, only the
- * DevServer passes its test-only routes.
+ * DevServer passes its test-only routes. [onShow] runs when a second launch asks this one to show its window
+ * (`POST /internal/show` with [instanceToken]).
  */
 class ApiServer(
     private val app: DesktopApp,
     private val host: String = "127.0.0.1",
     private val port: Int = 0,
     private val extraRoutes: Route.(Events) -> Unit = {},
+    private val onShow: () -> Unit = {},
 ) {
     /** 32 random bytes, hex encoded. */
-    val sessionToken: String = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        .joinToString("") { "%02x".format(it) }
+    val sessionToken: String = randomToken()
+
+    /** For a second launch only (written to `instance.json`); never the session token, which opens the API. */
+    val instanceToken: String = randomToken()
 
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private var boundPort: Int = -1
@@ -56,7 +63,7 @@ class ApiServer(
         // Bind first (port 0 = any free port); the allowed Host values depend on the port we get.
         val hosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val created = embeddedServer(CIO, port = port, host = host) {
-            tgbModule(app, sessionToken, hosts, extraRoutes)
+            tgbModule(app, sessionToken, hosts, extraRoutes, instanceToken = instanceToken, onShow = onShow)
         }
         created.start(wait = false)
         val actual = runBlocking { created.engine.resolvedConnectors().first().port }
@@ -81,7 +88,13 @@ class ApiServer(
     }
 }
 
-/** Everything the server does, installable on its own with `testApplication`. */
+private fun randomToken(): String =
+    ByteArray(32).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+
+/**
+ * Everything the server does, installable on its own with `testApplication`. Without an [instanceToken]
+ * `POST /internal/show` always answers 403.
+ */
 fun Application.tgbModule(
     app: DesktopApp,
     token: String,
@@ -89,6 +102,8 @@ fun Application.tgbModule(
     extraRoutes: Route.(Events) -> Unit = {},
     handles: ChatHandles = ChatHandles(),
     locks: CommandLocks = CommandLocks(),
+    instanceToken: String? = null,
+    onShow: () -> Unit = {},
 ) {
     installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
@@ -98,6 +113,8 @@ fun Application.tgbModule(
     routing {
         // Public: the only route that needs no session cookie (see installSecurity).
         get(HEALTH_PATH) { call.respondText("ok", ContentType.Text.Plain.withCharset(Charsets.UTF_8)) }
+        // Public too (no cookie), but only for a loopback caller with the instance token.
+        internalShowRoute(instanceToken, onShow)
 
         // Authenticated: installSecurity rejects any call without the session cookie before routing,
         // so every route below needs it. Later tasks install their routes here:
@@ -110,6 +127,26 @@ fun Application.tgbModule(
         extraRoutes(events)
         webRoutes()
     }
+}
+
+/** `POST /internal/show`: from loopback with the header [INSTANCE_HEADER] equal to [instanceToken], else 403. */
+private fun Route.internalShowRoute(instanceToken: String?, onShow: () -> Unit) {
+    val expected = instanceToken?.toByteArray(Charsets.UTF_8)
+    post(INTERNAL_SHOW_PATH) {
+        val given = call.request.headers[INSTANCE_HEADER]?.toByteArray(Charsets.UTF_8)
+        val allowed = expected != null && given != null && MessageDigest.isEqual(given, expected) &&
+            isLoopback(call.request.local.remoteAddress)
+        if (!allowed) return@post call.respondError(HttpStatusCode.Forbidden, MSG_FORBIDDEN)
+        onShow()
+        call.respondText("ok", ContentType.Text.Plain.withCharset(Charsets.UTF_8))
+    }
+}
+
+/** A loopback peer address, as the engine reports it (`127.x.x.x`, `::1`; the test engine says `localhost`). */
+internal fun isLoopback(address: String): Boolean {
+    val a = address.trim().removePrefix("[").removeSuffix("]").lowercase()
+    return a == "localhost" || a == "::1" || a == "0:0:0:0:0:0:0:1" ||
+        (a.startsWith("127.") && a.split('.').let { p -> p.size == 4 && p.all { it.toIntOrNull() in 0..255 } })
 }
 
 /** The screens, from classpath `web/`. HTML, JS and CSS are never cached, so a new version shows at once. */

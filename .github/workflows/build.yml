@@ -355,6 +355,53 @@ jobs:
           $smokeDir = Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup-smoke"
           Write-Host "SMOKE_DIR_LEFT $(Test-Path $smokeDir) ($((Select-String -Path $out -Pattern '^SMOKE_CLEANED' | Select-Object -First 1).Line))"
           if (Test-Path (Join-Path $env:TGB_HEB_LOCALAPPDATA "TGBackup")) { Write-Error "--smoke touched the real data dir"; exit 1 }
+      - name: Second launch hands off to the running one
+        shell: pwsh
+        env:
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+          TGB_FORCE_PROXY: 127.0.0.1:9
+        run: |
+          # Both runs use the same smoke data dir. A stale instance.json (a crashed owner, nobody holds the lock) must
+          # not block the first; the second, started while the first holds its window, must print
+          # INSTANCE_HANDED_OFF (the first answered POST /internal/show) and exit 0, and the first must carry on.
+          $env:LOCALAPPDATA = "${{ runner.temp }}\second-instance"
+          $smokeDir = "$env:LOCALAPPDATA\TGBackup-smoke"
+          New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
+          Set-Content -Path "$smokeDir\instance.json" -Value '{"port":9,"token":"stale"}' -Encoding ascii
+          $shots = "${{ runner.temp }}\shots"
+          New-Item -ItemType Directory -Force -Path $shots | Out-Null
+          $exe = "${{ runner.temp }}\inst\TGBackup.exe"
+          $out1 = "$shots\first-stdout.txt"; $err1 = "$shots\first-stderr.txt"
+          $out2 = "$shots\second-stdout.txt"; $err2 = "$shots\second-stderr.txt"
+          $env:TGB_SMOKE_HOLD_MS = '25000'
+          $p1 = Start-Process -FilePath $exe -ArgumentList '--smoke' -RedirectStandardOutput $out1 -RedirectStandardError $err1 -PassThru
+          $null = $p1.Handle
+          $deadline = (Get-Date).AddSeconds(90)
+          $loaded = $false
+          while (-not $p1.HasExited -and (Get-Date) -lt $deadline) {
+            if ((Test-Path $out1) -and (Select-String -Path $out1 -Pattern '^PAGE_LOADED' -Quiet)) { $loaded = $true; break }
+            Start-Sleep -Milliseconds 250
+          }
+          $p2 = $null
+          if ($loaded) {
+            $p2 = Start-Process -FilePath $exe -ArgumentList '--smoke' -RedirectStandardOutput $out2 -RedirectStandardError $err2 -PassThru
+            $null = $p2.Handle
+            if (-not $p2.WaitForExit(60000)) { Stop-Process -Id $p2.Id -Force; Write-Host "SECOND_HUNG" }
+          }
+          if (-not $p1.WaitForExit(90000)) { Stop-Process -Id $p1.Id -Force; Write-Host "FIRST_HUNG" }
+          Write-Host "--- first stdout"; Get-Content $out1
+          Write-Host "--- first stderr"; Get-Content $err1
+          Write-Host "FIRST_EXIT $($p1.ExitCode)"
+          if (-not $loaded) { Write-Error "the first launch did not load its page (a stale instance.json must not block)"; exit 1 }
+          Write-Host "--- second stdout"; Get-Content $out2
+          Write-Host "--- second stderr"; Get-Content $err2
+          Write-Host "SECOND_EXIT $($p2.ExitCode)"
+          if (Select-String -Path $out1 -Pattern '^INSTANCE_' -Quiet) { Write-Error "the first launch saw another instance"; exit 1 }
+          if (-not (Select-String -Path $out2 -Pattern '^INSTANCE_HANDED_OFF' -Quiet)) { Write-Error "INSTANCE_HANDED_OFF not printed"; exit 1 }
+          if (Select-String -Path $out2 -Pattern '^PAGE_LOADED' -Quiet) { Write-Error "the second launch opened a window"; exit 1 }
+          if ($p2.ExitCode -ne 0) { Write-Error "the second launch exited $($p2.ExitCode)"; exit 1 }
+          if ($p1.ExitCode -ne 0) { Write-Error "the first launch exited $($p1.ExitCode) after the hand-off"; exit 1 }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -20,6 +20,7 @@ import java.nio.file.Path
 import java.time.Duration
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
 
 const val VERSION = BuildConfig.VERSION_NAME
 
@@ -54,12 +55,13 @@ fun main(args: Array<String>) {
 /** Returns the exit code ([WindowLifecycle.run]). */
 @OptIn(kotlin.io.path.ExperimentalPathApi::class)
 private fun run(smoke: AppSmoke): Int {
-    val dataDir = if (smoke.enabled) {
-        smokeDataDir(AppDirs.dataDir()).also { if (it.exists()) it.deleteRecursively() }
-    } else {
-        AppDirs.dataDir()
-    }
+    val dataDir = if (smoke.enabled) smokeDataDir(AppDirs.dataDir()) else AppDirs.dataDir()
     println("DATA_DIR $dataDir")
+    // One program per data dir: a second launch shows the running one's window and exits.
+    val instance = SingleInstance(dataDir)
+    if (!instance.acquire()) handOff(instance, smoke)
+    // The smoke's throw-away dir is wiped only once it is ours (never under a running smoke).
+    if (smoke.enabled) wipeExceptLock(dataDir)
     val app = DesktopApp(dataDir)
     var server: ApiServer? = null
     val shutdown = {
@@ -71,21 +73,50 @@ private fun run(smoke: AppSmoke): Int {
     val code = WindowLifecycle.run(
         open = {
             app.start()
-            val s = ApiServer(app).also { server = it }
-            s.start()
+            // onShow: nothing to do yet, the window is open for as long as the program runs.
+            val s = ApiServer(app, onShow = {}).also { server = it }
+            instance.publish(s.start(), s.instanceToken)
             if (smoke.enabled) SmokeApi(s).checkAndSeed()
             AppWindow.open(s.entryUrl(), smoke, profileDir) { app.log.warn("קישור שאינו http(s) נחסם") }
         },
         shutdown = shutdown,
         tellNoWebView = { if (!smoke.enabled) showError(MSG_NO_WEBVIEW) },
     )
+    instance.release()
     if (smoke.enabled) cleanSmokeDir(dataDir, profileDir)
     return code
 }
 
+/**
+ * Another instance owns the data dir: asks it to show its window and exits 0 (`INSTANCE_HANDED_OFF`). When it
+ * does not answer (it is still starting, or hangs), says so in a box (not under `--smoke`) and exits 0 too.
+ */
+private fun handOff(instance: SingleInstance, smoke: AppSmoke): Nothing {
+    when (instance.handOff()) {
+        HandOff.Shown -> println("INSTANCE_HANDED_OFF")
+        HandOff.NoAnswer -> {
+            println("INSTANCE_NO_ANSWER")
+            System.out.flush()
+            if (!smoke.enabled) showMessage(MSG_ALREADY_RUNNING, MB_ICONINFORMATION)
+        }
+    }
+    System.out.flush()
+    Runtime.getRuntime().halt(0)
+    error("unreachable")
+}
+
+/** Everything in [dataDir] except the lock this process holds (Windows cannot delete a locked file). */
+@OptIn(kotlin.io.path.ExperimentalPathApi::class)
+private fun wipeExceptLock(dataDir: Path) {
+    dataDir.listDirectoryEntries().filter { it.fileName.toString() != SingleInstance.LOCK_NAME }
+        .forEach { it.deleteRecursively() }
+}
+
 /** A blocking Windows error box (the window could not be shown, so this is the only way to tell the user). */
-private fun showError(text: String) {
-    Native.load("user32", User32Box::class.java).MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or MB_ICONERROR)
+private fun showError(text: String) = showMessage(text, MB_ICONERROR)
+
+private fun showMessage(text: String, icon: Int) {
+    Native.load("user32", User32Box::class.java).MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or icon)
 }
 
 private interface User32Box : Library {
@@ -94,6 +125,9 @@ private interface User32Box : Library {
 
 private const val MB_OK = 0x0
 private const val MB_ICONERROR = 0x10
+private const val MB_ICONINFORMATION = 0x40
+
+private const val MSG_ALREADY_RUNNING = "התוכנה כבר פועלת."
 
 /**
  * `--smoke` only: reports that WebView2 used the smoke profile, then removes the throw-away data dir. WebView2's

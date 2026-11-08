@@ -32,6 +32,10 @@ import java.security.MessageDigest
 
 const val SESSION_COOKIE = "tgb_session"
 const val HEALTH_PATH = "/api/health"
+/** A second launch asks the running instance to show its window (see SingleInstance); no session cookie. */
+const val INTERNAL_SHOW_PATH = "/internal/show"
+/** The header carrying the instance token on [INTERNAL_SHOW_PATH]. */
+const val INSTANCE_HEADER = "X-TGB-Instance"
 
 internal const val MSG_LOGIN_REQUIRED = "נדרשת התחברות"
 internal const val MSG_FORBIDDEN = "הבקשה נחסמה"
@@ -56,7 +60,8 @@ suspend fun ApplicationCall.respondError(status: HttpStatusCode, message: String
  * 2. A non-GET/HEAD request with an `Origin` header must come from `http://<allowed host>`, else 403.
  *    [allowedHosts] is read on every request: ApiServer fills it only after the port is bound.
  * 3. `GET /?t=<token>` with the right token sets the session cookie and redirects to `/`; a wrong token is 401.
- * 4. Everything except `GET /api/health` needs the session cookie, else 401.
+ * 4. Everything except `GET /api/health` and `POST /internal/show` needs the session cookie, else 401. The
+ *    latter checks the caller itself (loopback + instance token, see internalShowRoute); 1 and 2 still apply.
  * Bare error statuses (such as routing's 404) are sent as JSON, and exceptions as a JSON 500.
  */
 internal fun Application.installSecurity(token: String, allowedHosts: Set<String>, log: LogBus) {
@@ -80,7 +85,8 @@ internal fun Application.installSecurity(token: String, allowedHosts: Set<String
         }
 
         val path = call.request.path().ifEmpty { "/" }
-        val public = method == HttpMethod.Get && path == HEALTH_PATH
+        val public = (method == HttpMethod.Get && path == HEALTH_PATH) ||
+            (method == HttpMethod.Post && path == INTERNAL_SHOW_PATH)
         val entryToken = call.request.queryParameters["t"]
         if (!public && method == HttpMethod.Get && path == "/" && entryToken != null) {
             if (matches(entryToken)) {
