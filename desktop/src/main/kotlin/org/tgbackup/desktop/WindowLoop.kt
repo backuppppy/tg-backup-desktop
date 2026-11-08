@@ -45,24 +45,40 @@ class WindowLoop(
 
     private fun loop(): WindowOutcome {
         var hidden = startHidden && tray != null
+        var reopenedFromTray = false
         while (true) {
             if (!hidden) {
                 lock.withLock {
                     state = State.OPEN
                     request = null
                 }
-                val outcome = window()
+                val outcome = try {
+                    window()
+                } catch (t: Throwable) {
+                    if (!reopenedFromTray) throw t
+                    println("WINDOW_REOPEN_FAIL ${t::class.java.simpleName}")
+                    null
+                }
                 lock.withLock { state = State.CLOSING }
-                if (outcome != WindowOutcome.CLOSED) return outcome
-                // A second launch that came while the window closed (or while the question was up) wins over the end.
-                val background = tray != null && !showPending() && busy() && !showPending() && askBackground()
-                if (!background) {
-                    if (endUnlessShown()) return outcome
-                    continue
+                if (outcome != WindowOutcome.CLOSED) {
+                    if (!reopenedFromTray || tray == null) return checkNotNull(outcome)
+                    if (outcome != null) println("WINDOW_REOPEN_FAIL $outcome")
+                    // A failed reopen is not a reason to terminate or to claim WebView2 is missing at startup.
+                    // Return to the tray so the user can try again later.
+                    hidden = true
+                    reopenedFromTray = false
+                } else {
+                    // A second launch that came while the window closed (or while the question was up) wins over the end.
+                    val background = tray != null && !showPending() && busy() && !showPending() && askBackground()
+                    if (!background) {
+                        if (endUnlessShown()) return outcome
+                        continue
+                    }
                 }
             }
-            hidden = false
             if (waitInTray(tray!!) == Request.QUIT) return WindowOutcome.CLOSED
+            hidden = false
+            reopenedFromTray = true
         }
     }
 
@@ -82,7 +98,7 @@ class WindowLoop(
             state = State.HIDDEN
         }
         // Without an icon the program could not be reached again: then it ends, as after No.
-        val shown = runCatching { tray.showIcon(onOpen = ::show, onQuit = ::quit) }
+        val shown = runCatching { tray.showIcon(onOpen = { show() }, onQuit = ::quit) }
             .onFailure { println("TRAY_FAIL ${it::class.java.simpleName}") }.isSuccess
         if (!shown) return Request.QUIT
         try {
@@ -96,20 +112,29 @@ class WindowLoop(
         }
     }
 
-    /** Opens the window (from the tray), or brings the open one to the front. */
-    fun show() {
+    /** Opens the window (from the tray), or brings the open one to the front. Returns false once ending. */
+    fun show(): Boolean {
+        var accepted = true
         val front = lock.withLock {
             when (state) {
                 State.OPEN -> true
                 State.STARTING, State.CLOSING, State.HIDDEN -> {
-                    if (request == null) request = Request.SHOW
-                    requested.signalAll()
+                    if (request == Request.QUIT) {
+                        accepted = false
+                    } else {
+                        if (request == null) request = Request.SHOW
+                        requested.signalAll()
+                    }
                     false
                 }
-                State.ENDED -> false
+                State.ENDED -> {
+                    accepted = false
+                    false
+                }
             }
         }
         if (front) runCatching(toFront)
+        return accepted
     }
 
     /** "יציאה": ends the program from the tray, without a question. */
