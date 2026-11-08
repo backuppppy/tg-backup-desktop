@@ -229,6 +229,62 @@ class WindowLoopTest {
     }
 
     @Test
+    fun aShowDuringTheQuestionReopensTheWindowEvenOnNo() {
+        val busy = AtomicBoolean(true)
+        lateinit var l: WindowLoop
+        l = WindowLoop(
+            window = {
+                if (windows.incrementAndGet() == 2) busy.set(false)
+                events += "window"
+                WindowOutcome.CLOSED
+            },
+            busy = { busy.get() },
+            askBackground = { events += "ask"; l.show(); false },
+            tray = FakeTray(),
+            startHidden = false,
+            toFront = { events += "front" },
+        )
+        assertEquals(WindowOutcome.CLOSED, l.run())
+        assertEquals(listOf("window", "ask", "window"), events.toList())
+    }
+
+    @Test
+    fun aShowRightAfterTheCloseWithNothingRunningReopensTheWindow() {
+        lateinit var l: WindowLoop
+        l = WindowLoop(
+            window = {
+                windows.incrementAndGet()
+                events += "window"
+                WindowOutcome.CLOSED
+            },
+            // The second launch arrives between the close and the busy check, only the first time.
+            busy = { if (windows.get() == 1 && "shown" !in events) { events += "shown"; l.show() }; false },
+            askBackground = { events += "ask"; true },
+            tray = FakeTray(),
+            startHidden = false,
+            toFront = { events += "front" },
+        )
+        assertEquals(WindowOutcome.CLOSED, l.run())
+        assertEquals(listOf("window", "shown", "window"), events.toList())
+    }
+
+    @Test
+    fun anInterruptedWaitLeavesNoIcon() {
+        val tray = FakeTray()
+        val l = loop(busy = true, answer = true, tray = tray)
+        val result = CompletableFuture<WindowOutcome>()
+        val t = thread(isDaemon = true, name = "window-loop-test") {
+            runCatching { l.run() }.fold(result::complete, result::completeExceptionally)
+        }
+        waitUntil("the icon") { tray.shown.get() }
+        t.interrupt()
+        t.join(5_000)
+        assertTrue(result.isCompletedExceptionally)
+        assertFalse(tray.shown.get())
+        assertEquals(listOf("window", "ask", "icon", "hide"), events.toList())
+    }
+
+    @Test
     fun aShowAfterTheLoopEndedDoesNothing() {
         val l = loop(busy = false, answer = true, tray = FakeTray())
         assertEquals(WindowOutcome.CLOSED, l.run())

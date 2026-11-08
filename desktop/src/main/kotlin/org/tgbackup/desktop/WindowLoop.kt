@@ -53,11 +53,26 @@ class WindowLoop(
                 }
                 val outcome = window()
                 lock.withLock { state = State.CLOSING }
-                if (outcome != WindowOutcome.CLOSED || tray == null || !busy() || !askBackground()) return outcome
+                if (outcome != WindowOutcome.CLOSED) return outcome
+                // A second launch that came while the window closed (or while the question was up) wins over the end.
+                val background = tray != null && !showPending() && busy() && !showPending() && askBackground()
+                if (!background) {
+                    if (endUnlessShown()) return outcome
+                    continue
+                }
             }
             hidden = false
             if (waitInTray(tray!!) == Request.QUIT) return WindowOutcome.CLOSED
         }
+    }
+
+    private fun showPending(): Boolean = lock.withLock { request == Request.SHOW }
+
+    /** Ends (a later [show] does nothing) unless a [show] is pending: then false, and the window opens again. */
+    private fun endUnlessShown(): Boolean = lock.withLock {
+        if (request == Request.SHOW) return false
+        state = State.ENDED
+        true
     }
 
     /** The icon until [show] or [quit]. A [show] that came while the question was up opens the window at once. */
@@ -70,12 +85,15 @@ class WindowLoop(
         val shown = runCatching { tray.showIcon(onOpen = ::show, onQuit = ::quit) }
             .onFailure { println("TRAY_FAIL ${it::class.java.simpleName}") }.isSuccess
         if (!shown) return Request.QUIT
-        val r = lock.withLock {
-            while (request == null) requested.await()
-            request!!
+        try {
+            return lock.withLock {
+                while (request == null) requested.await()
+                request!!
+            }
+        } finally {
+            // Also when the wait is interrupted: never an icon left behind by an ended loop.
+            runCatching(tray::hideIcon)
         }
-        runCatching(tray::hideIcon)
-        return r
     }
 
     /** Opens the window (from the tray), or brings the open one to the front. */
