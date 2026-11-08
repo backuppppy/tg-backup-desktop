@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 
 const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const NOTE = 'API ID ו-API Hash מקבלים בכתובת my.telegram.org ← API development tools.';
+const HOWTO_TITLE = 'איך מקבלים API ID ו-API Hash';
 const MASK = '••••';
 
 async function state(request) {
@@ -23,7 +24,8 @@ async function addAccount(request, name) {
 async function open(page) {
   await page.goto('/#accounts');
   await expect(page.locator('#title')).toContainText('TG Backup  v');
-  await expect(page.getByText(NOTE, { exact: true })).toBeVisible();
+  // The note shows with accounts; with none, the how-to card takes its place.
+  await expect(page.getByText(NOTE, { exact: true }).or(page.getByRole('heading', { name: HOWTO_TITLE }))).toBeVisible();
 }
 
 const card = (page, name) => page.locator('.account-card', { has: page.locator('.account-title', { hasText: name }) });
@@ -507,4 +509,50 @@ test('typing survives accountStates and log events (the input is kept across ren
   expect(await input.evaluate((el) => document.activeElement === el)).toBe(true);
   await input.pressSequentially('6');
   await expect(input).toHaveValue('9876');
+});
+
+/** The event stream replays the real state with `patch` on top (as fakeStream in jobs.spec.mjs). */
+async function fakeStream(page, patch) {
+  const real = await state(page.request);
+  await page.route('**/api/events', (route) => route.fulfill({
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+    body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify({ ...real, ...patch })}\n\n`,
+  }));
+}
+
+test('no accounts: a card explains how to get the API ID and hash, before the add button', async ({ page }) => {
+  await fakeStream(page, { accounts: [] });
+  await page.goto('/#accounts');
+  const howto = page.locator('.api-howto');
+  await expect(howto.getByRole('heading', { name: HOWTO_TITLE })).toBeVisible();
+  await expect(howto.locator('ol > li')).toHaveText([
+    'נכנסים ל-my.telegram.org ומתחברים עם מספר הטלפון (הקוד מגיע בטלגרם).',
+    'בוחרים API development tools.',
+    'ממלאים שם אפליקציה וכינוי (כל טקסט באנגלית) ולוחצים Create.',
+    'מעתיקים את App api_id ואת App api_hash לחלון "חשבון חדש".',
+  ]);
+  const link = howto.getByRole('link', { name: 'פתח את my.telegram.org' });
+  await expect(link).toHaveAttribute('href', 'https://my.telegram.org');
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener');
+  // The card says what the short note says, so the note is not shown next to it.
+  await expect(page.getByText(NOTE, { exact: true })).toHaveCount(0);
+  const add = page.getByRole('button', { name: '➕ הוסף חשבון' });
+  const before = await howto.evaluate((el, b) => !!(el.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING), await add.elementHandle());
+  expect(before).toBe(true);
+});
+
+test('with an account there is no how-to card, the short note stays', async ({ page }) => {
+  const name = `t${uid()}`;
+  const id = await addAccount(page.request, name);
+  try {
+    await page.goto('/#accounts');
+    await expect(card(page, name)).toBeVisible();
+    await expect(page.getByText(NOTE, { exact: true })).toBeVisible();
+    await expect(page.locator('.api-howto')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: HOWTO_TITLE })).toHaveCount(0);
+  } finally {
+    await page.request.delete(`/api/accounts/${id}`);
+  }
 });

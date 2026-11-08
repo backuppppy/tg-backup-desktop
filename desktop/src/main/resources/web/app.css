@@ -272,6 +272,7 @@ button.text.danger { color: var(--error); }
 .accounts { display: flex; flex-direction: column; gap: 10px; }
 .accounts .card { margin: 0; }
 .accounts-note { margin: 0; }
+.api-howto ol { margin: 0 0 8px; padding-inline-start: 22px; line-height: 1.6; }
 .account-card { display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
 .account-part { display: contents; }
 .account-card > button { align-self: flex-start; }

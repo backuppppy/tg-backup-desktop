@@ -86,7 +86,8 @@ test('choosing חשבונות in the left select shows Accounts on the left', as
   await open(page);
   await select(page, 'left').selectOption({ label: 'חשבונות' });
   await expectSplit(page, 'jobs', 'accounts');
-  await expect(pane(page, 'left').getByText(NOTE, { exact: true })).toBeVisible();
+  // Empty accounts show the how-to card instead of the note.
+  await expect(pane(page, 'left').getByText(NOTE, { exact: true }).or(pane(page, 'left').getByRole('heading', { name: 'איך מקבלים API ID ו-API Hash' }))).toBeVisible();
   await expect(page.locator('[data-screen="log"]')).toHaveCount(0);
   await expect(pane(page, 'left')).toHaveClass(/\bactive\b/);
   expect(await page.evaluate(() => location.hash)).toBe('#accounts');

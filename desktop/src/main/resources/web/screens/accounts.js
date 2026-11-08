@@ -38,6 +38,7 @@ export function render(root, state) {
       root,
       list: h('div', { class: 'accounts' }),
       note: h('p', { class: 'small accounts-note' }, 'API ID ו-API Hash מקבלים בכתובת my.telegram.org ← API development tools.'),
+      howto: howtoCard(),
       add: h('button', { type: 'button', class: 'full', onclick: () => accountDialog(null) }, '➕ הוסף חשבון'),
       order: null,
     };
@@ -54,9 +55,21 @@ export function render(root, state) {
   const order = accounts.map((a) => a.id).join('\n');
   if (order !== view.order) {
     view.order = order;
-    view.list.replaceChildren(view.note, ...accounts.map((a) => cards.get(a.id).el), view.add);
+    view.list.replaceChildren(accounts.length ? view.note : view.howto, ...accounts.map((a) => cards.get(a.id).el), view.add);
   }
   schedule(accounts, state);
+}
+
+/** With no account the short note gives way to this card: the same pointer to my.telegram.org, step by step. */
+function howtoCard() {
+  return h('section', { class: 'card api-howto' },
+    h('h2', {}, 'איך מקבלים API ID ו-API Hash'),
+    h('ol', {},
+      h('li', {}, 'נכנסים ל-my.telegram.org ומתחברים עם מספר הטלפון (הקוד מגיע בטלגרם).'),
+      h('li', {}, 'בוחרים API development tools.'),
+      h('li', {}, 'ממלאים שם אפליקציה וכינוי (כל טקסט באנגלית) ולוחצים Create.'),
+      h('li', {}, 'מעתיקים את App api_id ואת App api_hash לחלון "חשבון חדש".')),
+    h('a', { class: 'link', href: 'https://my.telegram.org', target: '_blank', rel: 'noopener' }, 'פתח את my.telegram.org'));
 }
 
 /** Draws again after a request or the countdown; a screen out of the view draws nothing and its timer stops. */
