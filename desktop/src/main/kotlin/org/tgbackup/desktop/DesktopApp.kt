@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOf
@@ -60,6 +63,23 @@ class DesktopApp(
     /** Start with Windows and keep awake (Settings). */
     val prefs = DesktopPrefs(dir)
 
+    /**
+     * An export is active until its job completes: `exports.running` keeps a finished export until it is dismissed, so this follows the
+     * export job's completion (activeWhileRunning).
+     */
+    private val exportActive: Flow<Boolean> = exports.running.flatMapLatest { running ->
+        if (running == null) {
+            flowOf(false)
+        } else {
+            activeWhileRunning(running.job)
+        }
+    }
+
+    /** A job or an export runs: the sleep guard's signal (without the Settings switch), and what closing the window asks about. */
+    private val busy: StateFlow<Boolean> = busySignal(jobs.anyRunning, exportActive).stateIn(scope, SharingStarted.Eagerly, false)
+
+    fun isBusy(): Boolean = busy.value
+
     /** Mirrors `App.onCreate()` (without Sentry and the foreground service) plus the `jobs.restore()` call. */
     fun start() {
         if (store.migratedFromLegacy) {
@@ -71,16 +91,8 @@ class DesktopApp(
             store.config.map { it.accounts }.distinctUntilChanged().collect { accounts.sync(it) }
         }
 
-        // Keep the PC awake while a job or an export runs, unless switched off in Settings. `exports.running` keeps a finished export until it
-        // is dismissed, so the signal follows the export job's completion (activeWhileRunning). Power calls can block (up to 5 s) or throw:
-        // they run on IO and never break the collector.
-        val exportActive = exports.running.flatMapLatest { running ->
-            if (running == null) {
-                flowOf(false)
-            } else {
-                activeWhileRunning(running.job)
-            }
-        }
+        // Keep the PC awake while work runs ([busy]), unless switched off in Settings. Power calls can block (up to 5 s) or throw: they run
+        // on IO and never break the collector.
         scope.launch(Dispatchers.IO) {
             sleepSignal(jobs.anyRunning, exportActive, prefs.value.map { it.keepAwake })
                 .collect { active -> updateSleepGuard(active) }
@@ -153,7 +165,11 @@ class DesktopApp(
 
 /** Whether to keep the PC awake: a job or an export runs, and the Settings switch is on. */
 internal fun sleepSignal(jobs: Flow<Boolean>, export: Flow<Boolean>, keepAwake: Flow<Boolean>): Flow<Boolean> =
-    combine(jobs, export, keepAwake) { r, e, k -> (r || e) && k }.distinctUntilChanged()
+    combine(busySignal(jobs, export), keepAwake) { b, k -> b && k }.distinctUntilChanged()
+
+/** Work runs: a job or an export. */
+internal fun busySignal(jobs: Flow<Boolean>, export: Flow<Boolean>): Flow<Boolean> =
+    combine(jobs, export) { r, e -> r || e }.distinctUntilChanged()
 
 /**
  * `true` until [job] completes, then `false`. A lazy job that has not started yet counts as active (ExportManager

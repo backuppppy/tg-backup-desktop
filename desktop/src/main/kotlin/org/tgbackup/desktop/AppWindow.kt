@@ -55,6 +55,17 @@ private interface Kernel32Env : Library {
     fun SetEnvironmentVariableW(name: WString, value: WString?): Boolean
 }
 
+/** What jna-platform's User32 lacks. */
+internal interface User32More : Library {
+    fun IsIconic(hwnd: HWND): Boolean
+    fun AllowSetForegroundWindow(processId: Int): Boolean
+    fun SetProcessDpiAwarenessContext(context: Pointer): Boolean
+
+    companion object {
+        val INSTANCE: User32More by lazy { Native.load("user32", User32More::class.java) }
+    }
+}
+
 const val WINDOW_TITLE = "TG Backup"
 const val WINDOW_WIDTH = 1100
 const val WINDOW_HEIGHT = 750
@@ -62,11 +73,16 @@ const val WINDOW_HEIGHT = 750
 private const val WEBVIEW_HINT_NONE = 0
 private const val SWP_NOZORDER = 0x0004
 private const val SWP_NOACTIVATE = 0x0010
+private const val PM_REMOVE = 0x0001
 
 /** The program's window: the screens from the internal server, inside WebView2. */
 object AppWindow {
     /** Strong references so JNA callbacks are not collected while native code holds them. */
     private val keepAlive = mutableListOf<Any>()
+
+    /** The open window, for [toFront]; null while there is none. */
+    @Volatile
+    private var current: HWND? = null
 
     /**
      * Opens [url] and blocks until the window is closed ([WindowOutcome.CLOSED]); returns
@@ -75,6 +91,7 @@ object AppWindow {
      * (without the URL) when our page asked to open a link that is not http(s).
      */
     fun open(url: String, smoke: AppSmoke, profileDir: Path, onRejectedLink: () -> Unit = {}): WindowOutcome {
+        dropStrayQuit()
         val origin = checkNotNull(ExternalLinks.originOf(url)) { "entry URL is not http" }
         val natives = File(System.getProperty("tgb.natives") ?: "natives").absoluteFile
         val kernel32 = Native.load("kernel32", Kernel32Env::class.java)
@@ -134,7 +151,8 @@ object AppWindow {
             hwnd?.let(::reportPlacement)
             smoke.loaded(close)
         }
-        keepAlive.addAll(listOf(terminate, openExternal, onPage, onLoad))
+        val callbacks = listOf(terminate, openExternal, onPage, onLoad)
+        keepAlive.addAll(callbacks)
 
         lib.webview_set_title(w, WINDOW_TITLE)
         lib.webview_set_size(w, WINDOW_WIDTH, WINDOW_HEIGHT, WEBVIEW_HINT_NONE)
@@ -147,10 +165,37 @@ object AppWindow {
             lib.webview_init(w, SmokePage.SCRIPT)
         }
         lib.webview_navigate(w, url)
+        // Opened again from the tray or for a second launch: in front, not behind the window that was active.
+        hwnd?.let(User32.INSTANCE::SetForegroundWindow)
+        current = hwnd
         lib.webview_run(w)
+        current = null
         synchronized(alive) { alive.set(false) }
         lib.webview_destroy(w)
+        keepAlive.removeAll(callbacks)
         return WindowOutcome.CLOSED
+    }
+
+    /**
+     * Brings the open window to the front (a second launch, or "פתח" while it is open): restored when minimized,
+     * otherwise left as it is (a maximized window stays maximized). Any thread; nothing when no window is open.
+     */
+    fun toFront() {
+        val hwnd = current ?: return
+        val restore = runCatching { User32More.INSTANCE.IsIconic(hwnd) }.getOrDefault(false)
+        User32.INSTANCE.ShowWindow(hwnd, if (restore) WinUser.SW_RESTORE else WinUser.SW_SHOW)
+        User32.INSTANCE.SetForegroundWindow(hwnd)
+    }
+
+    /**
+     * The window is opened again on the same thread. A quit request the previous window's end left behind
+     * would end the new message loop at once, so it is taken off the thread's queue first.
+     */
+    private fun dropStrayQuit() {
+        val msg = WinUser.MSG()
+        var dropped = 0
+        while (User32.INSTANCE.PeekMessage(msg, null, WinUser.WM_QUIT, WinUser.WM_QUIT, PM_REMOVE)) dropped++
+        if (dropped > 0) println("WINDOW_STRAY_QUIT $dropped")
     }
 
     /** Opens [url] in the default browser, off the window's thread (Desktop.browse can take a while). */

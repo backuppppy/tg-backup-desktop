@@ -5,10 +5,13 @@ const val MSG_NO_WEBVIEW = "לא ניתן לפתוח את החלון: רכיב W
 
 enum class WindowOutcome { CLOSED, NO_WEBVIEW }
 
-/** The window's life inside the running program: the engine never outlives the window, whatever happens. */
+/**
+ * The program's life around its windows ([WindowLoop]: the window may close and open again from the tray): the
+ * engine never outlives the last window, whatever happens.
+ */
 object WindowLifecycle {
     /**
-     * Runs [open] (blocks while the window is up), then always [shutdown]. Returns the exit code: 0 after a normal
+     * Runs [open] (blocks while a window or the tray icon is up), then always [shutdown]. Returns the exit code: 0 after a normal
      * close, 1 when [open] threw, 2 when WebView2 was missing (then [tellNoWebView] runs, after the shutdown).
      */
     fun run(open: () -> WindowOutcome, shutdown: () -> Unit, tellNoWebView: () -> Unit): Int {

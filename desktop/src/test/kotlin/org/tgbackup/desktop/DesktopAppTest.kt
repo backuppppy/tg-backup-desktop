@@ -114,6 +114,25 @@ class DesktopAppTest {
     }
 
     @Test
+    fun anExportAloneIsBusy() = runBlocking {
+        // Closing the window while only an export runs must ask (the same signal as the sleep guard).
+        assertEquals(true, busySignal(MutableStateFlow(false), MutableStateFlow(true)).first())
+        assertEquals(true, busySignal(MutableStateFlow(true), MutableStateFlow(false)).first())
+        assertEquals(false, busySignal(MutableStateFlow(false), MutableStateFlow(false)).first())
+    }
+
+    @Test
+    fun anIdleAppIsNotBusy() {
+        val app = DesktopApp(dataDir(), Recorder())
+        try {
+            app.start()
+            assertFalse(app.isBusy())
+        } finally {
+            app.close()
+        }
+    }
+
+    @Test
     fun keepAwakeOffWithNothingRunningNeverAsks() = runBlocking {
         val values = sleepSignal(MutableStateFlow(true), MutableStateFlow(true), MutableStateFlow(false))
         assertEquals(false, withTimeout(5_000) { values.first() })

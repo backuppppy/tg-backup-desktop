@@ -29,7 +29,8 @@ private const val SHUTDOWN_LIMIT_MS = 40_000L
 
 /**
  * TGBackup.exe: the engine, the internal server on 127.0.0.1, and the screens in a WebView2 window. Closing the
- * window ends the program (the tray comes in plan 5). `--smoke` runs the same program on a throw-away data dir,
+ * window ends the program, unless work runs and the user chooses to go on in the background ([WindowLoop], the
+ * tray); `--minimized` (start with Windows) starts in the tray. `--smoke` runs the same program on a throw-away data dir,
  * checks the API and the real screen, and exits 0 (or 1 with `PAGE_FAIL <reason>`).
  */
 fun main(args: Array<String>) {
@@ -39,7 +40,7 @@ fun main(args: Array<String>) {
     val smoke = AppSmoke("--smoke" in args)
     smoke.startWatchdog()
     val code = try {
-        run(smoke)
+        run(smoke, startHidden = "--minimized" in args)
     } catch (t: Throwable) {
         // Before the window: the engine or the server did not start. Never leave a process without a window.
         println("START_FAIL ${t::class.java.simpleName}")
@@ -54,7 +55,7 @@ fun main(args: Array<String>) {
 
 /** Returns the exit code ([WindowLifecycle.run]). */
 @OptIn(kotlin.io.path.ExperimentalPathApi::class)
-private fun run(smoke: AppSmoke): Int {
+private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     val dataDir = if (smoke.enabled) smokeDataDir(AppDirs.dataDir()) else AppDirs.dataDir()
     println("DATA_DIR $dataDir")
     // One program per data dir: a second launch shows the running one's window and exits.
@@ -72,14 +73,28 @@ private fun run(smoke: AppSmoke): Int {
         println("SHUTDOWN_DONE ${(System.nanoTime() - started) / 1_000_000}ms")
     }
     val profileDir = dataDir.resolve("webview2")
+    // `--smoke` keeps no tray: closing its window always ends it.
+    val tray = if (smoke.enabled) null else Tray.createOrNull()
+    val loop = WindowLoop(
+        window = {
+            AppWindow.open(checkNotNull(server).entryUrl(), smoke, profileDir) {
+                app.log.warn("קישור שאינו http(s) נחסם")
+            }
+        },
+        busy = app::isBusy,
+        askBackground = ::askBackground,
+        tray = tray,
+        startHidden = startHidden,
+        toFront = AppWindow::toFront,
+    )
     val code = WindowLifecycle.run(
         open = {
             app.start()
-            // onShow: nothing to do yet, the window is open for as long as the program runs.
-            val s = ApiServer(app, onShow = {}).also { server = it }
+            // A second launch: the window opens again (from the tray) or comes to the front.
+            val s = ApiServer(app, onShow = loop::show).also { server = it }
             instance.publish(s.start(), s.instanceToken)
             if (smoke.enabled) SmokeApi(s).checkAndSeed()
-            AppWindow.open(s.entryUrl(), smoke, profileDir) { app.log.warn("קישור שאינו http(s) נחסם") }
+            loop.run()
         },
         shutdown = shutdown,
         tellNoWebView = { if (!smoke.enabled) showError(MSG_NO_WEBVIEW) },
@@ -95,6 +110,8 @@ private fun run(smoke: AppSmoke): Int {
  * ended during the retries, this launch owns the data dir and returns to start normally.
  */
 private fun handOffOrOwn(instance: SingleInstance, smoke: AppSmoke) {
+    // This launch is the one the user just started: it lets the running one bring its window to the front.
+    runCatching { User32More.INSTANCE.AllowSetForegroundWindow(ASFW_ANY) }
     when (instance.handOff()) {
         HandOff.Acquired -> {
             println("INSTANCE_ACQUIRED_AFTER_WAIT")
@@ -121,23 +138,33 @@ private fun wipeExceptLock(dataDir: Path) {
 /** A blocking Windows error box (the window could not be shown, so this is the only way to tell the user). */
 private fun showError(text: String) = showMessage(text, MB_ICONERROR)
 
-private fun showMessage(text: String, icon: Int) {
+private fun showMessage(text: String, icon: Int, buttons: Int = MB_OK): Int =
     // Hebrew text: right-to-left reading order, right-aligned.
     Native.load("user32", User32Box::class.java)
-        .MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or icon or MB_RTLREADING or MB_RIGHT)
-}
+        .MessageBoxW(null, WString(text), WString(WINDOW_TITLE), buttons or icon or MB_RTLREADING or MB_RIGHT)
+
+/** The window was closed while work runs: true (Yes) → on in the background, false (No) → the program ends. */
+private fun askBackground(): Boolean =
+    // MB_SETFOREGROUND: the window is gone, the box must not open behind another program.
+    showMessage(MSG_GO_ON_IN_BACKGROUND, MB_ICONQUESTION or MB_SETFOREGROUND, MB_YESNO) == IDYES
 
 private interface User32Box : Library {
     fun MessageBoxW(hwnd: Pointer?, text: WString, caption: WString, type: Int): Int
 }
 
 private const val MB_OK = 0x0
+private const val MB_YESNO = 0x4
+private const val MB_ICONQUESTION = 0x20
+private const val MB_SETFOREGROUND = 0x10000
+private const val IDYES = 6
+private const val ASFW_ANY = -1
 private const val MB_ICONERROR = 0x10
 private const val MB_ICONINFORMATION = 0x40
 private const val MB_RIGHT = 0x80000
 private const val MB_RTLREADING = 0x100000
 
 private const val MSG_ALREADY_RUNNING = "התוכנה כבר פועלת."
+private const val MSG_GO_ON_IN_BACKGROUND = "יש משימה או ייצוא שרצים. להמשיך לרוץ ברקע?\nכן – ממשיכה ליד השעון.\nלא – התוכנה תיסגר, והמשימות ימשיכו מאותו מקום בפתיחה הבאה."
 
 /**
  * `--smoke` only: reports that WebView2 used the smoke profile, then removes the throw-away data dir. WebView2's
