@@ -30,7 +30,7 @@ class InternalShowTest : RouteTestBase() {
                 token = "t1",
                 allowedHosts = setOf("localhost:80"),
                 instanceToken = "i1",
-                onShow = { shows.incrementAndGet() },
+                onShow = { shows.incrementAndGet(); true },
             )
         }
         block(createClient { })
@@ -70,6 +70,24 @@ class InternalShowTest : RouteTestBase() {
         }
         assertEquals(HttpStatusCode.OK, r.status)
         assertEquals(1, shows.get())
+    }
+
+    @Test
+    fun aShowRequestIsNotAcceptedAfterTheWindowLoopEnded() = testApplication {
+        application {
+            tgbModule(
+                app = app,
+                token = "t1",
+                allowedHosts = setOf("localhost:80"),
+                instanceToken = "i1",
+                onShow = { false },
+            )
+        }
+        val r = createClient { }.post(INTERNAL_SHOW_PATH) {
+            header(HttpHeaders.Host, "localhost:80")
+            header(INSTANCE_HEADER, "i1")
+        }
+        assertEquals(HttpStatusCode.ServiceUnavailable, r.status)
     }
 
     @Test
@@ -128,7 +146,7 @@ class InternalShowTest : RouteTestBase() {
 
     @Test
     fun aSecondLaunchHandsOffToTheRealServer() {
-        val server = ApiServer(app, onShow = { shows.incrementAndGet() })
+        val server = ApiServer(app, onShow = { shows.incrementAndGet(); true })
         val port = server.start()
         val dir = Files.createTempDirectory("handoff")
         val owner = SingleInstance(dir)
