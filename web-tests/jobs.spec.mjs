@@ -320,9 +320,17 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(phase).toHaveAttribute('rel', 'noopener');
   // The link is on the number only.
   await expect(c1.locator('.last')).toHaveText('אוחז ב-id 77');
-  const last = c1.getByRole('link', { name: '77', exact: true });
+  const last = c1.locator('.last').getByRole('link', { name: '77', exact: true });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(last).toHaveAttribute('target', '_blank');
+  // As in Android: הודעה אחרונה שטופלה opens the source's message, the phase the target's.
+  await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה: 77');
+  const handled = c1.locator('.last-handled').getByRole('link', { name: '77', exact: true });
+  await expect(handled).toHaveAttribute('href', 'https://t.me/c/100/77');
+  await expect(handled).toHaveAttribute('target', '_blank');
+  // The lines in the Android order: phase, last handled, copied, position.
+  const order = await c1.evaluate((el) => [...el.querySelectorAll('.phase, .last-handled, .copied, .last')].map((e) => e.classList[0]));
+  expect(order).toEqual(['phase', 'last-handled', 'copied', 'last']);
   await expect(c1.getByRole('button', { name: '▶ המשך' })).toBeVisible();
 
   const c2 = card(page, 'משימה f2');
@@ -373,6 +381,10 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
   await expect(c1).toContainText('הועתקו: 12,340 · נכשלו: 1,234');
   await expect(c1.locator('.last')).toHaveText('אוחז ב-id 45,210 מתוך 50,000');
   await expect(c1.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
+  await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה: 45210');
+  expect(await visualOrder(c1.locator('.last-handled'), ['הודעה', 'אחרונה', 'שטופלה:', '45210'])).toBe(true);
+  // Not shown before any message was handled.
+  await expect(card(page, 'רק אחרון').locator('.last-handled')).toHaveCount(0);
   // Read right to left: אוחז ב-id, 45,210, מתוך, 50,000; and ⏱ רץ: then the time, הועתקו: then the count.
   expect(await visualOrder(c1.locator('.last'), ['אוחז ב-', 'id', '45,210', 'מתוך', '50,000'])).toBe(true);
   expect(await visualOrder(c1.locator('.run-time'), ['⏱', 'רץ:', '2:14:05'])).toBe(true);

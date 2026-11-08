@@ -19,7 +19,7 @@ export const KEY = 'tgb.layout';
 export const DEFAULTS = Object.freeze({
   mode: 'split', right: 'jobs', left: 'log', active: 'right', ratio: 0.55, jobsRatio: null, ratioJobs: null, jobsSeen: null,
 });
-/** From this many jobs the jobs pane gets half the room (two columns of cards); fewer get a third (one column). */
+/** From this many jobs the jobs pane gets half the room; fewer get a third. app.css sets the columns by the pane's width. */
 export const JOBS_HALF_FROM = 4;
 
 const other = (pane) => (pane === 'right' ? 'left' : 'right');
@@ -67,14 +67,6 @@ export function clampRatio(r) {
 /** The jobs pane's share of the room for `count` jobs: a third up to 3, half from 4. */
 export function jobsShare(count) {
   return count >= JOBS_HALF_FROM ? 0.5 : 0.33;
-}
-
-/**
- * The columns of job cards in the split view for `count` jobs (Plan 3b, part C): one while the jobs pane is a third,
- * two once it is half (jobsShare's split, from JOBS_HALF_FROM). app.css reads it as the job list's data-cols.
- */
-export function jobsColumns(count) {
-  return Number.isFinite(count) && count >= JOBS_HALF_FROM ? 2 : 1;
 }
 
 /** The desktop layout's width, as app.css's @media (min-width: 900px): from it `➕ הוסף משימה` heads the job list. */

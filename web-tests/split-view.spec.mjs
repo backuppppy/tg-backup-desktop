@@ -263,8 +263,8 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   const auto = n >= 4 ? 0.5 : 0.33;
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem('tgb.layout')))).toMatchObject({ ratio: 0.7, jobsRatio: null, ratioJobs: null });
   // The card grid in the left pane: a third (about 600 px) is one column, half (from 4 jobs) two; in the right pane,
-  // at 70% from the arrows, still by the number of jobs (Plan 3b, part C): one column the pane's width up to 3, two from
-  // 4, the cards filling the pane.
+  // at 70% from the arrows, two by the pane's width whatever the number of jobs (the user's ruling, 2026-11-08), the
+  // cards filling the pane.
   await select(page, 'left').selectOption({ label: 'משימות' });
   await expect(divider(page)).toHaveAttribute('aria-valuenow', String(Math.round((1 - auto) * 100)));
   expect((await screenIn(page, 'left', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(n >= 4 ? 2 : 1);
@@ -273,10 +273,10 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
   await divider(page).focus();
   for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowLeft');
   await expect(divider(page)).toHaveAttribute('aria-valuenow', '70');
-  expect((await screenIn(page, 'right', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(n >= 4 ? 2 : 1);
+  expect((await screenIn(page, 'right', 'jobs').locator('.jobs').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).split(' ').length).toBe(2);
   const room = await paneContent(page, 'right');
   const card = await box(screenIn(page, 'right', 'jobs').locator('.job-card').first());
-  expect(Math.abs(card.width - (n >= 4 ? (room - 12) / 2 : room))).toBeLessThanOrEqual(2);
+  expect(Math.abs(card.width - (room - 12) / 2)).toBeLessThanOrEqual(2);
 });
 
 test('what is typed survives a screen leaving the view: 960 px and back, one screen and back, the Export search', async ({ page }) => {
@@ -435,7 +435,6 @@ const paneContent = (page, side) => pane(page, side).locator('.pane-body').evalu
  */
 async function expectCards(page, side, n, cols) {
   expect(await columns(page, side)).toBe(cols);
-  await expect(screenIn(page, side, 'jobs').locator('.jobs')).toHaveAttribute('data-cols', String(n >= 4 ? 2 : 1));
   const room = await paneContent(page, side);
   const cards = [];
   for (const c of await screenIn(page, side, 'jobs').locator('.job-card').all()) cards.push(await box(c));
@@ -467,6 +466,19 @@ test('4 jobs on the right: half the room, two columns', async ({ page }) => {
   const cards = await expectCards(page, 'right', 4, 2);
   // Two cards share each row.
   expect(new Set(cards.map((b) => Math.round(b.y))).size).toBe(2);
+});
+
+test('2 jobs, the divider moved to widen the jobs pane: two columns by the pane\'s width, back to one when narrowed', async ({ page }) => {
+  await openWithJobs(page, 2);
+  await expectCards(page, 'right', 2, 1);
+  await divider(page).focus();
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press('ArrowLeft');
+  await expect(divider(page)).toHaveAttribute('aria-valuenow', '58');
+  const cards = await expectCards(page, 'right', 2, 2);
+  // Side by side, one row.
+  expect(new Set(cards.map((b) => Math.round(b.y))).size).toBe(1);
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press('ArrowRight');
+  await expectCards(page, 'right', 2, 1);
 });
 
 for (const [n, cols] of [[1, 1], [3, 1], [4, 2], [7, 2]]) {

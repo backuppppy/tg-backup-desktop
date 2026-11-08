@@ -3,7 +3,7 @@
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
 import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionParts } from '../lib/jobsFormat.js';
-import { jobsColumns, DESKTOP_QUERY, jobsListOrder } from '../lib/layout.js';
+import { DESKTOP_QUERY, jobsListOrder } from '../lib/layout.js';
 
 const MEDIA_TYPES = [
   ['VIDEO_DOC', 'וידאו + קבצים'],
@@ -54,8 +54,6 @@ export function render(root, state) {
   view.shown = { accounts, jobs, statuses, addOnTop };
   view.clocks = [];
   askLatest(jobs, statuses);
-  // The split view's columns of cards (app.css): one in a third of the room, two in half, as lib/layout.js shares it.
-  view.list.dataset.cols = String(jobsColumns(jobs.length));
   const focus = focusedButton(view.list);
   // On a desktop `➕ הוסף משימה` heads the list (plan 3b), in the DOM so that Tab reaches it first too.
   view.list.replaceChildren(...jobsListOrder({
@@ -265,7 +263,10 @@ function jobCard(job, status, accounts, state) {
     h('div', { class: 'small' }, details),
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
+    // As in Android: the phase opens the last message copied into the target, the last handled one the source's.
     running ? maybeLink('phase', status.lastTargetLink, status.phase) : null,
+    (Number(status.lastId) || 0) > 0 ? h('div', { class: 'last-handled' }, 'הודעה אחרונה שטופלה: ',
+      h('bdi', {}, numberLink(status.lastLink, String(status.lastId)))) : null,
     h('div', { class: 'copied' }, 'הועתקו: ', h('bdi', {}, formatCount(status.copiedTotal)),
       status.failed > 0 ? [' · נכשלו: ', h('bdi', {}, formatCount(status.failed))] : null),
     positionLine,

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULTS, TABS, SPLIT_MIN_WIDTH, effectiveMode, choose, showInActive, resolveSplit, clampRatio, parse, serialize, load, save,
-  ratioFor, jobsShare, jobsColumns, DESKTOP_QUERY, jobsListOrder, manualRatio, seenJobs,
+  ratioFor, jobsShare, DESKTOP_QUERY, jobsListOrder, manualRatio, seenJobs,
 } from '../../desktop/src/main/resources/web/lib/layout.js';
 
 const split = { ...DEFAULTS };
@@ -115,13 +115,6 @@ test('jobsShare: a third for 0..3 jobs, half from 4', () => {
 });
 
 // Plan 3b, part C: the cards fill the jobs pane, one column while it is a third, two once it is half.
-test('jobsColumns: one column for 0..3 jobs, two from 4, the same split as jobsShare', () => {
-  for (const n of [0, 1, 2, 3]) assert.equal(jobsColumns(n), 1, String(n));
-  for (const n of [4, 5, 7, 12, 20]) assert.equal(jobsColumns(n), 2, String(n));
-  for (let n = 0; n <= 30; n += 1) assert.equal(jobsColumns(n) === 2, jobsShare(n) === 0.5, String(n));
-  for (const bad of [undefined, null, NaN, -1, 'x']) assert.equal(jobsColumns(bad), 1, String(bad));
-});
-
 // Plan 3b, the user's ruling: on a desktop (from 900 px) `➕ הוסף משימה` heads the list, right after the header.
 test('DESKTOP_QUERY is the 900 px of app.css', () => {
   assert.equal(DESKTOP_QUERY, '(min-width: 900px)');

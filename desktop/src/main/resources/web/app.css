@@ -242,7 +242,7 @@ button.text.danger { color: var(--error); }
 .job-card.running { background: var(--surface-variant); }
 .job-title { margin: 0; font-size: 16px; font-weight: 500; }
 .job-card hr { width: 100%; margin: 2px 0; border: 0; border-top: 1px solid #3A4A5A; }
-.job-card .phase { color: var(--primary); }
+.job-card .phase, .job-card .last-handled .link { color: var(--primary); }
 .job-card .link { color: var(--primary); text-decoration: underline; }
 
 /* Dialog fields */
@@ -421,18 +421,18 @@ button.chat-card:hover { background: var(--surface-variant); }
     .jobs > button.full { grid-column: 1 / -1; justify-self: start; width: min(100%, 420px); }
   }
 
-  /* Plan 3b, part C, split: the job cards fill the pane, no room left beside them. jobs.js sets data-cols by the
-     number of jobs as lib/layout.js shares the room (jobsColumns): 1 up to 3 jobs (a third of the window), each card
-     the pane's width; 2 from 4 (half), two columns sharing it, once the pane holds two cards (from 640 px; half of a
-     1200 px window does not, so one). The add button above them all (jobs.js, plan 3b), the list's width. In a narrow pane the summary
-     and the all-jobs buttons wrap. */
+  /* Plan 3b, part C, split: the job cards fill the pane, no room left beside them. The columns follow the pane's
+     width, not the number of jobs (the user's ruling, 2026-11-08): one column, each card the pane's width, while the
+     pane is narrow (a third of the window, the default up to 3 jobs, or half of a 1200 px window); two sharing it from
+     720 px (half of a full-screen window, the default from 4 jobs, or the divider dragged wide). The add button above
+     them all (jobs.js, plan 3b), the list's width. In a narrow pane the summary and the all-jobs buttons wrap. */
   body[data-layout="split"] .jobs {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
-  @container pane (min-width: 640px) {
-    body[data-layout="split"] .jobs[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @container pane (min-width: 720px) {
+    body[data-layout="split"] .jobs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   body[data-layout="split"] .jobs > :not(.job-card) { grid-column: 1 / -1; }
   body[data-layout="split"] .jobs > button.full { justify-self: stretch; width: 100%; }
