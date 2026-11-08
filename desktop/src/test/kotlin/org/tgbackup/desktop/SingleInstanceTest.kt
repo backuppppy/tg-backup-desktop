@@ -5,8 +5,10 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Collections
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 import kotlin.io.path.exists
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -16,11 +18,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Holds the lock of the data dir in args[0] in its own JVM: prints `HELD`, then waits for a line on stdin. */
+/**
+ * Holds the lock of the data dir in args[0] (its UTF-8 bytes in hex: Windows passes `main` arguments through the
+ * ANSI code page, which can garble a Hebrew path) in its own JVM: prints `HELD`, then waits for a line on stdin.
+ */
 object SingleInstanceHolder {
     @JvmStatic
     fun main(args: Array<String>) {
-        val instance = SingleInstance(Path.of(args[0]))
+        val path = String(args[0].chunked(2).map { it.toInt(16).toByte() }.toByteArray(), Charsets.UTF_8)
+        val instance = SingleInstance(Path.of(path))
         println(if (instance.acquire()) "HELD" else "NOT_HELD")
         System.out.flush()
         readLine()
@@ -78,18 +84,31 @@ class SingleInstanceTest {
     @Test
     fun anotherProcessHoldingTheLockBlocksAndItsEndFreesIt() {
         val java = Path.of(System.getProperty("java.home"), "bin", "java").toString()
-        val child = ProcessBuilder(java, "-cp", System.getProperty("java.class.path"), SingleInstanceHolder::class.java.name, dir.toString())
-            .redirectErrorStream(true).start()
+        val hexDir = dir.toString().toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
+        // stdout only: the JVM may print lines of its own (such as "Picked up JAVA_TOOL_OPTIONS") on stderr.
+        val stderr = Files.createTempFile("holder", ".err")
+        val child = ProcessBuilder(java, "-cp", System.getProperty("java.class.path"), SingleInstanceHolder::class.java.name, hexDir)
+            .redirectError(stderr.toFile()).start()
         try {
-            val first = child.inputStream.bufferedReader().readLine()
-            assertEquals("HELD", first)
+            val lines = Collections.synchronizedList(mutableListOf<String>())
+            val reader = thread(isDaemon = true) {
+                child.inputStream.bufferedReader().useLines { seq -> seq.takeWhile { lines.add(it); it != "HELD" && it != "NOT_HELD" }.count() }
+            }
+            reader.join(30_000)
+            assertTrue("HELD" in lines, "child stdout: $lines; stderr: ${runCatching { stderr.readText() }.getOrDefault("")}")
             assertFalse(instance().acquire())
         } finally {
             child.destroyForcibly()
             child.waitFor(10, TimeUnit.SECONDS)
         }
-        // The OS released the dead process's lock.
-        assertTrue(instance().acquire())
+        // The OS released the dead process's lock (on Windows possibly a moment after the process is gone).
+        var acquired = false
+        for (attempt in 1..20) {
+            acquired = instance().acquire()
+            if (acquired) break
+            Thread.sleep(250)
+        }
+        assertTrue(acquired)
     }
 
     @Test
