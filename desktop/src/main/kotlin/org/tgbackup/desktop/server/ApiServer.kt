@@ -37,15 +37,15 @@ val TgbJson = Json {
  * The program's internal server: it serves the screens (classpath `web/`) and the API to the program's own
  * WebView2 window, on [host] only. A new [sessionToken] is made on every launch; the window opens [entryUrl].
  * [extraRoutes] are installed with the others (behind the same security); the program passes none, only the
- * DevServer passes its test-only routes. [onShow] runs when a second launch asks this one to show its window
- * (`POST /internal/show` with [instanceToken]).
+ * DevServer passes its test-only routes. [onShow] returns true only when the running app accepted the request to
+ * show its window (`POST /internal/show` with [instanceToken]).
  */
 class ApiServer(
     private val app: DesktopApp,
     private val host: String = "127.0.0.1",
     private val port: Int = 0,
     private val extraRoutes: Route.(Events) -> Unit = {},
-    private val onShow: () -> Unit = {},
+    private val onShow: () -> Boolean = { false },
 ) {
     /** 32 random bytes, hex encoded. */
     val sessionToken: String = randomToken()
@@ -103,7 +103,7 @@ fun Application.tgbModule(
     handles: ChatHandles = ChatHandles(),
     locks: CommandLocks = CommandLocks(),
     instanceToken: String? = null,
-    onShow: () -> Unit = {},
+    onShow: () -> Boolean = { false },
 ) {
     installSecurity(token, allowedHosts, app.log)
     install(ContentNegotiation) { json(TgbJson) }
@@ -130,14 +130,14 @@ fun Application.tgbModule(
 }
 
 /** `POST /internal/show`: from loopback with the header [INSTANCE_HEADER] equal to [instanceToken], else 403. */
-private fun Route.internalShowRoute(instanceToken: String?, onShow: () -> Unit) {
+private fun Route.internalShowRoute(instanceToken: String?, onShow: () -> Boolean) {
     val expected = instanceToken?.toByteArray(Charsets.UTF_8)
     post(INTERNAL_SHOW_PATH) {
         val given = call.request.headers[INSTANCE_HEADER]?.toByteArray(Charsets.UTF_8)
         val allowed = expected != null && given != null && MessageDigest.isEqual(given, expected) &&
             isLoopback(call.request.local.remoteAddress)
         if (!allowed) return@post call.respondError(HttpStatusCode.Forbidden, MSG_FORBIDDEN)
-        onShow()
+        if (!onShow()) return@post call.respondText("unavailable", status = HttpStatusCode.ServiceUnavailable)
         call.respondText("ok", ContentType.Text.Plain.withCharset(Charsets.UTF_8))
     }
 }
