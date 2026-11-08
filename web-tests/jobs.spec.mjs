@@ -294,7 +294,7 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
       job({ id: 'f3', name: 'שלישית' }),
     ],
     statuses: {
-      f1: status({ running: true, paused: true, phase: 'מעתיק', copied: 3, copiedTotal: 3, failed: 2, lastId: 77,
+      f1: status({ running: true, paused: true, phase: 'מעתיק הודעה 5', copied: 3, copiedTotal: 3, failed: 2, lastId: 77,
         lastLink: 'https://t.me/c/100/77', lastTargetLink: 'https://t.me/c/200/5', sourceTitle: 'ערוץ מקור' }),
       f2: status({ running: true, phase: 'ממתין', copied: 4, copiedTotal: 4, isProtected: true }),
       f3: status({ lastId: 9 }),
@@ -314,8 +314,8 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c1).toContainText('הכל · מהיר · 📡 בלי הורדה · חשבונות: —');
   await expect(c1).toContainText('📡 קריאה דרך סשן הייצוא ושליחה בלי הורדה');
   await expect(c1).toContainText('הועתקו: 3 · נכשלו: 2');
-  const phase = c1.getByRole('link', { name: 'ההודעה האחרונה ביעד' });
-  await expect(phase).toHaveText('מעתיק');
+  const phase = c1.getByRole('link', { name: 'מעתיק הודעה 5 · ההודעה האחרונה ביעד' });
+  await expect(phase).toHaveText('מעתיק הודעה 5');
   await expect(phase).toHaveAttribute('href', 'https://t.me/c/200/5');
   await expect(phase).toHaveAttribute('target', '_blank');
   await expect(phase).toHaveAttribute('rel', 'noopener');

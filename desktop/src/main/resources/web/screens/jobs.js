@@ -264,7 +264,7 @@ function jobCard(job, status, accounts, state) {
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
     // As in Android: the phase opens the last message copied into the target, the last handled one the source's.
-    running ? maybeLink('phase', status.lastTargetLink, status.phase, 'ההודעה האחרונה ביעד') : null,
+    running ? maybeLink('phase', status.lastTargetLink, status.phase, `${status.phase} · ההודעה האחרונה ביעד`) : null,
     (Number(status.lastId) || 0) > 0 ? h('div', { class: 'last-handled' }, 'הודעה אחרונה שטופלה: ',
       h('bdi', {}, numberLink(status.lastLink, String(status.lastId)))) : null,
     h('div', { class: 'copied' }, 'הועתקו: ', h('bdi', {}, formatCount(status.copiedTotal)),

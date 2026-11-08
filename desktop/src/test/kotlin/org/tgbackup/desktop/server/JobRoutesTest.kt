@@ -236,6 +236,36 @@ class JobRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun aSourceChangeClearsTheProgress() = withServer { client ->
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 500, copiedTotal = 40, runMillis = 9000, latestId = 900) }
+        client.putJson("/api/jobs/j1", """{"name":"משימה","source":"@other","target":"@dst","accountIds":["a1"]}""").assertOk()
+        val p = app.store.progress("j1")
+        assertEquals(listOf(0L, 0L, 0L, 0L), listOf(p.lastId, p.copiedTotal, p.runMillis, p.latestId))
+    }
+
+    @Test
+    fun aNameChangeKeepsTheProgress() = withServer { client ->
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 500, copiedTotal = 40, runMillis = 9000, latestId = 900) }
+        client.putJson("/api/jobs/j1", """{"name":"שם חדש","source":"@src","target":"@dst","accountIds":["a1"]}""").assertOk()
+        val p = app.store.progress("j1")
+        assertEquals(listOf(500L, 40L, 9000L, 900L), listOf(p.lastId, p.copiedTotal, p.runMillis, p.latestId))
+    }
+
+    @Test
+    fun anEditRightAfterStopWaitsForTheRun() = withServer { client ->
+        seed(j1)
+        app.store.saveProgress("j1") { Progress(lastId = 50) }
+        client.postJson("/api/jobs/j1/start").assertOk()
+        client.postJson("/api/jobs/j1/stop").assertOk()
+        client.putJson("/api/jobs/j1", """{"name":"משימה","source":"@other","target":"@dst","accountIds":["a1"]}""").assertOk()
+        assertTrue(app.jobs.awaitStopped("j1"), "the stopped run ended")
+        assertEquals(0L, app.store.progress("j1").lastId)
+        assertEquals("@other", app.store.config.value.jobs.first { it.id == "j1" }.source)
+    }
+
+    @Test
     fun deleteForgetsTheJobLock() = withServer { client ->
         seed(j1)
         client.postJson("/api/jobs/j1/stop").assertOk()
@@ -287,7 +317,7 @@ class JobRoutesTest : RouteTestBase() {
     }
 
     @Test
-    fun editingTheSourceForgetsTheOldSourcesLatestId() = withServer { client ->
+    fun editingTheSourceClearsTheStatusToo() = withServer { client ->
         seed(j1)
         app.store.saveProgress("j1") { Progress(lastId = 10, copiedTotal = 3, latestId = 50) }
         client.putJson("/api/jobs/j1", """{"name":"שם אחר","source":"@src","target":"@dst","accountIds":["a1"]}""").assertOk()
@@ -296,7 +326,8 @@ class JobRoutesTest : RouteTestBase() {
         val p = app.store.progress("j1")
         assertEquals(0L, p.latestId)
         assertEquals(0L, app.jobs.statuses.value["j1"]!!.latestId)
-        assertEquals(3L, p.copiedTotal)
-        assertEquals(10L, p.lastId)
+        assertEquals(0L, p.copiedTotal)
+        assertEquals(0L, p.lastId)
+        assertEquals(0L, app.jobs.statuses.value["j1"]!!.lastId)
     }
 }

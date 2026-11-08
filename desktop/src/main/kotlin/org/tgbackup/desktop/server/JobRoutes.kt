@@ -119,7 +119,7 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
      */
     suspend fun save(id: String, input: JobInput, create: Boolean) {
         locks.job(id) {
-            requireStopped(id)
+            requireEnded(id)
             locks.config {
                 val cfg = store.config.value
                 if (!create) requireJob(id)
@@ -130,11 +130,8 @@ fun Route.jobRoutes(app: DesktopApp, locks: CommandLocks) {
                     if (c.jobs.any { it.id == id }) c.copy(jobs = c.jobs.map { if (it.id == id) job else it })
                     else c.copy(jobs = c.jobs + job)
                 }
-                // The old source's newest id says nothing about the new one.
-                if (old != null && old.source != job.source && store.progress(id).latestId != 0L) {
-                    store.saveProgress(id) { it.copy(latestId = 0) }
-                    jobs.showSavedProgress(id)
-                }
+                // Another source starts the job over, as "reset progress" does.
+                if (old != null && old.source != job.source) jobs.resetProgress(id)
             }
         }
         app.scope.launch { jobs.refreshLatest(id) }
