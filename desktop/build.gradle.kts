@@ -112,6 +112,9 @@ tasks.register<JavaExec>("devServer") {
 // installing TGBackup.exe. All native libraries are placed inside the app dir at build time.
 // ---------------------------------------------------------------------------------------------
 
+/** The program icon (exe, window, installer), made by tools/make-icons.py. */
+val programIcon = layout.projectDirectory.file("src/main/icons/TGBackup.ico")
+
 val isWindowsHost = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 val spikeLauncher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
 val spikeModules = listOf(
@@ -174,6 +177,8 @@ for (c in spikeCandidates) {
                 eachFile { path = "natives/$name" }
                 includeEmptyDirs = false
             }
+            // The window icon (AppWindow loads it from -Dtgb.natives at run time).
+            into("natives") { from(programIcon) }
             // jitpack builds from a movable tag: pin the DLLs we ship to known SHA-256 hashes.
             doLast {
                 val dir = base.get().dir("input/natives").asFile
@@ -208,6 +213,7 @@ for (c in spikeCandidates) {
             "--input", base.get().dir("input").asFile.path,
             "--main-jar", tasks.jar.get().archiveFileName.get(),
             "--main-class", c.mainClass,
+            "--icon", programIcon.asFile.path,
             "--add-modules", spikeModules,
             "--jlink-options", "--strip-native-commands --strip-debug --no-man-pages --no-header-files",
         )
@@ -245,6 +251,7 @@ for (c in spikeCandidates) {
                     ArchitecturesInstallIn64BitMode=x64
                     PrivilegesRequiredOverridesAllowed=dialog commandline
                     UninstallDisplayIcon={app}\TGBackup.exe
+                    SetupIconFile=${programIcon.asFile.path}
 
                     [Files]
                     Source: "${image.get().asFile.path}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -264,6 +271,7 @@ for (c in spikeCandidates) {
                 "--app-version", project.version.toString(),
                 "--vendor", "TG Backup",
                 "--win-menu",
+                "--icon", programIcon.asFile.path,
                 "--dest", out.get().asFile.path,
             )
         } else {

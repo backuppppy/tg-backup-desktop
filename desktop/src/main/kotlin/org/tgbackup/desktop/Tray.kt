@@ -1,13 +1,10 @@
 package org.tgbackup.desktop
 
 import com.sun.jna.Pointer
-import java.awt.Color
 import java.awt.EventQueue
 import java.awt.GraphicsEnvironment
-import java.awt.Image
 import java.awt.MenuItem
 import java.awt.PopupMenu
-import java.awt.RenderingHints
 import java.awt.SystemTray
 import java.awt.TrayIcon
 import java.awt.event.MouseAdapter
@@ -76,26 +73,12 @@ class Tray private constructor() : TrayControl {
 }
 
 /**
- * The icon for [px] (the tray's icon size): `tray-16.png` / `tray-32.png` from the resources once Task 6 adds
- * them, until then [placeholderTrayImage].
+ * The user's cloud in a black circle for [px] (the tray's icon size, [SystemTray.getTrayIconSize]): `tray-16.png`
+ * up to 16 px, `tray-32.png` above (AWT scales it to the tray, isImageAutoSize). Both are made by
+ * tools/make-icons.py and always packaged.
  */
-internal fun trayImage(px: Int): Image {
+internal fun trayImage(px: Int): BufferedImage {
     val name = if (px <= 16) "tray-16.png" else "tray-32.png"
-    val image = Tray::class.java.getResourceAsStream("/$name")?.use { runCatching { ImageIO.read(it) }.getOrNull() }
-    return image ?: placeholderTrayImage(px)
-}
-
-/** Placeholder until Task 6: a white circle on a black circle, transparent corners. */
-internal fun placeholderTrayImage(px: Int): BufferedImage {
-    val size = px.coerceAtLeast(16)
-    return BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB).apply {
-        val g = createGraphics()
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.color = Color.BLACK
-        g.fillOval(0, 0, size, size)
-        g.color = Color.WHITE
-        val inset = size / 4
-        g.fillOval(inset, inset, size - 2 * inset, size - 2 * inset)
-        g.dispose()
-    }
+    val stream = checkNotNull(Tray::class.java.getResourceAsStream("/$name")) { "$name missing from the resources" }
+    return checkNotNull(stream.use(ImageIO::read)) { "$name is not an image" }
 }

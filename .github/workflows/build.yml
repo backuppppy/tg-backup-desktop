@@ -170,6 +170,52 @@ jobs:
           if (-not (Test-Path "$dir\TGBackup.exe")) { Write-Error "TGBackup.exe not installed"; exit 1 }
           Get-ChildItem "$dir\app" -Directory | ForEach-Object { Write-Host "APP_DIR $($_.FullName)" }
           Get-ChildItem -Recurse "$dir\app" -Filter *.dll | Select-Object -First 12 | ForEach-Object { Write-Host "NATIVE $($_.FullName)" }
+      - name: Program icon in the installed exe
+        shell: pwsh
+        run: |
+          # The exe's own icon (what Explorer, the taskbar and the Start menu show) must be the program icon
+          # (desktop/src/main/icons/TGBackup.ico), not jpackage's default (JavaApp.ico in the JDK's jdk.jpackage module).
+          # Compared as the mean RGB difference of the 32 px bitmaps; the hashes are printed for the record.
+          Add-Type -AssemblyName System.Drawing
+          function Get-Rgb($bmp) {
+            $px = New-Object byte[] ($bmp.Width * $bmp.Height * 3); $i = 0
+            for ($y = 0; $y -lt $bmp.Height; $y++) { for ($x = 0; $x -lt $bmp.Width; $x++) {
+              $c = $bmp.GetPixel($x, $y); $px[$i++] = $c.R; $px[$i++] = $c.G; $px[$i++] = $c.B
+            } }
+            return ,$px
+          }
+          function Get-Diff($a, $b) {
+            if ($a.Length -ne $b.Length) { return 255.0 }
+            $sum = 0; for ($i = 0; $i -lt $a.Length; $i++) { $sum += [math]::Abs([int]$a[$i] - [int]$b[$i]) }
+            return $sum / $a.Length
+          }
+          function Get-Hash($px) {
+            return ([System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData($px)) -replace '-', '').Substring(0, 16)
+          }
+          $dir = "${{ runner.temp }}\inst"
+          if (-not (Test-Path "$dir\app\natives\TGBackup.ico")) { Write-Error "TGBackup.ico not installed in app\natives"; exit 1 }
+          $exeBmp = [System.Drawing.Icon]::ExtractAssociatedIcon("$dir\TGBackup.exe").ToBitmap()
+          $w = $exeBmp.Width; $h = $exeBmp.Height
+          $exe = Get-Rgb $exeBmp
+          $ico = (Get-Item "desktop/src/main/icons/TGBackup.ico").FullName
+          $ours = Get-Rgb (New-Object System.Drawing.Icon $ico, $w, $h).ToBitmap()
+          $dOurs = Get-Diff $exe $ours
+          Write-Host ("EXE_ICON {0}x{1} sha={2} ours_sha={3} diff_ours={4:N2}" -f $w, $h, (Get-Hash $exe), (Get-Hash $ours), $dOurs)
+          $dDefault = $null
+          try {
+            $jx = "${{ runner.temp }}\jimage"
+            & "$env:JAVA_HOME\bin\jimage.exe" extract --dir $jx --include 'regex:.*/JavaApp\.ico' "$env:JAVA_HOME\lib\modules"
+            $def = Get-ChildItem -Recurse $jx -Filter JavaApp.ico | Select-Object -First 1
+            if ($def) {
+              $default = Get-Rgb (New-Object System.Drawing.Icon $def.FullName, $w, $h).ToBitmap()
+              $dDefault = Get-Diff $exe $default
+              Write-Host ("EXE_ICON default_sha={0} diff_default={1:N2}" -f (Get-Hash $default), $dDefault)
+            } else { Write-Host "EXE_ICON default JavaApp.ico not found in the JDK" }
+          } catch { Write-Host "EXE_ICON default unavailable: $_" }
+          if ($dOurs -ge 20) { Write-Error "the installed exe's icon is not TGBackup.ico (diff $dOurs)"; exit 1 }
+          if ($null -ne $dDefault -and $dDefault -le $dOurs) { Write-Error "the installed exe's icon looks like jpackage's default"; exit 1 }
+          Write-Host "EXE_ICON_OK"
+          exit 0  # not jimage's exit code (the default icon is optional evidence)
       - name: Smoke (offline proxy) + screenshot
         shell: pwsh
         env:
@@ -339,6 +385,7 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
           if (Select-String -Path $out -Pattern '^PAGE_FAIL' -Quiet) { Write-Error "PAGE_FAIL printed"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^API_OK' -Quiet)) { Write-Error "API_OK not printed"; exit 1 }
+          if (-not (Select-String -Path $out -Pattern '^WINDOW_ICON ok' -Quiet)) { Write-Error "the window icon was not set"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
             Write-Error "window is not fully inside the screen work area"; exit 1
           }

@@ -8,7 +8,9 @@ import com.sun.jna.Pointer
 import com.sun.jna.WString
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef.HWND
+import com.sun.jna.platform.win32.WinDef.LPARAM
 import com.sun.jna.platform.win32.WinDef.RECT
+import com.sun.jna.platform.win32.WinDef.WPARAM
 import com.sun.jna.platform.win32.WinUser
 import java.awt.Desktop
 import java.io.File
@@ -74,6 +76,18 @@ private const val WEBVIEW_HINT_NONE = 0
 private const val SWP_NOZORDER = 0x0004
 private const val SWP_NOACTIVATE = 0x0010
 private const val PM_REMOVE = 0x0001
+private const val IMAGE_ICON = 1
+private const val LR_LOADFROMFILE = 0x0010
+private const val WM_SETICON = 0x0080
+private const val ICON_SMALL = 0
+private const val ICON_BIG = 1
+private const val SM_CXICON = 11
+private const val SM_CYICON = 12
+private const val SM_CXSMICON = 49
+private const val SM_CYSMICON = 50
+
+/** The program icon (tools/make-icons.py), shipped next to the DLLs in `<install>\app\natives`. */
+const val WINDOW_ICON_FILE = "TGBackup.ico"
 
 /** The program's window: the screens from the internal server, inside WebView2. */
 object AppWindow {
@@ -157,6 +171,7 @@ object AppWindow {
         lib.webview_set_title(w, WINDOW_TITLE)
         lib.webview_set_size(w, WINDOW_WIDTH, WINDOW_HEIGHT, WEBVIEW_HINT_NONE)
         hwnd?.let(::centreOnScreen) ?: println("WINDOW_FIT skipped (no HWND)")
+        hwnd?.let { setIcon(it, File(natives, WINDOW_ICON_FILE)) }
         lib.webview_bind(w, ExternalLinks.BINDING, openExternal, null)
         lib.webview_bind(w, ExternalLinks.PAGE_BINDING, onPage, null)
         lib.webview_init(w, ExternalLinks.initScript(origin))
@@ -245,6 +260,26 @@ object AppWindow {
             hwnd, null, target.left, target.top, target.width, target.height, SWP_NOZORDER or SWP_NOACTIVATE,
         )
         println("WINDOW_FIT work=$work from=$current to=$target")
+    }
+
+    /**
+     * The title bar and Alt+Tab icon: the .ico's frames at the system's big and small icon sizes (Windows picks the
+     * closest frame). Without it the window shows the WebView host's default icon; a missing or broken file only
+     * prints WINDOW_ICON fail and never stops the window.
+     */
+    private fun setIcon(hwnd: HWND, ico: File) {
+        runCatching {
+            check(ico.isFile) { "${ico.name} not found" }
+            val u = User32.INSTANCE
+            fun load(cx: Int, cy: Int) = checkNotNull(
+                u.LoadImage(null, ico.path, IMAGE_ICON, u.GetSystemMetrics(cx), u.GetSystemMetrics(cy), LR_LOADFROMFILE),
+            ) { "LoadImageW failed (${Native.getLastError()})" }
+            val big = load(SM_CXICON, SM_CYICON)
+            val small = load(SM_CXSMICON, SM_CYSMICON)
+            u.SendMessage(hwnd, WM_SETICON, WPARAM(ICON_BIG.toLong()), LPARAM(Pointer.nativeValue(big.pointer)))
+            u.SendMessage(hwnd, WM_SETICON, WPARAM(ICON_SMALL.toLong()), LPARAM(Pointer.nativeValue(small.pointer)))
+        }.onSuccess { println("WINDOW_ICON ok") }
+            .onFailure { println("WINDOW_ICON fail ${it.message ?: it::class.java.simpleName}") }
     }
 
     /** Smoke evidence: where the window really is once the page has loaded. */
