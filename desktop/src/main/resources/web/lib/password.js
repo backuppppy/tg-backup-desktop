@@ -7,9 +7,11 @@ export function waitingPasswords(state) {
   return state.password ? [state.password] : [];
 }
 
-/** The request the dialog shows: the oldest one not answered yet (`answered`, a Set of ids), or null. */
+/** The request the dialog opens next: the oldest one of the export screen not answered yet (`answered`, a Set of ids),
+ *  else the oldest one at all, or null. */
 export function nextPassword(state, answered) {
-  return waitingPasswords(state).find((r) => !answered.has(r.id)) ?? null;
+  const open = waitingPasswords(state).filter((r) => !answered.has(r.id));
+  return open.find((r) => r.origin === 'screen') ?? open[0] ?? null;
 }
 
 /** Who asks, a job (`משימה`) or the export screen (`ייצוא`), and the account's name; null when not told. */

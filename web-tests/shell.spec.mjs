@@ -146,7 +146,7 @@ test('the export 2FA dialog shows on every tab and sends the password', async ({
   await expect.poll(() => answers).toEqual([{ id: 'p1', password: 'secret' }]);
 });
 
-test('two 2FA requests at once: the dialog shows the oldest, then the next, each answered by its id', async ({ page }) => {
+test('two 2FA requests at once: a screen request shows first, then then the job one, each answered by its id', async ({ page }) => {
   const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const account = { id: 'acc-2fa', name: 'דני', apiId: 1, hasApiHash: true, phone: '' };
   const passwords = [
@@ -159,18 +159,18 @@ test('two 2FA requests at once: the dialog shows the oldest, then the next, each
   await page.goto('/#jobs');
   const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
   await expect(dialog).toHaveCount(1);
-  await expect(dialog).toContainText('רמז: ראשון');
-  await expect(dialog.locator('.password-asker')).toHaveText('מבקש: משימה · חשבון: דני');
-  await dialog.locator('input').fill('pw-job');
+  await expect(dialog).toContainText('רמז: שני');
+  await expect(dialog.locator('.password-asker')).toHaveText('מבקש: ייצוא · חשבון: acc-other');
+  await dialog.locator('input').fill('pw-screen');
   await dialog.getByRole('button', { name: 'אישור' }).click();
   // The next one opens with no further event from the server.
-  await expect(dialog).toContainText('רמז: שני');
+  await expect(dialog).toContainText('רמז: ראשון');
   await expect(dialog).toHaveCount(1);
-  await expect(dialog.locator('.password-asker')).toHaveText('מבקש: ייצוא · חשבון: acc-other');
+  await expect(dialog.locator('.password-asker')).toHaveText('מבקש: משימה · חשבון: דני');
   await expect(dialog.locator('input')).toHaveValue('');
   await dialog.getByRole('button', { name: 'ביטול' }).click();
   await expect(dialog).toBeHidden();
-  await expect.poll(() => answers).toEqual([{ id: 'q1', password: 'pw-job' }, { id: 'q2', password: null }]);
+  await expect.poll(() => answers).toEqual([{ id: 'q2', password: 'pw-screen' }, { id: 'q1', password: null }]);
 });
 
 test('a 2FA request from an older server (no origin) shows no asker line', async ({ page }) => {
@@ -272,4 +272,92 @@ test('a 2FA answer that fails (not 409) can be sent again: the dialog comes back
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await expect.poll(() => answers).toEqual([{ id: 'p5', password: 'first' }, { id: 'p5', password: 'second' }]);
   await expect(dialog).toBeHidden();
+});
+
+test('a failed answer does not close the dialog open for the next request', async ({ page }) => {
+  const passwords = [
+    { id: 'f1', hint: 'ראשון', origin: 'job' },
+    { id: 'f2', hint: 'שני', origin: 'job' },
+  ];
+  await fakeStream(page, { passwords, password: passwords[0] });
+  await page.unroute('**/api/export/password');
+  const answers = [];
+  await page.route('**/api/export/password', async (route) => {
+    answers.push(route.request().postDataJSON());
+    // The first answer is lost on the way; everything after gets through.
+    if (answers.length === 1) return route.abort('failed');
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await dialog.locator('input').fill('one');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(dialog).toContainText('רמז: שני');
+  await dialog.locator('input').fill('abc');
+  await expect.poll(() => answers.length).toBe(1);
+  await expect(page.locator('#toast')).toBeVisible();
+  // f1 is queued again, yet f2's dialog stays as it is.
+  await page.waitForTimeout(300);
+  await expect(dialog).toContainText('רמז: שני');
+  await expect(dialog.locator('input')).toHaveValue('abc');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(dialog).toContainText('רמז: ראשון');
+  await expect(dialog.locator('input')).toHaveValue('');
+  await expect.poll(() => answers[1]).toEqual({ id: 'f2', password: 'abc' });
+});
+
+test('Escape closes only the first of two chained dialogs and the second gets the focus', async ({ page }) => {
+  const passwords = [
+    { id: 'e1', hint: 'ראשון', origin: 'job' },
+    { id: 'e2', hint: 'שני', origin: 'job' },
+  ];
+  const answers = await fakeStream(page, { passwords, password: passwords[0] });
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await expect(dialog).toContainText('רמז: ראשון');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toContainText('רמז: שני');
+  await expect(dialog).toHaveCount(1);
+  await expect(dialog.locator('input')).toBeFocused();
+  await expect.poll(() => answers).toEqual([{ id: 'e1', password: null }]);
+});
+
+test('a screen request arriving while a job dialog is open does not close it, and opens next', async ({ page }) => {
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
+  const job = { id: 'j1', hint: 'משימה', origin: 'job' };
+  const screen = { id: 's1', hint: 'מסך', origin: 'screen' };
+  const answers = [];
+  let push;
+  const arrived = new Promise((r) => { push = r; });
+  let calls = 0;
+  await page.route('**/api/events', async (route) => {
+    calls += 1;
+    const snapshot = { ...real, passwords: [job], password: job };
+    if (calls === 1) {
+      return route.fulfill({
+        status: 200, headers: { 'Content-Type': 'text/event-stream' },
+        body: `retry: 300\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+      });
+    }
+    if (calls > 2) return;
+    await arrived;
+    return route.fulfill({
+      status: 200, headers: { 'Content-Type': 'text/event-stream' },
+      body: `retry: 600000\nevent: passwords\ndata: ${JSON.stringify([job, screen])}\n\n`,
+    });
+  });
+  await page.route('**/api/export/password', async (route) => {
+    answers.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  await page.goto('/#jobs');
+  const dialog = page.getByRole('dialog', { name: 'סיסמת אימות דו-שלבי' });
+  await dialog.locator('input').fill('typed');
+  push();
+  await page.waitForTimeout(800);
+  await expect(dialog).toContainText('רמז: משימה');
+  await expect(dialog.locator('input')).toHaveValue('typed');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(dialog).toContainText('רמז: מסך');
+  await expect.poll(() => answers).toEqual([{ id: 'j1', password: 'typed' }]);
 });

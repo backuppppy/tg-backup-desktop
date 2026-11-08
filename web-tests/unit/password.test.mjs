@@ -15,10 +15,26 @@ test('the list comes from `passwords`, else from the single `password` (an older
 });
 
 test('the dialog shows the oldest request not answered yet', () => {
-  const state = { passwords: [p1, p2], password: p1 };
+  const j2 = { id: 'j2', hint: '', accountId: 'a1', origin: 'job' };
+  const state = { passwords: [p1, j2], password: p1 };
   assert.equal(nextPassword(state, new Set()), p1);
-  assert.equal(nextPassword(state, new Set(['p1'])), p2);
-  assert.equal(nextPassword(state, new Set(['p1', 'p2'])), null);
+  assert.equal(nextPassword(state, new Set(['p1'])), j2);
+  assert.equal(nextPassword(state, new Set(['p1', 'j2'])), null);
+});
+
+test('nextPassword: a screen request comes before an older job request', () => {
+  const state = { passwords: [p1, p2], password: p1 };
+  assert.equal(nextPassword(state, new Set()), p2);
+  assert.equal(nextPassword(state, new Set(['p2'])), p1);
+});
+
+test('nextPassword: the oldest job request when no screen request waits', () => {
+  const j2 = { id: 'j2', hint: '', accountId: 'a1', origin: 'job' };
+  assert.equal(nextPassword({ passwords: [p1, j2] }, new Set()), p1);
+  assert.equal(nextPassword({ passwords: [p1, j2] }, new Set(['p1'])), j2);
+  // An older server sends no origin: plain oldest first.
+  const old = { id: 'o1', hint: '' };
+  assert.equal(nextPassword({ passwords: [old, j2] }, new Set()), old);
 });
 
 test('who asks: a job or the export screen, and the account by its name', () => {

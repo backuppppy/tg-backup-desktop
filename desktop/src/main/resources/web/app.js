@@ -3,7 +3,7 @@
 import { connect } from './lib/store.js';
 import { api } from './lib/api.js';
 import { h, formDialog, toast } from './lib/ui.js';
-import { nextPassword, passwordAsker } from './lib/password.js';
+import { nextPassword, passwordAsker, waitingPasswords } from './lib/password.js';
 import * as jobs from './screens/jobs.js';
 import * as accounts from './screens/accounts.js';
 import * as exportScreen from './screens/export.js';
@@ -276,14 +276,15 @@ function onState(next) {
 }
 
 // The export session asks for the account's 2FA password; the answer (or null = cancel) goes back by id.
-// A job and the export screen may wait at once: the dialog shows the oldest request not answered yet, and once it is
-// answered or cancelled the next one. An answered id never opens again, though it stays in the state until the
-// server drops it.
+// A job and the export screen may wait at once: the dialog opens the export screen's oldest request not answered yet,
+// else the oldest one, and once it is answered or cancelled the next one. An open dialog is never replaced by another
+// request (it closes only when its own request leaves the state), so a request that arrives or comes back waits behind
+// it. An answered id never opens again, though it stays in the state until the server drops it.
 let open = null;
 const answered = new Set();
 
 function passwordDialog(request) {
-  if (open && (!request || request.id !== open.id)) {
+  if (open && !waitingPasswords(state).some((r) => r.id === open.id)) {
     open.dialog.close(false);
     open = null;
   }
