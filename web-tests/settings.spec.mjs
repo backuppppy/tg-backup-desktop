@@ -118,3 +118,39 @@ test('overlapping saves: the first fails, the second succeeds, the switches end 
   await expect(keepAwake).toBeChecked();
   expect(await prefs(page)).toEqual({ autostart: false, keepAwake: true });
 });
+
+test('a successful save keeps the new value while the desktopPrefs event has not come yet', async ({ page }) => {
+  // The stream sends only the snapshot, so the desktopPrefs event never comes; the PUT answers ok without the server.
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
+  const snapshot = { ...real, desktopPrefs: { autostart: false, keepAwake: true } };
+  await page.route('**/api/events', (route) => route.fulfill({
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+    body: `retry: 600000\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+  }));
+  await page.route('**/api/desktop-prefs', (route) => (route.request().method() === 'PUT'
+    ? route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    : route.continue()));
+  await open(page);
+  const autostart = page.getByRole('switch', { name: AUTOSTART });
+  await expect(autostart).not.toBeChecked();
+  // Every frame's value of the switch, from the click on.
+  await page.evaluate(() => {
+    const input = [...document.querySelectorAll('input[role="switch"]')][0];
+    window.seenChecked = [];
+    const tick = () => { window.seenChecked.push(input.checked); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  const answered = page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().endsWith('/api/desktop-prefs'));
+  await autostart.click();
+  await answered;
+  expect(await autostart.isChecked()).toBe(true);
+  await page.waitForTimeout(500);
+  // Another render with the same (old) state: the tab is left and opened again.
+  await page.evaluate(() => { location.hash = '#jobs'; });
+  await page.evaluate(() => { location.hash = '#settings'; });
+  await page.waitForTimeout(300);
+  await expect(autostart).toBeChecked();
+  const seen = await page.evaluate(() => window.seenChecked);
+  expect(seen.slice(seen.indexOf(true))).not.toContain(false);
+});

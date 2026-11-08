@@ -13,7 +13,11 @@ let view = null;
 
 export function render(root, state) {
   if (!view || view.root !== root || !root.contains(view.version)) view = build(root);
-  view.prefs = { ...DEFAULT_PREFS, ...(state.desktopPrefs ?? {}) };
+  // Taken only when the server sends new prefs: a render for another event must not undo a save just answered.
+  if (state.desktopPrefs !== view.seen) {
+    view.seen = state.desktopPrefs;
+    view.prefs = { ...DEFAULT_PREFS, ...(state.desktopPrefs ?? {}) };
+  }
   // A switch being saved keeps the user's choice until the server's answer comes back.
   if (view.saving === 0) syncSwitches();
   const text = state.version ? `גרסה ${state.version} · TDLib ${state.tdlibVersion}` : '';
@@ -29,8 +33,13 @@ function syncSwitches() {
 async function save() {
   const v = view;
   v.saving += 1;
+  const sent = { autostart: v.autostart.input.checked, keepAwake: v.keepAwake.input.checked };
+  const seenAtSend = v.seen;
   try {
-    await api('PUT', '/api/desktop-prefs', { autostart: v.autostart.input.checked, keepAwake: v.keepAwake.input.checked });
+    await api('PUT', '/api/desktop-prefs', sent);
+    // Saved: the server holds these now, even before its desktopPrefs event comes. An event that came while the
+    // PUT ran is this save's own or a later change, so it is kept.
+    if (v.seen === seenAtSend) v.prefs = { ...v.prefs, ...sent };
   } catch (e) {
     toast(e.message);
     if (v.saving === 1) {
@@ -70,5 +79,5 @@ function build(root) {
       ),
     ),
   );
-  return { root, version, autostart, keepAwake, prefs: { ...DEFAULT_PREFS }, saving: 0 };
+  return { root, version, autostart, keepAwake, prefs: { ...DEFAULT_PREFS }, seen: undefined, saving: 0 };
 }
