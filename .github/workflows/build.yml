@@ -170,12 +170,13 @@ jobs:
           if (-not (Test-Path "$dir\TGBackup.exe")) { Write-Error "TGBackup.exe not installed"; exit 1 }
           Get-ChildItem "$dir\app" -Directory | ForEach-Object { Write-Host "APP_DIR $($_.FullName)" }
           Get-ChildItem -Recurse "$dir\app" -Filter *.dll | Select-Object -First 12 | ForEach-Object { Write-Host "NATIVE $($_.FullName)" }
-      - name: Program icon in the installed exe
+      - name: Program icon (installed exe, installer, Add/Remove Programs, shortcut)
         shell: pwsh
         run: |
-          # The exe's own icon (what Explorer, the taskbar and the Start menu show) must be the program icon
-          # (desktop/src/main/icons/TGBackup.ico), not jpackage's default (JavaApp.ico in the JDK's jdk.jpackage module).
-          # Compared as the mean RGB difference of the 32 px bitmaps; the hashes are printed for the record.
+          # Every icon the user sees must be the program icon (desktop/src/main/icons/TGBackup.ico), not jpackage's
+          # default (JavaApp.ico in the JDK's jdk.jpackage module). Compared as the mean RGB difference of the 32 px
+          # bitmaps (first green run: ours 0.00, default 154.50): diff to ours <= 5 and < a quarter of the diff to the
+          # default. The hashes are printed for the record.
           Add-Type -AssemblyName System.Drawing
           function Get-Rgb($bmp) {
             $px = New-Object byte[] ($bmp.Width * $bmp.Height * 3); $i = 0
@@ -192,29 +193,64 @@ jobs:
           function Get-Hash($px) {
             return ([System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData($px)) -replace '-', '').Substring(0, 16)
           }
-          $dir = "${{ runner.temp }}\inst"
-          if (-not (Test-Path "$dir\app\natives\TGBackup.ico")) { Write-Error "TGBackup.ico not installed in app\natives"; exit 1 }
-          $exeBmp = [System.Drawing.Icon]::ExtractAssociatedIcon("$dir\TGBackup.exe").ToBitmap()
-          $w = $exeBmp.Width; $h = $exeBmp.Height
-          $exe = Get-Rgb $exeBmp
+          $script:failed = @()
           $ico = (Get-Item "desktop/src/main/icons/TGBackup.ico").FullName
-          $ours = Get-Rgb (New-Object System.Drawing.Icon $ico, $w, $h).ToBitmap()
-          $dOurs = Get-Diff $exe $ours
-          Write-Host ("EXE_ICON {0}x{1} sha={2} ours_sha={3} diff_ours={4:N2}" -f $w, $h, (Get-Hash $exe), (Get-Hash $ours), $dOurs)
-          $dDefault = $null
+          $ours = Get-Rgb (New-Object System.Drawing.Icon $ico, 32, 32).ToBitmap()
+          $default = $null
           try {
             $jx = "${{ runner.temp }}\jimage"
             & "$env:JAVA_HOME\bin\jimage.exe" extract --dir $jx --include 'regex:.*/JavaApp\.ico' "$env:JAVA_HOME\lib\modules"
             $def = Get-ChildItem -Recurse $jx -Filter JavaApp.ico | Select-Object -First 1
-            if ($def) {
-              $default = Get-Rgb (New-Object System.Drawing.Icon $def.FullName, $w, $h).ToBitmap()
-              $dDefault = Get-Diff $exe $default
-              Write-Host ("EXE_ICON default_sha={0} diff_default={1:N2}" -f (Get-Hash $default), $dDefault)
-            } else { Write-Host "EXE_ICON default JavaApp.ico not found in the JDK" }
-          } catch { Write-Host "EXE_ICON default unavailable: $_" }
-          if ($dOurs -ge 20) { Write-Error "the installed exe's icon is not TGBackup.ico (diff $dOurs)"; exit 1 }
-          if ($null -ne $dDefault -and $dDefault -le $dOurs) { Write-Error "the installed exe's icon looks like jpackage's default"; exit 1 }
-          Write-Host "EXE_ICON_OK"
+            if ($def) { $default = Get-Rgb (New-Object System.Drawing.Icon $def.FullName, 32, 32).ToBitmap() }
+            else { Write-Host "ICON default JavaApp.ico not found in the JDK" }
+          } catch { Write-Host "ICON default unavailable: $_" }
+          # $icon: a System.Drawing.Icon (32 px) taken from what Windows shows for $label.
+          function Test-Icon($label, $icon) {
+            $bmp = $icon.ToBitmap()
+            if ($bmp.Width -ne 32 -or $bmp.Height -ne 32) { $bmp = New-Object System.Drawing.Bitmap $bmp, 32, 32 }
+            $got = Get-Rgb $bmp
+            $dOurs = Get-Diff $got $ours
+            $dDefault = if ($null -ne $default) { Get-Diff $got $default } else { $null }
+            Write-Host ("ICON {0} sha={1} ours_sha={2} diff_ours={3:N2} diff_default={4}" -f $label, (Get-Hash $got),
+              (Get-Hash $ours), $dOurs, $(if ($null -ne $dDefault) { '{0:N2}' -f $dDefault } else { 'n/a' }))
+            $ok = $dOurs -le 5 -and ($null -eq $dDefault -or $dOurs -lt $dDefault / 4)
+            if ($ok) { Write-Host "ICON_OK $label" } else { Write-Host "ICON_BAD $label"; $script:failed += $label }
+          }
+          # 1) The installed program and the installer as files (what Explorer and the taskbar show).
+          $dir = "${{ runner.temp }}\inst"
+          if (-not (Test-Path "$dir\app\natives\TGBackup.ico")) { Write-Error "TGBackup.ico not installed in app\natives"; exit 1 }
+          Test-Icon 'exe' ([System.Drawing.Icon]::ExtractAssociatedIcon("$dir\TGBackup.exe"))
+          $setup = (Get-Item "desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe").FullName
+          Test-Icon 'setup' ([System.Drawing.Icon]::ExtractAssociatedIcon($setup))
+          # 2) Add/Remove Programs: DisplayIcon of our uninstall entry (WiX: a file in the Installer cache; Inno: the exe).
+          $roots = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+          $arp = $roots | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { Get-ItemProperty $_.PSPath } |
+            Where-Object { $_.DisplayName -match '^TG ?Backup' } | Select-Object -First 1
+          if (-not $arp) { Write-Host "ICON arp: no uninstall entry named TGBackup found" }
+          elseif (-not $arp.DisplayIcon) { Write-Host "ICON arp: '$($arp.DisplayName)' has no DisplayIcon" }
+          else {
+            $path = ($arp.DisplayIcon -replace ',\s*-?\d+$', '').Trim('"')
+            Write-Host "ICON arp DisplayName='$($arp.DisplayName)' DisplayIcon='$($arp.DisplayIcon)'"
+            # ExtractIcon reads the icon resources by content (the WiX cache file has no extension).
+            try { Test-Icon 'arp' ([System.Drawing.Icon]::ExtractIcon($path, 0, 32)) }
+            catch { Write-Host "ICON arp: cannot read $path ($_)"; $script:failed += 'arp' }
+          }
+          # 3) The Start-menu shortcut (--win-menu / Inno [Icons]): its icon, or its target's when it names none.
+          $menus = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+          $lnk = $menus | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem -Recurse $_ -Filter *.lnk } |
+            Where-Object { $_.BaseName -match '^TG ?Backup' } | Select-Object -First 1
+          if (-not $lnk) { Write-Host "ICON shortcut: none found in the Start menu" }
+          else {
+            $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk.FullName)
+            Write-Host "ICON shortcut $($lnk.FullName) target='$($sc.TargetPath)' icon='$($sc.IconLocation)'"
+            $iconPath = ($sc.IconLocation -replace ',\s*-?\d+$', '').Trim('"')
+            if (-not $iconPath) { $iconPath = $sc.TargetPath }
+            try { Test-Icon 'shortcut' ([System.Drawing.Icon]::ExtractIcon([Environment]::ExpandEnvironmentVariables($iconPath), 0, 32)) }
+            catch { Write-Host "ICON shortcut: cannot read $iconPath ($_)"; $script:failed += 'shortcut' }
+          }
+          if ($script:failed.Count -gt 0) { Write-Error "not the program icon: $($script:failed -join ', ')"; exit 1 }
+          Write-Host "ICONS_OK"
           exit 0  # not jimage's exit code (the default icon is optional evidence)
       - name: Smoke (offline proxy) + screenshot
         shell: pwsh

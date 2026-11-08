@@ -7,6 +7,7 @@ import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import com.sun.jna.WString
 import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef.HICON
 import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinDef.LPARAM
 import com.sun.jna.platform.win32.WinDef.RECT
@@ -262,22 +263,41 @@ object AppWindow {
         println("WINDOW_FIT work=$work from=$current to=$target")
     }
 
+    /** The window icon's big and small HICONs, loaded once and kept for the whole process (never destroyed). */
+    private class WindowIcons(val big: Pointer, val small: Pointer)
+
+    /** Window thread only ([open] always runs there); null until the .ico has loaded. */
+    private var icons: WindowIcons? = null
+
     /**
-     * The title bar and Alt+Tab icon: the .ico's frames at the system's big and small icon sizes (Windows picks the
-     * closest frame). Without it the window shows the WebView host's default icon; a missing or broken file only
-     * prints WINDOW_ICON fail and never stops the window.
+     * The .ico's frames at the system's big and small icon sizes (Windows picks the closest frame), loaded on the
+     * first window and reused by every window opened later (from the tray, a second launch), so reopening does not
+     * load new handles. A half load is undone and tried again next time.
+     */
+    private fun loadIcons(ico: File): WindowIcons {
+        icons?.let { return it }
+        check(ico.isFile) { "${ico.name} not found" }
+        val u = User32.INSTANCE
+        fun load(cx: Int, cy: Int): Pointer = checkNotNull(
+            u.LoadImage(null, ico.path, IMAGE_ICON, u.GetSystemMetrics(cx), u.GetSystemMetrics(cy), LR_LOADFROMFILE),
+        ) { "LoadImageW failed (${Native.getLastError()})" }.pointer
+        val big = load(SM_CXICON, SM_CYICON)
+        val small = runCatching { load(SM_CXSMICON, SM_CYSMICON) }
+            .onFailure { u.DestroyIcon(HICON(big)) }
+            .getOrThrow()
+        return WindowIcons(big, small).also { icons = it }
+    }
+
+    /**
+     * The title bar and Alt+Tab icon. Without it the window shows the WebView host's default icon; a missing or
+     * broken file only prints WINDOW_ICON fail and never stops the window.
      */
     private fun setIcon(hwnd: HWND, ico: File) {
         runCatching {
-            check(ico.isFile) { "${ico.name} not found" }
+            val i = loadIcons(ico)
             val u = User32.INSTANCE
-            fun load(cx: Int, cy: Int) = checkNotNull(
-                u.LoadImage(null, ico.path, IMAGE_ICON, u.GetSystemMetrics(cx), u.GetSystemMetrics(cy), LR_LOADFROMFILE),
-            ) { "LoadImageW failed (${Native.getLastError()})" }
-            val big = load(SM_CXICON, SM_CYICON)
-            val small = load(SM_CXSMICON, SM_CYSMICON)
-            u.SendMessage(hwnd, WM_SETICON, WPARAM(ICON_BIG.toLong()), LPARAM(Pointer.nativeValue(big.pointer)))
-            u.SendMessage(hwnd, WM_SETICON, WPARAM(ICON_SMALL.toLong()), LPARAM(Pointer.nativeValue(small.pointer)))
+            u.SendMessage(hwnd, WM_SETICON, WPARAM(ICON_BIG.toLong()), LPARAM(Pointer.nativeValue(i.big)))
+            u.SendMessage(hwnd, WM_SETICON, WPARAM(ICON_SMALL.toLong()), LPARAM(Pointer.nativeValue(i.small)))
         }.onSuccess { println("WINDOW_ICON ok") }
             .onFailure { println("WINDOW_ICON fail ${it.message ?: it::class.java.simpleName}") }
     }
