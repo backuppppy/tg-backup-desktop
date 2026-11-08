@@ -250,21 +250,23 @@ button.text.danger { color: var(--error); }
 .dialog .field-label { font-size: 12px; color: var(--on-surface-dim); }
 .dialog .section { display: flex; flex-direction: column; gap: 2px; }
 .dialog .section-label { font-size: 14px; font-weight: 500; margin: 4px 0; }
-.dialog .radio-row, .dialog .check-row, .dialog .switch-row {
+.dialog .radio-row, .dialog .check-row, .switch-row {
   display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; overflow-wrap: anywhere;
 }
 .dialog .check-row.taken { opacity: .4; cursor: default; }
 .dialog input[type="radio"], .dialog input[type="checkbox"] { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--primary); }
-.dialog input[role="switch"] {
-  appearance: none; width: 40px; height: 22px; border-radius: 11px; background: #3A4A5A; position: relative; cursor: pointer;
+/* Switches: in the job dialog and on the Settings screen (same specificity as the checkbox rule above, so they win). */
+.switch-row input[role="switch"] {
+  appearance: none; width: 40px; height: 22px; margin: 0; flex: none; border-radius: 11px; background: #3A4A5A;
+  position: relative; cursor: pointer;
 }
-.dialog input[role="switch"]::after {
+.switch-row input[role="switch"]::after {
   content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%;
   background: var(--on-surface-dim); transition: inset-inline-start .15s;
 }
-.dialog input[role="switch"]:checked { background: var(--primary); }
-.dialog input[role="switch"]:checked::after { inset-inline-start: 21px; background: var(--on-primary); }
-.dialog .switch-row .pre { white-space: pre-wrap; }
+.switch-row input[role="switch"]:checked { background: var(--primary); }
+.switch-row input[role="switch"]:checked::after { inset-inline-start: 21px; background: var(--on-primary); }
+.switch-row .pre { white-space: pre-wrap; }
 
 /* Accounts screen */
 .accounts { display: flex; flex-direction: column; gap: 10px; }

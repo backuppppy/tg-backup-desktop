@@ -39,6 +39,8 @@ async function save() {
     }
   } finally {
     v.saving -= 1;
+    // The last save to settle shows the server's prefs (an earlier failure or a change elsewhere may have come meanwhile).
+    if (v.saving === 0 && view === v) syncSwitches();
   }
 }
 

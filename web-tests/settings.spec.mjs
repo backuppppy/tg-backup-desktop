@@ -66,3 +66,55 @@ test('a refused save shows the error and puts the switch back', async ({ page })
   await expect(page.getByText('השמירה נכשלה')).toBeVisible();
   await expect(keepAwake).toBeChecked();
 });
+
+test('the switches look like the job dialog switches (a flex row, a 40x22 track)', async ({ page }) => {
+  await open(page);
+  const row = page.locator('[data-screen="settings"] .switch-row').first();
+  expect(await row.evaluate((el) => getComputedStyle(el).display)).toBe('flex');
+  const input = page.getByRole('switch', { name: AUTOSTART });
+  const look = await input.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { appearance: s.appearance, width: s.width, height: s.height };
+  });
+  // The job dialog's switch (.dialog input[role="switch"]): appearance none, 40 x 22 px.
+  expect(look).toEqual({ appearance: 'none', width: '40px', height: '22px' });
+});
+
+test('overlapping saves: the first fails, the second succeeds, the switches end on the server state', async ({ page }) => {
+  await page.request.put('/api/desktop-prefs', { data: { autostart: false, keepAwake: true } });
+  await open(page);
+  let n = 0;
+  let releaseFirst;
+  const firstHeld = new Promise((r) => { releaseFirst = r; });
+  let releaseSecond;
+  const secondHeld = new Promise((r) => { releaseSecond = r; });
+  let secondSaved;
+  const secondReached = new Promise((r) => { secondSaved = r; });
+  await page.route('**/api/desktop-prefs', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    n += 1;
+    if (n === 1) {
+      await firstHeld;
+      return route.abort();
+    }
+    // The second reaches the server now; its answer waits.
+    const res = await route.fetch();
+    secondSaved();
+    await secondHeld;
+    return route.fulfill({ response: res });
+  });
+  const autostart = page.getByRole('switch', { name: AUTOSTART });
+  const keepAwake = page.getByRole('switch', { name: KEEP_AWAKE });
+  await autostart.click();
+  await keepAwake.click();
+  await secondReached;
+  releaseFirst();
+  // The first save's failure is shown (while the second is still in flight, nothing is put back yet).
+  await expect(page.locator('#toast')).toBeVisible();
+  // Changed elsewhere while the second save is still waiting for its answer.
+  await page.request.put('/api/desktop-prefs', { data: { autostart: false, keepAwake: true } });
+  releaseSecond();
+  await expect(autostart).not.toBeChecked();
+  await expect(keepAwake).toBeChecked();
+  expect(await prefs(page)).toEqual({ autostart: false, keepAwake: true });
+});
