@@ -63,7 +63,7 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     if (!instance.acquire()) handOffOrOwn(instance, smoke)
     // The smoke's throw-away dir is wiped only once it is ours (never under a running smoke).
     if (smoke.enabled) wipeExceptLock(dataDir)
-    val app = DesktopApp(dataDir)
+    val app = DesktopApp(dataDir, manageAutostart = !smoke.enabled)
     var server: ApiServer? = null
     val shutdown = {
         val started = System.nanoTime()
@@ -164,7 +164,7 @@ private const val MB_RIGHT = 0x80000
 private const val MB_RTLREADING = 0x100000
 
 private const val MSG_ALREADY_RUNNING = "התוכנה כבר פועלת."
-private const val MSG_GO_ON_IN_BACKGROUND = "יש משימה או ייצוא שרצים. להמשיך לרוץ ברקע?\nכן – ממשיכה ליד השעון.\nלא – התוכנה תיסגר, והמשימות ימשיכו מאותו מקום בפתיחה הבאה."
+private const val MSG_GO_ON_IN_BACKGROUND = "יש משימה או ייצוא שרצים. להמשיך לרוץ ברקע?\nכן – ממשיכה ליד השעון.\nלא – התוכנה תיסגר."
 
 /**
  * `--smoke` only: reports that WebView2 used the smoke profile, then removes the throw-away data dir. WebView2's
