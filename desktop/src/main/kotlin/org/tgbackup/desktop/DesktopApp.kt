@@ -48,6 +48,7 @@ class DesktopApp(
     dataDir: Path,
     power: PowerRequests = PowerRequests.forCurrentOs(),
     private val autostart: Autostart = Autostart.forCurrentOs(),
+    private val manageAutostart: Boolean = true,
 ) : AutoCloseable {
 
     private val dir = Files.createDirectories(dataDir).toFile()
@@ -98,11 +99,14 @@ class DesktopApp(
                 .collect { active -> updateSleepGuard(active) }
         }
 
-        // The Run value follows the switch, now and on every change (a moved exe is rewritten at launch).
-        scope.launch(Dispatchers.IO) {
-            prefs.value.map { it.autostart }.distinctUntilChanged().collect { on ->
-                runCatching { autostart.apply(on) }
-                    .onFailure { log.warn("עדכון ההפעלה עם Windows נכשל: ${it.message}") }
+        // A smoke run uses throw-away preferences and must never mutate the user's real Windows Run key.
+        if (manageAutostart) {
+            // The Run value follows the switch, now and on every change (a moved exe is rewritten at launch).
+            scope.launch(Dispatchers.IO) {
+                prefs.value.map { it.autostart }.distinctUntilChanged().collect { on ->
+                    runCatching { autostart.apply(on) }
+                        .onFailure { log.warn("עדכון ההפעלה עם Windows נכשל: ${it.message}") }
+                }
             }
         }
 
@@ -163,7 +167,7 @@ class DesktopApp(
     }
 }
 
-/** Whether to keep the PC awake: a job or an export runs, and the Settings switch is on. */
+/** Whether to keep the PC awake: a job or an export is running, and the Settings switch is on. */
 internal fun sleepSignal(jobs: Flow<Boolean>, export: Flow<Boolean>, keepAwake: Flow<Boolean>): Flow<Boolean> =
     combine(busySignal(jobs, export), keepAwake) { b, k -> b && k }.distinctUntilChanged()
 
