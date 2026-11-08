@@ -1,4 +1,4 @@
-// Jobs screen (inventory 2a): the header with the all-jobs buttons, `➕ הוסף משימה` (above the cards from 900 px, else under them), one card per job,
+// Jobs screen (inventory 2a): the header with the all-jobs buttons, `➕ הוסף משימה` (above the cards from 900 px, after the warning; else under them), one card per job,
 // JobDialog, and the delete and reset dialogs. Texts and enable rules are the Android ones.
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
@@ -55,7 +55,7 @@ export function render(root, state) {
   view.clocks = [];
   askLatest(jobs, statuses);
   const focus = focusedButton(view.list);
-  // On a desktop `➕ הוסף משימה` heads the list (plan 3b), in the DOM so that Tab reaches it first too.
+  // On a desktop `➕ הוסף משימה` comes after the header and the warning, before the cards, in the DOM so that Tab reaches it first too.
   view.list.replaceChildren(...jobsListOrder({
     header: header(statuses),
     warning: accounts.length === 0 ? h('p', { class: 'error-text' }, "קודם הוסף חשבון בלשונית 'חשבונות'.") : null,
@@ -193,16 +193,16 @@ function header(statuses) {
  * A link that opens in a new window (Task 9 routes it to the system browser), or plain text when there is no URL
  * or it is not http(s).
  */
-function maybeLink(cls, url, text) {
+function maybeLink(cls, url, text, label) {
   return typeof url === 'string' && /^https?:\/\//i.test(url)
-    ? h('a', { class: `${cls} link`, href: url, target: '_blank', rel: 'noopener' }, text)
+    ? h('a', { class: `${cls} link`, href: url, target: '_blank', rel: 'noopener', 'aria-label': label }, text)
     : h('div', { class: cls }, text);
 }
 
-/** The position's X: a link to the source message when there is an http(s) one, else the number alone. */
+/** A number as a link to the source message when there is an http(s) one (named for a screen reader), else the number alone. */
 function numberLink(url, text) {
   return typeof url === 'string' && /^https?:\/\//i.test(url)
-    ? h('a', { class: 'link', href: url, target: '_blank', rel: 'noopener' }, text)
+    ? h('a', { class: 'link', href: url, target: '_blank', rel: 'noopener', 'aria-label': `הודעה ${text} במקור` }, text)
     : text;
 }
 
@@ -264,7 +264,7 @@ function jobCard(job, status, accounts, state) {
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
     // As in Android: the phase opens the last message copied into the target, the last handled one the source's.
-    running ? maybeLink('phase', status.lastTargetLink, status.phase) : null,
+    running ? maybeLink('phase', status.lastTargetLink, status.phase, 'ההודעה האחרונה ביעד') : null,
     (Number(status.lastId) || 0) > 0 ? h('div', { class: 'last-handled' }, 'הודעה אחרונה שטופלה: ',
       h('bdi', {}, numberLink(status.lastLink, String(status.lastId)))) : null,
     h('div', { class: 'copied' }, 'הועתקו: ', h('bdi', {}, formatCount(status.copiedTotal)),

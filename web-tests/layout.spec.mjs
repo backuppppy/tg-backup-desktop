@@ -16,7 +16,8 @@ const LONG_LOG = [
 
 /** The real state, with the long log lines; fails clearly when the server was not started with the fixture. */
 async function fixtureState(request) {
-  const real = await (await request.get('/api/state')).json();
+  // The real snapshot is served as the whole stream: without serverNow, as the page's own clock (as jobs.spec's fakeStream).
+  const { serverNow, ...real } = await (await request.get('/api/state')).json();
   const job = real.jobs.find((j) => j.id === 'longjob1');
   expect(job, 'start the dev server with TGB_DEV_FIXTURE=long-names').toBeTruthy();
   expect(job.name).toHaveLength(120);

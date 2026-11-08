@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reduce, LOG_MAX } from '../../desktop/src/main/resources/web/lib/store.js';
+import { reduce, LOG_MAX, OFFSET_JITTER_MS } from '../../desktop/src/main/resources/web/lib/store.js';
 
 const entry = (seq) => ({ seq, time: '12:00:00', level: 'INFO', msg: `m${seq}` });
 
@@ -82,4 +82,17 @@ test('serverNow gives the clock offset at receipt; without it the offset is 0 (t
   // A snapshot without serverNow: the page's own clock.
   s = reduce(s, 'snapshot', snapshot(), 400_000);
   assert.equal(s.clockOffset, 0);
+});
+
+test('reduce: a statuses offset within 1000 ms of the current keeps it', () => {
+  assert.equal(OFFSET_JITTER_MS, 1000);
+  let s = reduce({}, 'snapshot', { ...snapshot(), serverNow: 100_000 }, 100_000);
+  assert.equal(s.clockOffset, 0);
+  s = reduce(s, 'statuses', { statuses: {}, serverNow: 200_400 }, 200_000);
+  assert.equal(s.clockOffset, 0);
+  s = reduce(s, 'statuses', { statuses: {}, serverNow: 301_500 }, 300_000);
+  assert.equal(s.clockOffset, 1500);
+  // A snapshot always sets it.
+  s = reduce(s, 'snapshot', { ...snapshot(), serverNow: 400_300 }, 400_000);
+  assert.equal(s.clockOffset, 300);
 });

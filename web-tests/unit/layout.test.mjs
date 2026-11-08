@@ -120,11 +120,11 @@ test('DESKTOP_QUERY is the 900 px of app.css', () => {
   assert.equal(DESKTOP_QUERY, '(min-width: 900px)');
 });
 
-test('jobsListOrder: on a desktop the add button right after the header, before the warning and the cards', () => {
+test('jobsListOrder: on a desktop the warning right after the header, then the add button and the cards', () => {
   const parts = { header: 'H', warning: 'W', cards: ['c1', 'c2', 'c3'], add: 'A' };
-  assert.deepEqual(jobsListOrder(parts, true), ['H', 'A', 'W', 'c1', 'c2', 'c3']);
+  assert.deepEqual(jobsListOrder(parts, true), ['H', 'W', 'A', 'c1', 'c2', 'c3']);
   assert.deepEqual(jobsListOrder({ ...parts, warning: null }, true), ['H', 'A', 'c1', 'c2', 'c3']);
-  assert.deepEqual(jobsListOrder({ ...parts, cards: [] }, true), ['H', 'A', 'W']);
+  assert.deepEqual(jobsListOrder({ ...parts, cards: [] }, true), ['H', 'W', 'A']);
 });
 
 test('jobsListOrder: under 900 px as before, the add button after the last card', () => {

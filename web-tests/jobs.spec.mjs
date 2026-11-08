@@ -314,18 +314,19 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c1).toContainText('הכל · מהיר · 📡 בלי הורדה · חשבונות: —');
   await expect(c1).toContainText('📡 קריאה דרך סשן הייצוא ושליחה בלי הורדה');
   await expect(c1).toContainText('הועתקו: 3 · נכשלו: 2');
-  const phase = c1.getByRole('link', { name: 'מעתיק' });
+  const phase = c1.getByRole('link', { name: 'ההודעה האחרונה ביעד' });
+  await expect(phase).toHaveText('מעתיק');
   await expect(phase).toHaveAttribute('href', 'https://t.me/c/200/5');
   await expect(phase).toHaveAttribute('target', '_blank');
   await expect(phase).toHaveAttribute('rel', 'noopener');
   // The link is on the number only.
   await expect(c1.locator('.last')).toHaveText('אוחז ב-id 77');
-  const last = c1.locator('.last').getByRole('link', { name: '77', exact: true });
+  const last = c1.locator('.last').getByRole('link', { name: 'הודעה 77 במקור', exact: true });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(last).toHaveAttribute('target', '_blank');
   // As in Android: הודעה אחרונה שטופלה opens the source's message, the phase the target's.
   await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה: 77');
-  const handled = c1.locator('.last-handled').getByRole('link', { name: '77', exact: true });
+  const handled = c1.locator('.last-handled').getByRole('link', { name: 'הודעה 77 במקור', exact: true });
   await expect(handled).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(handled).toHaveAttribute('target', '_blank');
   // The lines in the Android order: phase, last handled, copied, position.
@@ -344,6 +345,16 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c3.getByText('אוחז ב-id 9')).toBeVisible();
   await expect(c3.getByRole('link')).toHaveCount(0);
   await expect(c3).not.toContainText('נכשלו');
+});
+
+test('on a desktop the missing-account warning comes before ➕ הוסף משימה in the DOM; under 900 px the button closes the list', async ({ page }, info) => {
+  await fakeStream(page, { accounts: [], jobs: [job({ id: 'o1', name: 'אחת' })], statuses: {} });
+  await page.goto('/#jobs');
+  const list = page.locator('[data-screen="jobs"] .jobs');
+  await expect(list.getByText("קודם הוסף חשבון בלשונית 'חשבונות'.")).toBeVisible();
+  const order = await list.evaluate((el) => [...el.children].map((c) => (c.matches('.jobs-header') ? 'header'
+    : c.matches('.error-text') ? 'warning' : c.matches('button.full') ? 'add' : 'card')));
+  expect(order).toEqual(info.project.name === 'window' ? ['header', 'warning', 'add', 'card'] : ['header', 'warning', 'card', 'add']);
 });
 
 test('with nothing running, the all-jobs buttons but ▶ הפעל הכל are disabled', async ({ page }) => {
@@ -391,8 +402,12 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
   expect(await visualOrder(c1.locator('.copied'), ['הועתקו:', '12,340', '·', 'נכשלו:', '1,234'])).toBe(true);
   expect(await visualOrder(card(page, 'בלי אחרון').locator('.last'), ['אוחז ב-', 'id', '987,654'])).toBe(true);
   // The link is on X only.
-  const last = c1.getByRole('link', { name: '45,210', exact: true });
+  const last = c1.locator('.last').getByRole('link', { name: 'הודעה 45,210 במקור', exact: true });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/45210');
+  await expect(last).toHaveText('45,210');
+  const handled = c1.locator('.last-handled').getByRole('link', { name: 'הודעה 45210 במקור', exact: true });
+  await expect(handled).toHaveAttribute('href', 'https://t.me/c/100/45210');
+  await expect(handled).toHaveText('45210');
 
   const c2 = card(page, 'בלי אחרון');
   await expect(c2).toContainText('הועתקו: 1,234,567');

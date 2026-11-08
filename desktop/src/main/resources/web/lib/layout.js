@@ -73,12 +73,12 @@ export function jobsShare(count) {
 export const DESKTOP_QUERY = '(min-width: 900px)';
 
 /**
- * The job list's children in order (plan 3b, the user's ruling): on a desktop (`addOnTop`) the add button right after
- * the header, before the warning and the cards, so Tab reaches it first too; under 900 px it closes the list as before.
+ * The job list's children in order (plan 3b, the user's ruling): on a desktop (`addOnTop`) the add button after the
+ * header and the warning, before the cards, so Tab reaches it before them; under 900 px it closes the list as before.
  * Missing parts (no warning) are left out.
  */
 export function jobsListOrder({ header, warning = null, cards = [], add }, addOnTop) {
-  return (addOnTop ? [header, add, warning, ...cards] : [header, warning, ...cards, add]).filter(Boolean);
+  return (addOnTop ? [header, warning, add, ...cards] : [header, warning, ...cards, add]).filter(Boolean);
 }
 
 /** The pane that shows the jobs, or null. */

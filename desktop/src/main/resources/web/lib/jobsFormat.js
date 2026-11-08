@@ -39,9 +39,3 @@ export function positionParts(lastId, latestId) {
   if (last <= 0 && latest <= 0) return null;
   return { last: formatCount(last), latest: latest > 0 ? formatCount(latest) : null };
 }
-
-/** `אוחז ב-id X מתוך Y` as one string, without `מתוך Y` while the latest id is unknown; null when neither is known. */
-export function positionText(lastId, latestId) {
-  const p = positionParts(lastId, latestId);
-  return p && `אוחז ב-id ${p.last}${p.latest ? ` מתוך ${p.latest}` : ''}`;
-}

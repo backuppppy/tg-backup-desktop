@@ -2,6 +2,8 @@
 // `reduce` is pure (unit-tested under node); `connect` wires it to EventSource.
 
 export const LOG_MAX = 500;
+/** A statuses event moves the clock offset only past this much (ms): the jitter of the stream's delivery would shake the run clocks. */
+export const OFFSET_JITTER_MS = 1000;
 
 const EVENTS = ['snapshot', 'config', 'statuses', 'accountStates', 'exportPrefs', 'export', 'passwords', 'password', 'log', 'chatsProgress'];
 
@@ -28,7 +30,9 @@ export function reduce(state, name, data, receivedAt = Date.now()) {
     case 'statuses': {
       // `{statuses, serverNow}`; the map alone from a server before serverNow. A status is never a number.
       const offset = offsetOf(data, receivedAt);
-      return offset === null ? { ...state, statuses: data } : { ...state, statuses: data.statuses, clockOffset: offset };
+      if (offset === null) return { ...state, statuses: data };
+      const keep = typeof state.clockOffset === 'number' && Math.abs(offset - state.clockOffset) <= OFFSET_JITTER_MS;
+      return { ...state, statuses: data.statuses, clockOffset: keep ? state.clockOffset : offset };
     }
     case 'accountStates':
       return { ...state, accountStates: data };

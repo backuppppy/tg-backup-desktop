@@ -117,7 +117,7 @@ test('going offline shows the reconnect banner; back online it goes away', async
 
 /** Serves `snapshot` (merged over the real one) as the whole event stream, and records password answers. */
 async function fakeStream(page, patch) {
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const snapshot = { ...real, ...patch };
   await page.route('**/api/events', (route) => route.fulfill({
     status: 200,
@@ -147,7 +147,7 @@ test('the export 2FA dialog shows on every tab and sends the password', async ({
 });
 
 test('two 2FA requests at once: the dialog shows the oldest, then the next, each answered by its id', async ({ page }) => {
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const account = { id: 'acc-2fa', name: 'דני', apiId: 1, hasApiHash: true, phone: '' };
   const passwords = [
     { id: 'q1', hint: 'ראשון', accountId: 'acc-2fa', origin: 'job' },
@@ -192,7 +192,7 @@ test('cancelling the 2FA dialog sends null', async ({ page }) => {
 });
 
 test('an answered 2FA request does not reopen on later events', async ({ page }) => {
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const snapshot = { ...real, log: [], password: { id: 'p3', hint: '' } };
   let release;
   const answeredGate = new Promise((r) => { release = r; });

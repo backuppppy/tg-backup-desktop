@@ -3,6 +3,7 @@
 // screen with the rail, under 900 px the phone layout. The layout is kept in localStorage (tgb.layout).
 // Runs in the `wide` project (1920x1040); the tests that need other sizes resize the viewport themselves.
 import { test, expect } from '@playwright/test';
+import { DESKTOP_QUERY } from '../desktop/src/main/resources/web/lib/layout.js';
 
 const TABS = ['משימות', 'ייצוא', 'חשבונות', 'לוג', 'הגדרות'];
 const NOTE = 'API ID ו-API Hash מקבלים בכתובת my.telegram.org ← API development tools.';
@@ -199,7 +200,7 @@ test('390x844: no split, no toggle, the bottom bar', async ({ page }) => {
 });
 
 test('a code typed in an Accounts card survives moving Accounts from the left pane to the right one', async ({ page }) => {
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const snapshot = {
     ...real,
     log: [],
@@ -280,7 +281,7 @@ test('export in a pane: one column under 1100 px of pane, two from there (a cont
 });
 
 test('what is typed survives a screen leaving the view: 960 px and back, one screen and back, the Export search', async ({ page }) => {
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const snapshot = {
     ...real,
     log: [],
@@ -396,7 +397,7 @@ const share = (n) => (n >= 4 ? 0.5 : 0.33);
 
 /** The real state with `n` copies of the fixture's jobs (ids j1..jn), through a fake stream; `layout` saved first. */
 async function openWithJobs(page, n, layout, { cards = n } = {}) {
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const base = real.jobs.length ? real.jobs : [{ id: 'x', name: 'job', source: '@a', target: '@b', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [], startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false }];
   const jobs = Array.from({ length: n }, (_, i) => ({ ...base[i % base.length], id: `j${i + 1}` }));
   const snapshot = { ...real, jobs, statuses: {} };
@@ -640,29 +641,42 @@ for (const n of [1, 2, 3, 4, 6]) {
 }
 
 // Unchanged by part C (measured before it): one screen on a desktop and the phone keep their card widths.
-test('one screen at 1100x750 keeps its two 480 px columns of cards', async ({ page }) => {
+/** The visible job list's content width (inside its padding), the room the cards and the add button share. */
+const visibleListRoom = (page) => page.locator('.jobs:visible').evaluate((el) => {
+  const st = getComputedStyle(el);
+  return el.clientWidth - parseFloat(st.paddingLeft) - parseFloat(st.paddingRight);
+});
+
+test('one screen at 1100x750 keeps its two columns of cards, computed from the pane', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 750 });
   await openWithJobs(page, 4);
+  const room = await visibleListRoom(page);
+  // The grid: columns of at least 340 px with a 12 px gap; the add button 420 px at most.
+  const cols = Math.floor((room + 12) / (340 + 12));
+  expect(cols).toBe(2);
+  const card = Math.round((room - 12 * (cols - 1)) / cols);
   const widths = [];
   for (const c of await page.locator('.job-card').all()) widths.push(Math.round((await box(c)).width));
-  expect(widths).toEqual([480, 480, 480, 480]);
-  expect(await page.locator('.jobs:visible').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).toBe('480px 480px');
-  expect(Math.round((await box(page.getByRole('button', { name: '➕ הוסף משימה' }))).width)).toBe(420);
+  expect(widths).toEqual([card, card, card, card]);
+  expect(await page.locator('.jobs:visible').evaluate((el) => getComputedStyle(el).gridTemplateColumns)).toBe(`${card}px ${card}px`);
+  expect(Math.round((await box(page.getByRole('button', { name: '➕ הוסף משימה' }))).width)).toBe(Math.round(Math.min(room, 420)));
 });
 
 for (const n of [2, 12]) {
-  test(`390x844 with ${n} jobs: the phone keeps its cards 366 px wide, one under another, the add button too`, async ({ page }) => {
+  test(`390x844 with ${n} jobs: the phone keeps its cards the list's width, one under another, the add button too`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openWithJobs(page, n);
     const boxes = [];
     for (const c of await page.locator('.job-card').all()) boxes.push(await box(c));
+    const room = Math.round(await visibleListRoom(page));
+    expect(room).toBe(390 - 2 * 12);
     for (const b of boxes) {
-      expect(Math.round(b.width)).toBe(366);
+      expect(Math.round(b.width)).toBe(room);
       expect(Math.round(b.x)).toBe(12);
     }
     for (let i = 1; i < boxes.length; i += 1) expect(boxes[i].y).toBeGreaterThanOrEqual(boxes[i - 1].y + boxes[i - 1].height);
     expect(await page.locator('.jobs:visible').evaluate((el) => getComputedStyle(el).display)).toBe('flex');
-    expect(Math.round((await box(page.getByRole('button', { name: '➕ הוסף משימה' }))).width)).toBe(366);
+    expect(Math.round((await box(page.getByRole('button', { name: '➕ הוסף משימה' }))).width)).toBe(room);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 }
@@ -773,20 +787,24 @@ test('the window to 390 and back: the add button closes the list on the phone an
 });
 
 test('the 900 px listener is there only while the jobs screen is in view', async ({ page }) => {
-  await page.addInitScript(() => {
+  // The query string is the page's own (layout.js DESKTOP_QUERY); both the addEventListener and the old addListener form count.
+  await page.addInitScript((query) => {
     const live = new Set();
     window.__mq = () => live.size;
-    const add = MediaQueryList.prototype.addEventListener;
-    const remove = MediaQueryList.prototype.removeEventListener;
-    MediaQueryList.prototype.addEventListener = function (type, fn, ...rest) {
-      if (type === 'change' && this.media === '(min-width: 900px)') live.add(fn);
-      return add.call(this, type, fn, ...rest);
+    const proto = MediaQueryList.prototype;
+    // addEventListener(type, fn) / addListener(fn): the change listener's function is the last argument.
+    const track = (name, op) => {
+      const orig = proto[name];
+      proto[name] = function wrapped(...args) {
+        if (this.media === query && (args.length === 1 || args[0] === 'change')) op(args[args.length === 1 ? 0 : 1]);
+        return orig.apply(this, args);
+      };
     };
-    MediaQueryList.prototype.removeEventListener = function (type, fn, ...rest) {
-      if (type === 'change' && this.media === '(min-width: 900px)') live.delete(fn);
-      return remove.call(this, type, fn, ...rest);
-    };
-  });
+    track('addEventListener', (f) => live.add(f));
+    track('addListener', (f) => live.add(f));
+    track('removeEventListener', (f) => live.delete(f));
+    track('removeListener', (f) => live.delete(f));
+  }, DESKTOP_QUERY);
   await openWithJobs(page, 2);
   await expect.poll(() => page.evaluate(() => window.__mq())).toBe(1);
   // The jobs leave both panes: the left shows Accounts, the right Log.
@@ -798,6 +816,16 @@ test('the 900 px listener is there only while the jobs screen is in view', async
   await expect(screenIn(page, 'right', 'jobs')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__mq())).toBe(1);
   await expectAddAt(screenIn(page, 'right', 'jobs'), true);
+});
+
+test('resizing within the desktop width keeps the focused card button', async ({ page }) => {
+  await openWithJobs(page, 2);
+  const edit = screenIn(page, 'right', 'jobs').locator('.job-card').first().getByRole('button', { name: 'ערוך' });
+  await edit.focus();
+  await edit.evaluate((el) => { window.__focused = el; });
+  await page.setViewportSize({ width: 1500, height: 1040 });
+  await expect(screenIn(page, 'right', 'jobs')).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement.isSameNode(window.__focused))).toBe(true);
 });
 
 // ---------------------------------------------------------------- final wave: the share set by hand is the jobs'
@@ -904,7 +932,7 @@ test('the number of jobs last seen gives the first paint its share, before the s
   let release;
   const held = new Promise((r) => { release = r; });
   await page.unroute('**/api/events');
-  const real = await (await page.request.get('/api/state')).json();
+  const { serverNow, ...real } = await (await page.request.get('/api/state')).json();
   const base = real.jobs.length ? real.jobs : [];
   await page.route('**/api/events', async (route) => {
     await held;

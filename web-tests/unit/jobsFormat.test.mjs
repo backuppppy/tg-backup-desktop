@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatCount, formatRunTime, runMillisAt, positionText, positionParts, runTimeShown,
+  formatCount, formatRunTime, runMillisAt, positionParts, runTimeShown,
 } from '../../desktop/src/main/resources/web/lib/jobsFormat.js';
 
 test('formatCount puts a comma between thousands', () => {
@@ -43,14 +43,6 @@ test('runTimeShown: a saved time, or a running clock', () => {
   assert.equal(runTimeShown({}), false);
   assert.equal(runTimeShown({ runMillis: 5, runningSince: 0 }), true);
   assert.equal(runTimeShown({ runMillis: 0, runningSince: 7 }), true);
-});
-
-test('positionText: "of" the latest id only when it is known; nothing when neither is', () => {
-  assert.equal(positionText(45210, 50000), 'אוחז ב-id 45,210 מתוך 50,000');
-  assert.equal(positionText(45210, 0), 'אוחז ב-id 45,210');
-  assert.equal(positionText(0, 50000), 'אוחז ב-id 0 מתוך 50,000');
-  assert.equal(positionText(0, 0), null);
-  assert.equal(positionText(undefined, undefined), null);
 });
 
 test('positionParts: the formatted numbers the screen puts in their own <bdi>', () => {
