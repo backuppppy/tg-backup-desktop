@@ -47,7 +47,7 @@ class WindowLoopTest {
         startHidden: Boolean = false,
         window: () -> WindowOutcome = this.window,
         busyFlag: () -> Boolean = { busy },
-        toFront: () -> Unit = { events += "front" },
+        toFront: () -> Boolean = { events += "front"; true },
     ) = WindowLoop(
         window = window,
         busy = busyFlag,
@@ -55,6 +55,7 @@ class WindowLoopTest {
         tray = tray,
         startHidden = startHidden,
         toFront = toFront,
+        sleep = { events += "sleep $it" },
     )
 
     /** Runs the loop on its own thread (it blocks while it waits in the tray). */
@@ -222,7 +223,7 @@ class WindowLoopTest {
             askBackground = { events += "ask"; l.show(); true },
             tray = tray,
             startHidden = false,
-            toFront = { events += "front" },
+            toFront = { events += "front"; true },
         )
         assertEquals(WindowOutcome.CLOSED, l.run())
         assertEquals(listOf("window", "ask", "window"), events.toList())
@@ -242,7 +243,7 @@ class WindowLoopTest {
             askBackground = { events += "ask"; l.show(); false },
             tray = FakeTray(),
             startHidden = false,
-            toFront = { events += "front" },
+            toFront = { events += "front"; true },
         )
         assertEquals(WindowOutcome.CLOSED, l.run())
         assertEquals(listOf("window", "ask", "window"), events.toList())
@@ -262,7 +263,7 @@ class WindowLoopTest {
             askBackground = { events += "ask"; true },
             tray = FakeTray(),
             startHidden = false,
-            toFront = { events += "front" },
+            toFront = { events += "front"; true },
         )
         assertEquals(WindowOutcome.CLOSED, l.run())
         assertEquals(listOf("window", "shown", "window"), events.toList())
@@ -292,5 +293,149 @@ class WindowLoopTest {
         l.quit()
         assertEquals(listOf("window"), events.toList())
         assertTrue(windows.get() == 1)
+    }
+
+    private fun icons(): Int = synchronized(events) { events.count { it == "icon" } }
+
+    /** Busy and Yes, then the icon's "פתח": the windows after the first come from [outcomes] (null = it throws). */
+    private fun reopenLoop(tray: FakeTray, busy: AtomicBoolean, vararg outcomes: WindowOutcome?): WindowLoop =
+        loop(busy = true, answer = true, tray = tray, busyFlag = { busy.get() }, window = {
+            val n = windows.incrementAndGet()
+            events += "window"
+            if (n == 1) return@loop WindowOutcome.CLOSED
+            val o = outcomes.getOrElse(n - 2) { WindowOutcome.CLOSED }
+            if (o == WindowOutcome.CLOSED) busy.set(false)
+            o ?: throw IllegalStateException("window failed")
+        })
+
+    @Test
+    fun aReopenThatFailsOnceIsTriedAgainAndOpens() {
+        val tray = FakeTray()
+        val l = reopenLoop(tray, AtomicBoolean(true), WindowOutcome.NO_WEBVIEW, WindowOutcome.CLOSED)
+        val result = start(l)
+        waitUntil("the icon") { tray.shown.get() }
+        tray.onOpen()
+        assertEquals(WindowOutcome.CLOSED, result.get(5, TimeUnit.SECONDS))
+        assertEquals(
+            listOf("window", "ask", "icon", "hide", "window", "sleep $REOPEN_RETRY_MS", "window"),
+            events.toList(),
+        )
+    }
+
+    @Test
+    fun aReopenThatThrowsOnceIsTriedAgainAndOpens() {
+        val tray = FakeTray()
+        val l = reopenLoop(tray, AtomicBoolean(true), null, WindowOutcome.CLOSED)
+        val result = start(l)
+        waitUntil("the icon") { tray.shown.get() }
+        l.show()
+        assertEquals(WindowOutcome.CLOSED, result.get(5, TimeUnit.SECONDS))
+        assertEquals(3, windows.get())
+    }
+
+    @Test
+    fun aReopenThatFailsTwiceGoesBackToTheTrayAndQuitEnds() {
+        val tray = FakeTray()
+        val l = reopenLoop(tray, AtomicBoolean(true), WindowOutcome.NO_WEBVIEW, null)
+        val result = start(l)
+        waitUntil("the icon") { tray.shown.get() }
+        tray.onOpen()
+        // The icon comes back (shown a second time) and the program does not end.
+        waitUntil("the icon again") { icons() == 2 && tray.shown.get() }
+        Thread.sleep(100)
+        assertFalse(result.isDone)
+        tray.onQuit()
+        assertEquals(WindowOutcome.CLOSED, result.get(5, TimeUnit.SECONDS))
+        assertEquals(
+            listOf("window", "ask", "icon", "hide", "window", "sleep $REOPEN_RETRY_MS", "window", "icon", "hide"),
+            events.toList(),
+        )
+        assertFalse(tray.shown.get())
+    }
+
+    @Test
+    fun afterTwoFailedReopensTheIconCanOpenTheWindowAgain() {
+        val tray = FakeTray()
+        val l = reopenLoop(tray, AtomicBoolean(true), WindowOutcome.NO_WEBVIEW, WindowOutcome.NO_WEBVIEW, WindowOutcome.CLOSED)
+        val result = start(l)
+        waitUntil("the icon") { tray.shown.get() }
+        tray.onOpen()
+        waitUntil("the icon again") { icons() == 2 && tray.shown.get() }
+        tray.onOpen()
+        assertEquals(WindowOutcome.CLOSED, result.get(5, TimeUnit.SECONDS))
+        assertEquals(4, windows.get())
+    }
+
+    @Test
+    fun aFirstWindowThatThrowsStillEndsTheLoop() {
+        val l = loop(busy = true, answer = true, tray = FakeTray(), window = { error("no window") })
+        val result = start(l)
+        assertTrue(runCatching { result.get(5, TimeUnit.SECONDS) }.isFailure)
+        assertTrue(synchronized(events) { events.none { it.startsWith("sleep") } })
+    }
+
+    @Test
+    fun aFailedReopenWithoutATrayEnds() {
+        lateinit var l: WindowLoop
+        l = WindowLoop(
+            window = {
+                val n = windows.incrementAndGet()
+                events += "window"
+                // A second launch while the first window closes; the window then cannot open again.
+                if (n == 1) { l.show(); WindowOutcome.CLOSED } else WindowOutcome.NO_WEBVIEW
+            },
+            busy = { false },
+            askBackground = { true },
+            tray = null,
+            startHidden = false,
+            toFront = { false },
+            sleep = { events += "sleep" },
+        )
+        assertEquals(WindowOutcome.CLOSED, l.run())
+        assertEquals(listOf("window", "window", "sleep", "window"), events.toList())
+    }
+
+    @Test
+    fun aShowBeforeTheWindowIsUpIsAnsweredByThatWindow() {
+        lateinit var l: WindowLoop
+        l = loop(busy = false, answer = true, tray = FakeTray(), toFront = { events += "front"; false }, window = {
+            windows.incrementAndGet()
+            events += "window"
+            // A second launch while the window is still coming up (toFront finds no window yet), then it is up.
+            l.show()
+            l.windowUp()
+            WindowOutcome.CLOSED
+        })
+        assertEquals(WindowOutcome.CLOSED, l.run())
+        assertEquals(1, windows.get())
+    }
+
+    @Test
+    fun aShowBetweenTheXAndTheCloseOpensTheWindowAgain() {
+        lateinit var l: WindowLoop
+        l = loop(busy = false, answer = true, tray = FakeTray(), toFront = { events += "front"; false }, window = {
+            val n = windows.incrementAndGet()
+            events += "window"
+            l.windowUp()
+            // X was pressed: the window is gone, but the loop has not seen the close yet.
+            if (n == 1) l.show()
+            WindowOutcome.CLOSED
+        })
+        assertEquals(WindowOutcome.CLOSED, l.run())
+        assertEquals(listOf("window", "front", "window"), events.toList())
+    }
+
+    @Test
+    fun aShowThatReachesTheOpenWindowDoesNotOpenAnother() {
+        lateinit var l: WindowLoop
+        l = loop(busy = false, answer = true, tray = FakeTray(), window = {
+            windows.incrementAndGet()
+            events += "window"
+            l.windowUp()
+            l.show()
+            WindowOutcome.CLOSED
+        })
+        assertEquals(WindowOutcome.CLOSED, l.run())
+        assertEquals(listOf("window", "front"), events.toList())
     }
 }

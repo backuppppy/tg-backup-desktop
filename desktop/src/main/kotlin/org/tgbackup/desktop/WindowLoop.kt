@@ -15,7 +15,12 @@ interface TrayControl {
  * work running → [askBackground] (No → the end; Yes → the tray icon, until [show] opens the window again or
  * [quit] ends the program). Without a [tray] (`--smoke`, no system tray) closing the window always ends it.
  * [startHidden] (`--minimized`) starts in the tray. [show] and [quit] may come from any thread (the tray's EDT,
- * the server's `/internal/show`); a [show] while the window is open brings it to the front ([toFront]).
+ * the server's `/internal/show`); a [show] while the window is open brings it to the front ([toFront], true when
+ * a window was there to bring forward). [windowUp] tells the loop that the window it opened is on screen.
+ *
+ * Only the first window of the run may end the program when it fails (no WebView2, or it threw). A later one
+ * (opened again from the tray or for a second launch) that fails is tried once more after [retryDelayMs]; if
+ * that fails too the program goes back to the tray instead of ending (the engine keeps running).
  */
 class WindowLoop(
     private val window: () -> WindowOutcome,
@@ -23,7 +28,9 @@ class WindowLoop(
     private val askBackground: () -> Boolean,
     private val tray: TrayControl?,
     private val startHidden: Boolean,
-    private val toFront: () -> Unit = {},
+    private val toFront: () -> Boolean = { false },
+    private val retryDelayMs: Long = REOPEN_RETRY_MS,
+    private val sleep: (Long) -> Unit = Thread::sleep,
 ) {
     private enum class State { STARTING, OPEN, CLOSING, HIDDEN, ENDED }
     private enum class Request { SHOW, QUIT }
@@ -45,14 +52,20 @@ class WindowLoop(
 
     private fun loop(): WindowOutcome {
         var hidden = startHidden && tray != null
+        var first = true
         while (true) {
             if (!hidden) {
-                lock.withLock {
-                    state = State.OPEN
-                    request = null
+                val outcome = if (first) openWindow() else reopen()
+                first = false
+                if (outcome == null) {
+                    // Without an icon there is no way back in (`--smoke`): the end, as after a normal close.
+                    if (tray == null) return WindowOutcome.CLOSED
+                    // The window could not be opened again: back to the tray (the icon again), the way in.
+                    println("WINDOW_BACK_TO_TRAY")
+                    lock.withLock { request = null }
+                    if (waitInTray(tray) == Request.QUIT) return WindowOutcome.CLOSED
+                    continue
                 }
-                val outcome = window()
-                lock.withLock { state = State.CLOSING }
                 if (outcome != WindowOutcome.CLOSED) return outcome
                 // A second launch that came while the window closed (or while the question was up) wins over the end.
                 val background = tray != null && !showPending() && busy() && !showPending() && askBackground()
@@ -64,6 +77,44 @@ class WindowLoop(
             hidden = false
             if (waitInTray(tray!!) == Request.QUIT) return WindowOutcome.CLOSED
         }
+    }
+
+    /** One window, from open to close (it blocks while it is up). */
+    private fun openWindow(): WindowOutcome {
+        lock.withLock {
+            state = State.OPEN
+            request = null
+        }
+        try {
+            return window()
+        } finally {
+            lock.withLock { state = State.CLOSING }
+        }
+    }
+
+    /** A later window: CLOSED once it was up and closed, null when it failed twice. */
+    private fun reopen(): WindowOutcome? {
+        for (attempt in 1..2) {
+            val outcome = try {
+                openWindow()
+            } catch (t: Throwable) {
+                if (t is InterruptedException) throw t
+                println("WINDOW_REOPEN_FAIL ${t::class.java.simpleName}")
+                null
+            }
+            if (outcome == WindowOutcome.CLOSED) return outcome
+            if (outcome != null) println("WINDOW_REOPEN_FAIL $outcome")
+            if (attempt == 1) sleep(retryDelayMs)
+        }
+        return null
+    }
+
+    /**
+     * The window it opened is on screen (AppWindow calls it before its message loop): a [show] that came before
+     * that is answered by it. A [show] after it either reaches the window ([toFront]) or is kept for the next one.
+     */
+    fun windowUp() {
+        lock.withLock { if (state == State.OPEN) request = null }
     }
 
     private fun showPending(): Boolean = lock.withLock { request == Request.SHOW }
@@ -96,20 +147,21 @@ class WindowLoop(
         }
     }
 
-    /** Opens the window (from the tray), or brings the open one to the front. */
+    /**
+     * Opens the window (from the tray), or brings the open one to the front. While a window is meant to be open the
+     * request is still kept: the window may be closing already (X pressed) or not be on screen yet. It is dropped
+     * once [toFront] reached a window that is still open, or once the window is up ([windowUp]).
+     */
     fun show() {
         val front = lock.withLock {
-            when (state) {
-                State.OPEN -> true
-                State.STARTING, State.CLOSING, State.HIDDEN -> {
-                    if (request == null) request = Request.SHOW
-                    requested.signalAll()
-                    false
-                }
-                State.ENDED -> false
-            }
+            if (state == State.ENDED) return
+            if (request == null) request = Request.SHOW
+            requested.signalAll()
+            state == State.OPEN
         }
-        if (front) runCatching(toFront)
+        if (front && runCatching(toFront).getOrDefault(false)) {
+            lock.withLock { if (state == State.OPEN && request == Request.SHOW) request = null }
+        }
     }
 
     /** "יציאה": ends the program from the tray, without a question. */
@@ -121,3 +173,6 @@ class WindowLoop(
         }
     }
 }
+
+/** How long a failed reopen waits before its one retry (the last window's WebView2 may still be letting go). */
+const val REOPEN_RETRY_MS = 1_500L

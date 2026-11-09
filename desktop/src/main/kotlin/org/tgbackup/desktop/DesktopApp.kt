@@ -94,7 +94,7 @@ class DesktopApp(
         // Keep the PC awake while work runs ([busy]), unless switched off in Settings. Power calls can block (up to 5 s) or throw: they run
         // on IO and never break the collector.
         scope.launch(Dispatchers.IO) {
-            sleepSignal(jobs.anyRunning, exportActive, prefs.value.map { it.keepAwake })
+            sleepSignal(busy, prefs.value.map { it.keepAwake })
                 .collect { active -> updateSleepGuard(active) }
         }
 
@@ -163,9 +163,13 @@ class DesktopApp(
     }
 }
 
-/** Whether to keep the PC awake: a job or an export runs, and the Settings switch is on. */
+/** Whether to keep the PC awake: work runs ([busy], the one shared busy signal), and the Settings switch is on. */
+internal fun sleepSignal(busy: Flow<Boolean>, keepAwake: Flow<Boolean>): Flow<Boolean> =
+    combine(busy, keepAwake) { b, k -> b && k }.distinctUntilChanged()
+
+/** [sleepSignal] straight from a job flag and an export flag. */
 internal fun sleepSignal(jobs: Flow<Boolean>, export: Flow<Boolean>, keepAwake: Flow<Boolean>): Flow<Boolean> =
-    combine(busySignal(jobs, export), keepAwake) { b, k -> b && k }.distinctUntilChanged()
+    sleepSignal(busySignal(jobs, export), keepAwake)
 
 /** Work runs: a job or an export. */
 internal fun busySignal(jobs: Flow<Boolean>, export: Flow<Boolean>): Flow<Boolean> =

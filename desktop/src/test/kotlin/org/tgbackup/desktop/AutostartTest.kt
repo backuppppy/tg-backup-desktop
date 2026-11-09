@@ -55,4 +55,16 @@ class AutostartTest {
         Autostart(key, "").apply(true)
         assertEquals(emptyList(), key.writes)
     }
+
+    @Test
+    fun smokeNeverTouchesTheRealRunKey() {
+        val key = FakeRunKey("\"C:\\TG\\TGBackup.exe\" --minimized")
+        val real = Autostart(key, exe)
+        // Under --smoke the real Autostart is never even built; NONE writes nothing.
+        val chosen = Autostart.forLaunch(smoke = true) { error("the real Run key was used") }
+        chosen.apply(false)
+        chosen.apply(true)
+        assertEquals(emptyList(), key.writes)
+        assertEquals(real, Autostart.forLaunch(smoke = false) { real })
+    }
 }

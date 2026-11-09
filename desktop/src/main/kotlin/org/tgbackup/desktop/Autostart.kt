@@ -27,6 +27,12 @@ class Autostart(private val key: RunKey, private val exe: String?) {
     }
 
     companion object {
+        /** Never touches the Run key (`--smoke`: its throw-away prefs must not switch the user's real value off). */
+        val NONE: Autostart = Autostart(NoRunKey, null)
+
+        /** [NONE] under `--smoke`, otherwise [real] (the Run key on Windows). */
+        fun forLaunch(smoke: Boolean, real: () -> Autostart = ::forCurrentOs): Autostart = if (smoke) NONE else real()
+
         /** The Run key on Windows with the jpackage launcher's path; elsewhere a no-op. */
         fun forCurrentOs(): Autostart =
             if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) {

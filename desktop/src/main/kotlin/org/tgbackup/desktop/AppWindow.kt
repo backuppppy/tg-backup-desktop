@@ -103,9 +103,16 @@ object AppWindow {
      * Opens [url] and blocks until the window is closed ([WindowOutcome.CLOSED]); returns
      * [WindowOutcome.NO_WEBVIEW] at once when WebView2 cannot be created. The WebView2 profile goes to [profileDir]
      * (otherwise it would sit next to TGBackup.exe, read-only under Program Files). [onRejectedLink] is told
-     * (without the URL) when our page asked to open a link that is not http(s).
+     * (without the URL) when our page asked to open a link that is not http(s). [onUp] runs once the window is on
+     * screen and [toFront] can reach it.
      */
-    fun open(url: String, smoke: AppSmoke, profileDir: Path, onRejectedLink: () -> Unit = {}): WindowOutcome {
+    fun open(
+        url: String,
+        smoke: AppSmoke,
+        profileDir: Path,
+        onUp: () -> Unit = {},
+        onRejectedLink: () -> Unit = {},
+    ): WindowOutcome {
         dropStrayQuit()
         val origin = checkNotNull(ExternalLinks.originOf(url)) { "entry URL is not http" }
         val natives = File(System.getProperty("tgb.natives") ?: "natives").absoluteFile
@@ -184,23 +191,30 @@ object AppWindow {
         // Opened again from the tray or for a second launch: in front, not behind the window that was active.
         hwnd?.let(User32.INSTANCE::SetForegroundWindow)
         current = hwnd
-        lib.webview_run(w)
-        current = null
-        synchronized(alive) { alive.set(false) }
-        lib.webview_destroy(w)
-        keepAlive.removeAll(callbacks)
+        try {
+            runCatching(onUp)
+            lib.webview_run(w)
+        } finally {
+            current = null
+            synchronized(alive) { alive.set(false) }
+            lib.webview_destroy(w)
+            keepAlive.removeAll(callbacks)
+        }
         return WindowOutcome.CLOSED
     }
 
     /**
      * Brings the open window to the front (a second launch, or "פתח" while it is open): restored when minimized,
-     * otherwise left as it is (a maximized window stays maximized). Any thread; nothing when no window is open.
+     * otherwise left as it is (a maximized window stays maximized). Any thread. False when no window is open (not
+     * on screen yet, or already closing): the caller then keeps the request.
      */
-    fun toFront() {
-        val hwnd = current ?: return
+    fun toFront(): Boolean {
+        val hwnd = current ?: return false
         val restore = runCatching { User32More.INSTANCE.IsIconic(hwnd) }.getOrDefault(false)
         User32.INSTANCE.ShowWindow(hwnd, if (restore) WinUser.SW_RESTORE else WinUser.SW_SHOW)
         User32.INSTANCE.SetForegroundWindow(hwnd)
+        // Closed while we were at it: the request stays, the loop opens the window again.
+        return current == hwnd
     }
 
     /**

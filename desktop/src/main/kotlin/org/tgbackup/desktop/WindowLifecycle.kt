@@ -12,7 +12,8 @@ enum class WindowOutcome { CLOSED, NO_WEBVIEW }
 object WindowLifecycle {
     /**
      * Runs [open] (blocks while a window or the tray icon is up), then always [shutdown]. Returns the exit code: 0 after a normal
-     * close, 1 when [open] threw, 2 when WebView2 was missing (then [tellNoWebView] runs, after the shutdown).
+     * close, 1 when [open] threw, 2 when WebView2 was missing for the first window (then [tellNoWebView] runs,
+     * after the shutdown; a later window that fails goes back to the tray, [WindowLoop]).
      */
     fun run(open: () -> WindowOutcome, shutdown: () -> Unit, tellNoWebView: () -> Unit): Int {
         var outcome: WindowOutcome? = null

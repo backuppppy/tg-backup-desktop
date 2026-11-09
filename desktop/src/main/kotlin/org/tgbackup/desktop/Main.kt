@@ -60,10 +60,15 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     println("DATA_DIR $dataDir")
     // One program per data dir: a second launch shows the running one's window and exits.
     val instance = SingleInstance(dataDir)
-    if (!instance.acquire()) handOffOrOwn(instance, smoke)
+    if (!instance.acquire()) {
+        // Start with Windows while the program already runs: nothing to show, nothing to say.
+        if (startHidden) exitQuietly("INSTANCE_MINIMIZED_EXIT")
+        handOffOrOwn(instance, smoke)
+    }
     // The smoke's throw-away dir is wiped only once it is ours (never under a running smoke).
     if (smoke.enabled) wipeExceptLock(dataDir)
-    val app = DesktopApp(dataDir)
+    // `--smoke` never touches the real Run key (its throw-away prefs would switch "start with Windows" off).
+    val app = DesktopApp(dataDir, autostart = Autostart.forLaunch(smoke.enabled))
     var server: ApiServer? = null
     val shutdown = {
         val started = System.nanoTime()
@@ -75,11 +80,14 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     val profileDir = dataDir.resolve("webview2")
     // `--smoke` keeps no tray: closing its window always ends it.
     val tray = if (smoke.enabled) null else Tray.createOrNull()
-    val loop = WindowLoop(
+    lateinit var loop: WindowLoop
+    loop = WindowLoop(
         window = {
-            AppWindow.open(checkNotNull(server).entryUrl(), smoke, profileDir) {
-                app.log.warn("קישור שאינו http(s) נחסם")
-            }
+            AppWindow.open(
+                checkNotNull(server).entryUrl(), smoke, profileDir,
+                onUp = { loop.windowUp() },
+                onRejectedLink = { app.log.warn("קישור שאינו http(s) נחסם") },
+            )
         },
         busy = app::isBusy,
         askBackground = ::askBackground,
@@ -124,8 +132,15 @@ private fun handOffOrOwn(instance: SingleInstance, smoke: AppSmoke) {
             if (!smoke.enabled) showMessage(MSG_ALREADY_RUNNING, MB_ICONINFORMATION)
         }
     }
+    exitQuietly(null)
+}
+
+/** Ends this launch with 0 at once (before anything of ours started). */
+private fun exitQuietly(line: String?): Nothing {
+    line?.let(::println)
     System.out.flush()
     Runtime.getRuntime().halt(0)
+    error("unreachable")
 }
 
 /** Everything in [dataDir] except the lock this process holds (Windows cannot delete a locked file). */
