@@ -50,6 +50,11 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
     /** Number of signed-in devices. */
     val devices: StateFlow<Int> = count.asStateFlow()
 
+    private val ended = MutableStateFlow(0L)
+
+    /** Bumped whenever sessions end (logout, disconnect all, a new password): open streams re-check theirs. */
+    internal val sessionsEnded: StateFlow<Long> = ended.asStateFlow()
+
     @Synchronized
     fun hasPassword(): Boolean = data.hash.isNotEmpty()
 
@@ -59,23 +64,34 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         require(pw.length >= MIN_PASSWORD) { "password too short" }
         val salt = ByteArray(SALT_BYTES).also { random.nextBytes(it) }
         save(RemoteData(hash = hex(derive(pw, salt, ITERATIONS)), salt = hex(salt), iterations = ITERATIONS))
+        ended.value++
     }
 
-    @Synchronized
+    /**
+     * The waits are checked first, under the lock; PBKDF2 then runs outside it (so [validate] never waits for a
+     * login), and the result is recorded under the lock again. A password changed meanwhile makes it Wrong.
+     */
     fun login(pw: String, who: String): LoginResult {
-        val now = clock()
-        // `who` comes from the client's headers: a caller gets an entry only on a failure, and the map is capped.
-        if (lockedUntil > now) return LoginResult.Wait(secondsUntil(lockedUntil, now))
-        val known = perWho[who]
-        if (known != null && known.blockedUntil > now) return LoginResult.Wait(secondsUntil(known.blockedUntil, now))
-        if (!passwordMatches(pw)) {
-            fail(known ?: track(who), now)
-            return LoginResult.Wrong
+        val stored = synchronized(this) {
+            val now = clock()
+            // `who` comes from the client's headers: a caller gets an entry only on a failure, and the map is capped.
+            if (lockedUntil > now) return LoginResult.Wait(secondsUntil(lockedUntil, now))
+            val known = perWho[who]
+            if (known != null && known.blockedUntil > now) return LoginResult.Wait(secondsUntil(known.blockedUntil, now))
+            data
         }
-        perWho.remove(who)
-        val session = hex(ByteArray(SESSION_BYTES).also { random.nextBytes(it) })
-        save(data.copy(sessions = data.sessions + StoredSession(sha256(session), now, now)))
-        return LoginResult.Ok(session)
+        val matches = passwordMatches(pw, stored)
+        synchronized(this) {
+            val now = clock()
+            if (!matches || data.hash != stored.hash) {
+                fail(perWho[who] ?: track(who), now)
+                return LoginResult.Wrong
+            }
+            perWho.remove(who)
+            val session = hex(ByteArray(SESSION_BYTES).also { random.nextBytes(it) })
+            save(data.copy(sessions = data.sessions + StoredSession(sha256(session), now, now)))
+            return LoginResult.Ok(session)
+        }
     }
 
     /** True for a live session; refreshes its last-seen time at most once a minute. */
@@ -86,10 +102,13 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         val found = data.sessions.firstOrNull { it.sha256 == hash } ?: return false
         val now = clock()
         if (now - found.lastSeen >= SEEN_EVERY_MS) {
-            // Best effort: a failed save (a full disk, a locked file) must not refuse a live session.
+            // Best effort: a failed save (a full disk, a locked file) must not refuse a live session. The new time is
+            // kept in memory either way, so the next calls do not try to write again.
+            val next = data.copy(sessions = data.sessions.map { if (it === found) it.copy(lastSeen = now) else it })
             try {
-                save(data.copy(sessions = data.sessions.map { if (it === found) it.copy(lastSeen = now) else it }))
+                save(next)
             } catch (_: IOException) {
+                data = next
             }
         }
         return true
@@ -100,12 +119,14 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         val hash = sha256(session)
         if (data.sessions.none { it.sha256 == hash }) return
         save(data.copy(sessions = data.sessions.filterNot { it.sha256 == hash }))
+        ended.value++
     }
 
     @Synchronized
     fun disconnectAll() {
         if (data.sessions.isEmpty()) return
         save(data.copy(sessions = emptyList()))
+        ended.value++
     }
 
     /** Callers with failures on record (tests). */
@@ -134,10 +155,10 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         }
     }
 
-    private fun passwordMatches(pw: String): Boolean {
-        if (data.hash.isEmpty()) return false
-        val actual = derive(pw, unhex(data.salt), data.iterations)
-        return MessageDigest.isEqual(actual, unhex(data.hash))
+    private fun passwordMatches(pw: String, d: RemoteData): Boolean {
+        if (d.hash.isEmpty()) return false
+        val actual = derive(pw, unhex(d.salt), d.iterations)
+        return MessageDigest.isEqual(actual, unhex(d.hash))
     }
 
     private fun save(next: RemoteData) {

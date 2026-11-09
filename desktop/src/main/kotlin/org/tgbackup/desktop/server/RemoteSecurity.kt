@@ -21,6 +21,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.util.AttributeKey
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
@@ -32,6 +33,11 @@ import org.tgbackup.desktop.remote.RemoteAuth
 /** The phone's session cookie (the window's is [SESSION_COOKIE]). */
 const val REMOTE_COOKIE = "tgb_remote"
 
+/** Suspends until the call's session ends; set by the phone's server only (see the event stream). */
+internal val SessionEndKey = AttributeKey<SessionEnd>("tgb.sessionEnd")
+
+internal class SessionEnd(val await: suspend () -> Unit)
+
 /** Who is asking, per call: [VIEWER_LOCAL] on [ApiServer] (the window), [VIEWER_REMOTE] on [RemoteServer] (the phone). */
 val ViewerKey = AttributeKey<String>("tgb.viewer")
 const val VIEWER_LOCAL = "local"
@@ -40,6 +46,9 @@ const val VIEWER_REMOTE = "remote"
 internal const val MSG_PC_ONLY = "זמין רק במחשב"
 internal const val MSG_WRONG_PASSWORD = "סיסמה שגויה"
 internal const val MSG_UNKNOWN_WHO = "לא ידוע"
+
+/** `who` comes from the client's headers: cut before it reaches the log or the wait's map. */
+private const val MAX_WHO = 100
 
 /** The login cookie lives 10 years: in practice until the phone logs out. */
 private const val REMOTE_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60
@@ -73,8 +82,8 @@ suspend fun ApplicationCall.requireLocal() {
  * 2. A non-GET/HEAD request with an `Origin` header must come from `https://<allowed name>` or
  *    `http://127.0.0.1:<port>`; else 403.
  * 3. `/internal/show` is not there (404): the window's calls stay on the window's server.
- * 4. Public without a cookie: the login page, its script, the stylesheet, the icon, `POST /api/login` and
- *    `GET /api/health`. Everything else needs a [REMOTE_COOKIE] that [RemoteAuth.validate]s; else 401
+ * 4. Public without a cookie (GET or HEAD): the login page, its script, the stylesheet, the icon and
+ *    `/api/health`; and `POST /api/login`. Everything else needs a [REMOTE_COOKIE] that [RemoteAuth.validate]s; else 401
  *    `{"error": ..., "login": true}` (the page goes to `/login.html`), and an HTML page load of `/` is redirected there.
  * Errors and bare statuses are answered as on the window's server.
  */
@@ -103,8 +112,9 @@ internal fun Application.installRemoteSecurity(auth: RemoteAuth, allowedNames: (
             call.respondError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
             return@intercept finish()
         }
-        val public = (method == HttpMethod.Get && path in PublicGets) || (method == HttpMethod.Post && path == LOGIN_PATH)
-        if (!public && !auth.validate(call.request.cookies.rawCookies[REMOTE_COOKIE])) {
+        val public = (safe && path in PublicGets) || (method == HttpMethod.Post && path == LOGIN_PATH)
+        val session = call.request.cookies.rawCookies[REMOTE_COOKIE]
+        if (!public && !auth.validate(session)) {
             if (method == HttpMethod.Get && (path == "/" || path == "/index.html")) {
                 call.respondRedirect("/login.html")
             } else {
@@ -118,6 +128,10 @@ internal fun Application.installRemoteSecurity(auth: RemoteAuth, allowedNames: (
                 )
             }
             return@intercept finish()
+        }
+        // A stream (GET /api/events) ends when its session does: logout, disconnect all, or a new password.
+        if (session != null) {
+            call.attributes.put(SessionEndKey, SessionEnd { auth.sessionsEnded.first { !auth.validate(session) } })
         }
 
         proceedReportingErrors(call, path, log) { proceed() }
@@ -182,9 +196,10 @@ private fun remoteCookie(value: String, maxAge: Int, secure: Boolean): String = 
 
 /** The log's and the wait's name for the caller: Tailscale's user login, else the first forwarded address. */
 internal fun whoOf(call: ApplicationCall): String {
-    call.request.headers["Tailscale-User-Login"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-    call.request.headers["X-Forwarded-For"]?.substringBefore(',')?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-    return MSG_UNKNOWN_WHO
+    val who = call.request.headers["Tailscale-User-Login"]?.trim()?.takeIf { it.isNotEmpty() }
+        ?: call.request.headers["X-Forwarded-For"]?.substringBefore(',')?.trim()?.takeIf { it.isNotEmpty() }
+        ?: MSG_UNKNOWN_WHO
+    return who.take(MAX_WHO)
 }
 
 private fun cleanName(name: String): String = name.trim().lowercase().removeSuffix(".")

@@ -8,6 +8,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.put
 import io.ktor.server.sse.heartbeat
 import io.ktor.server.sse.sse
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.tgbackup.desktop.DesktopApp
 import kotlin.time.Duration.Companion.seconds
@@ -48,6 +50,16 @@ fun Route.stateRoutes(app: DesktopApp, events: Events) {
             event = io.ktor.sse.ServerSentEvent(comments = "ping")
         }
         // A failed write (client gone) or the call's cancellation ends the collect and every flow under it.
-        events.stream(call.viewer()).collect { send(it) }
+        // On the phone's server the stream also ends with its session (SessionEndKey).
+        val sessionEnd = call.attributes.getOrNull(SessionEndKey)
+        if (sessionEnd == null) {
+            events.stream(call.viewer()).collect { send(it) }
+        } else {
+            coroutineScope {
+                val streaming = launch { events.stream(call.viewer()).collect { send(it) } }
+                sessionEnd.await()
+                streaming.cancel()
+            }
+        }
     }
 }

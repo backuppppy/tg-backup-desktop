@@ -9,6 +9,7 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.cio.CIOApplicationEngine
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -32,7 +33,8 @@ private const val HOST = "127.0.0.1"
  * The phone's server: the same routes and screens as the window's [ApiServer], on `127.0.0.1:`[port] only (Tailscale
  * forwards to it), with a password login and a long-lived session cookie ([RemoteAuth]) in place of the entry token.
  * [allowedNames] are the tailnet names the phone may use (read on every request). [secureCookie] is false only for
- * the DevServer's plain-http tests. Pass the window server's [locks] and [handles], so commands from both are one set.
+ * the DevServer's plain-http tests. [locks] and [handles] are the window server's ([ApiServer.locks],
+ * [ApiServer.handles]), so the commands from both are one set.
  */
 class RemoteServer(
     private val app: DesktopApp,
@@ -40,8 +42,8 @@ class RemoteServer(
     private val port: Int = REMOTE_PORT,
     private val allowedNames: () -> Set<String>,
     private val secureCookie: Boolean = true,
-    private val handles: ChatHandles = ChatHandles(),
-    private val locks: CommandLocks = CommandLocks(),
+    private val handles: ChatHandles,
+    private val locks: CommandLocks,
 ) {
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
 
@@ -89,11 +91,13 @@ fun Application.remoteModule(
     allowedNames: () -> Set<String>,
     port: Int = REMOTE_PORT,
     secureCookie: Boolean = true,
-    handles: ChatHandles = ChatHandles(),
-    locks: CommandLocks = CommandLocks(),
+    handles: ChatHandles,
+    locks: CommandLocks,
 ) {
     installRemoteSecurity(auth, allowedNames, port, app.log)
     install(ContentNegotiation) { json(TgbJson) }
+    // HEAD answers as GET (without the body), as browsers and Tailscale may check the public pages that way.
+    install(AutoHeadResponse)
     install(SSE)
     val events = Events(app).also { attributes.put(EventsKey, it) }
 

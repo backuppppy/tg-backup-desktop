@@ -4,9 +4,12 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.head
 import io.ktor.client.request.post
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -14,6 +17,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.tgbackup.desktop.remote.RemoteAuth
@@ -26,6 +31,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /** Adds `Host: 127.0.0.1:47800` unless the request sets its own. */
 private val RemoteHost = createClientPlugin("RemoteHost") {
@@ -121,7 +127,9 @@ class RemoteServerTest : RouteTestBase() {
 
     @Test
     fun withoutSecureTheCookieHasNoSecure() = testApplication {
-        application { remoteModule(app = app, auth = auth, allowedNames = { emptySet() }, secureCookie = false) }
+        application {
+            remoteModule(app = app, auth = auth, allowedNames = { emptySet() }, secureCookie = false, handles = handles, locks = locks)
+        }
         val client = createClient { install(RemoteHost) }
         val set = client.login().headers.getAll(HttpHeaders.SetCookie).orEmpty().single { it.startsWith("$REMOTE_COOKIE=") }
         assertFalse(set.split(';').map { it.trim() }.contains("Secure"), set)
@@ -256,7 +264,7 @@ class RemoteServerTest : RouteTestBase() {
     @Test
     fun aTakenPortThrowsBindException() {
         ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1")).use { taken ->
-            val server = RemoteServer(app, auth, port = taken.localPort, allowedNames = { emptySet() })
+            val server = RemoteServer(app, auth, port = taken.localPort, allowedNames = { emptySet() }, handles = handles, locks = locks)
             assertFailsWith<BindException> { server.start() }
             server.stop()
         }
@@ -265,7 +273,7 @@ class RemoteServerTest : RouteTestBase() {
     @Test
     fun theRealServerListensOnLoopback() {
         val port = ServerSocket(0).use { it.localPort }
-        val server = RemoteServer(app, auth, port = port, allowedNames = { emptySet() })
+        val server = RemoteServer(app, auth, port = port, allowedNames = { emptySet() }, handles = handles, locks = locks)
         server.start()
         try {
             val conn = java.net.URI("http://127.0.0.1:$port/api/health").toURL().openConnection() as java.net.HttpURLConnection
@@ -274,5 +282,48 @@ class RemoteServerTest : RouteTestBase() {
         } finally {
             server.stop()
         }
+    }
+    /** Opens `/api/events` with [session], waits for the snapshot, runs [revoke], and expects the stream to end. */
+    private suspend fun HttpClient.streamEndsAfter(session: String, revoke: () -> Unit) {
+        prepareGet("/api/events") { header(HttpHeaders.Cookie, "$REMOTE_COOKIE=$session") }.execute { r ->
+            assertEquals(HttpStatusCode.OK, r.status)
+            val ch = r.bodyAsChannel()
+            withTimeout(20.seconds) {
+                while (ch.readUTF8Line() != "event: snapshot") Unit
+            }
+            revoke()
+            withTimeout(10.seconds) {
+                while (ch.readUTF8Line() != null) Unit
+            }
+        }
+    }
+
+    @Test
+    fun disconnectAllClosesAnOpenStream() = withRemote { client ->
+        client.streamEndsAfter(client.login().session()) { auth.disconnectAll() }
+    }
+
+    @Test
+    fun logoutAndANewPasswordCloseThatSessionsStream() = withRemote { client ->
+        val a = client.login().session()
+        client.streamEndsAfter(a) { auth.logout(a) }
+        val b = client.login().session()
+        client.streamEndsAfter(b) { auth.setPassword("another-pw-2") }
+    }
+
+    @Test
+    fun headOnThePublicPathsIsLikeGet() = withRemote { client ->
+        for (path in listOf("/login.html", "/login.js", "/app.css", "/favicon.png", "/api/health")) {
+            assertEquals(HttpStatusCode.OK, client.head(path).status, path)
+        }
+        assertEquals(HttpStatusCode.Unauthorized, client.head("/api/state").status)
+    }
+
+    @Test
+    fun aLongWhoIsCutTo100() = withRemote { client ->
+        val long = "x".repeat(300)
+        client.login("bad-pass", who = long).assertError(HttpStatusCode.Unauthorized, "סיסמה שגויה")
+        val lines = app.log.entries.value.map { it.msg }
+        assertTrue("ניסיון כניסה כושל (${"x".repeat(100)})" in lines, lines.toString())
     }
 }

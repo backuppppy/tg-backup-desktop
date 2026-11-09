@@ -33,6 +33,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cio:3.6.1")
     implementation("io.ktor:ktor-server-content-negotiation:3.6.1")
     implementation("io.ktor:ktor-server-sse:3.6.1")
+    implementation("io.ktor:ktor-server-auto-head-response:3.6.1")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     // Embedded view (WebView2).

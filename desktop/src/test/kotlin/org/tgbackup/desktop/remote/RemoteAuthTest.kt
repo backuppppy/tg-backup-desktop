@@ -198,4 +198,43 @@ class RemoteAuthTest {
         assertTrue(auth.validate(s))
         assertEquals(1, auth.devices.value)
     }
+    @Test
+    fun aFailedLastSeenSaveIsNotRetriedOnEveryCall() {
+        val clock = Clock()
+        val d = dir()
+        val auth = RemoteAuth(d, clock)
+        auth.setPassword("secret1")
+        val s = auth.session()
+        val before = File(d, "remote.json").readText()
+        val blocker = File(d, "remote.json.tmp").also { it.mkdir() }
+        clock.now += 61_000
+        assertTrue(auth.validate(s))
+        // The disk is fine again, but the last-seen time in memory is new: no write for another minute.
+        blocker.delete()
+        clock.now += 1_000
+        assertTrue(auth.validate(s))
+        assertEquals(before, File(d, "remote.json").readText())
+    }
+
+    @Test
+    fun validateDoesNotWaitForALogin() {
+        val auth = RemoteAuth(dir())
+        auth.setPassword("secret1")
+        val s = auth.session()
+        // One login's PBKDF2 time.
+        val t0 = System.nanoTime()
+        auth.login("bad-pass", "warmup")
+        val loginNanos = System.nanoTime() - t0
+        val logins = Thread { repeat(6) { auth.login("secret1", "phone") } }.apply { start() }
+        val waits = mutableListOf<Long>()
+        while (logins.isAlive && waits.size < 40) {
+            val v0 = System.nanoTime()
+            assertTrue(auth.validate(s))
+            waits += System.nanoTime() - v0
+            Thread.sleep(loginNanos / 4_000_000 + 1)
+        }
+        logins.join()
+        val median = waits.sorted()[waits.size / 2]
+        assertTrue(median < loginNanos / 4, "median validate ${median / 1_000_000} ms, login ${loginNanos / 1_000_000} ms")
+    }
 }
