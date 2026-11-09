@@ -35,7 +35,14 @@ private data class RemoteData(
  * stored) and a growing wait after failed logins. Everything lives in `remote.json` under [dir]; a missing or
  * unreadable file means "no password". The wait state is memory only.
  */
-class RemoteAuth(private val dir: File, private val clock: () -> Long = System::currentTimeMillis) {
+class RemoteAuth internal constructor(
+    private val dir: File,
+    private val clock: () -> Long,
+    /** PBKDF2; tests pass a fast or blocking stand-in. */
+    private val derive: (String, ByteArray, Int) -> ByteArray,
+) {
+    constructor(dir: File, clock: () -> Long = System::currentTimeMillis) : this(dir, clock, ::pbkdf2)
+
     private val file = File(dir, FILE_NAME)
     private var data: RemoteData = load()
     private val count = MutableStateFlow(data.sessions.size)
@@ -67,11 +74,15 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         ended.value++
     }
 
+    /** One login attempt at a time in the whole server: parallel guesses cannot all pass the wait before one fails. */
+    private val loginLock = Any()
+
     /**
-     * The waits are checked first, under the lock; PBKDF2 then runs outside it (so [validate] never waits for a
-     * login), and the result is recorded under the lock again. A password changed meanwhile makes it Wrong.
+     * Attempts run one at a time ([loginLock], apart from the lock [validate] uses). Each one checks the waits first
+     * (after the one before it was recorded), then runs PBKDF2 outside the general lock, so [validate] never waits
+     * for a login, and records the result under it. A password changed meanwhile makes it Wrong.
      */
-    fun login(pw: String, who: String): LoginResult {
+    fun login(pw: String, who: String): LoginResult = synchronized(loginLock) {
         val stored = synchronized(this) {
             val now = clock()
             // `who` comes from the client's headers: a caller gets an entry only on a failure, and the map is capped.
@@ -193,7 +204,7 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         val random = SecureRandom()
         val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
 
-        fun derive(pw: String, salt: ByteArray, iterations: Int): ByteArray =
+        fun pbkdf2(pw: String, salt: ByteArray, iterations: Int): ByteArray =
             SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
                 .generateSecret(PBEKeySpec(pw.toCharArray(), salt, iterations, KEY_BITS)).encoded
 

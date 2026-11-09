@@ -1,6 +1,12 @@
 package org.tgbackup.desktop.remote
 
 import java.io.File
+import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -216,25 +222,57 @@ class RemoteAuthTest {
         assertEquals(before, File(d, "remote.json").readText())
     }
 
+    /** A fast stand-in for PBKDF2 (the stored hash format is the same); counts its calls. */
+    private class FakeDerive(private val onCall: (String) -> Unit = {}) : (String, ByteArray, Int) -> ByteArray {
+        val calls = AtomicInteger()
+        override fun invoke(pw: String, salt: ByteArray, iterations: Int): ByteArray {
+            calls.incrementAndGet()
+            onCall(pw)
+            return MessageDigest.getInstance("SHA-256").digest(pw.toByteArray() + salt)
+        }
+    }
+
     @Test
     fun validateDoesNotWaitForALogin() {
-        val auth = RemoteAuth(dir())
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val auth = RemoteAuth(dir(), System::currentTimeMillis, FakeDerive { pw ->
+            if (pw == "stuck-pass") {
+                entered.countDown()
+                release.await()
+            }
+        })
         auth.setPassword("secret1")
         val s = auth.session()
-        // One login's PBKDF2 time.
-        val t0 = System.nanoTime()
-        auth.login("bad-pass", "warmup")
-        val loginNanos = System.nanoTime() - t0
-        val logins = Thread { repeat(6) { auth.login("secret1", "phone") } }.apply { start() }
-        val waits = mutableListOf<Long>()
-        while (logins.isAlive && waits.size < 40) {
-            val v0 = System.nanoTime()
-            assertTrue(auth.validate(s))
-            waits += System.nanoTime() - v0
-            Thread.sleep(loginNanos / 4_000_000 + 1)
+        val login = Thread { auth.login("stuck-pass", "phone") }.apply { start() }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            // The login is inside its derive now; validate must still answer.
+            val v = CompletableFuture.supplyAsync { auth.validate(s) }
+            assertTrue(v.get(10, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            login.join()
         }
-        logins.join()
-        val median = waits.sorted()[waits.size / 2]
-        assertTrue(median < loginNanos / 4, "median validate ${median / 1_000_000} ms, login ${loginNanos / 1_000_000} ms")
+    }
+
+    @Test
+    fun parallelGuessesRunOneAtATime() {
+        val derive = FakeDerive { Thread.sleep(5) }
+        val auth = RemoteAuth(dir(), System::currentTimeMillis, derive)
+        auth.setPassword("secret1")
+        derive.calls.set(0)
+        val start = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(30)
+        try {
+            val results = (1..30).map { pool.submit<LoginResult> { start.await(); auth.login("bad-pass", "phone") } }
+            start.countDown()
+            val all = results.map { it.get(30, TimeUnit.SECONDS) }
+            assertEquals(3, all.count { it == LoginResult.Wrong }, all.toString())
+            assertEquals(27, all.count { it is LoginResult.Wait }, all.toString())
+            assertEquals(3, derive.calls.get())
+        } finally {
+            pool.shutdownNow()
+        }
     }
 }
