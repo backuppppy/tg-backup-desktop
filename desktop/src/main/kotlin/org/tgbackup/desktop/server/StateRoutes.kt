@@ -20,11 +20,11 @@ internal val SSE_PING_PERIOD = 15.seconds
 data class DesktopPrefsInput(val autostart: Boolean? = null, val keepAwake: Boolean? = null)
 
 /**
- * `GET /api/state` (the snapshot), `GET /api/events` (the live stream), `DELETE /api/log`, which empties the
+ * `GET /api/state` (the snapshot, with the call's viewer), `GET /api/events` (the live stream), `DELETE /api/log`, which empties the
  * log screen's buffer (LogBus.clear: the log files are untouched), and `GET`/`PUT /api/desktop-prefs` (Settings).
  */
 fun Route.stateRoutes(app: DesktopApp, events: Events) {
-    get("/api/state") { call.respond(events.snapshot()) }
+    get("/api/state") { call.respond(events.snapshot().copy(viewer = call.viewer())) }
 
     get("/api/desktop-prefs") { call.respond(app.prefs.value.value) }
 
@@ -48,6 +48,6 @@ fun Route.stateRoutes(app: DesktopApp, events: Events) {
             event = io.ktor.sse.ServerSentEvent(comments = "ping")
         }
         // A failed write (client gone) or the call's cancellation ends the collect and every flow under it.
-        events.stream().collect { send(it) }
+        events.stream(call.viewer()).collect { send(it) }
     }
 }

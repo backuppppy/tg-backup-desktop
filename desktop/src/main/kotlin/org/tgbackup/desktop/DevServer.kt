@@ -8,10 +8,12 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.nullable
 import org.tgbackup.app.data.Account
 import org.tgbackup.app.data.Job
+import org.tgbackup.desktop.remote.RemoteAuth
 import org.tgbackup.desktop.server.ApiServer
 import org.tgbackup.desktop.server.Events
 import org.tgbackup.desktop.server.MSG_BAD_REQUEST
 import org.tgbackup.desktop.server.Refusal
+import org.tgbackup.desktop.server.RemoteServer
 import org.tgbackup.desktop.server.RunningExportDto
 import org.tgbackup.desktop.server.TgbJson
 import org.tgbackup.desktop.server.command
@@ -22,7 +24,9 @@ import java.nio.file.Path
  * The real engine and server without the window, for UI tests and for working on the screens in a browser.
  * Env: `TGB_DEV_DATA` (data dir, default a fresh temp dir), `TGB_DEV_PORT` (default 8765),
  * `TGB_DEV_FIXTURE` (any value turns on the test-only routes of [devExtraRoutes]; `long-names` also seeds accounts
- * and jobs with long names). Prints `DEV_URL <url>`, runs until killed.
+ * and jobs with long names), `TGB_DEV_REMOTE_PORT` (starts the phone's [RemoteServer] on that port too; the tests use
+ * 8766, never the program's 47800) with `TGB_DEV_REMOTE_PASSWORD` (sets its password). Prints `DEV_REMOTE_URL <url>`
+ * (with a remote port) and then `DEV_URL <url>`, runs until killed.
  */
 fun main(args: Array<String>) {
     NativeTmp.ensureAsciiTmpdir("org.tgbackup.desktop.DevServerKt", args)
@@ -36,11 +40,20 @@ fun main(args: Array<String>) {
     app.start()
     val server = ApiServer(app, "127.0.0.1", port, devExtraRoutes(fixture))
     server.start()
+    val remotePort = System.getenv("TGB_DEV_REMOTE_PORT")?.toIntOrNull()
+    val remote = remotePort?.let { p ->
+        val auth = RemoteAuth(dataDir.toFile())
+        System.getenv("TGB_DEV_REMOTE_PASSWORD")?.takeIf { it.isNotEmpty() }?.let { auth.setPassword(it) }
+        RemoteServer(app, auth, p, allowedNames = { emptySet() }, handles = server.handles, locks = server.locks)
+            .also { it.start() }
+    }
     Runtime.getRuntime().addShutdownHook(Thread {
+        remote?.stop()
         server.stop()
         app.close()
     })
     println("DEV_DATA $dataDir")
+    if (remotePort != null) println("DEV_REMOTE_URL http://127.0.0.1:$remotePort/")
     println("DEV_URL ${server.entryUrl()}")
     System.out.flush()
     Thread.currentThread().join()

@@ -1,6 +1,9 @@
 // Starts the real engine and server (`./gradlew :desktop:devServer`), waits for its `DEV_URL <url>` line, opens
 // that URL once so the session cookie is set, and saves it for every test (storageState).
-// With TGB_DEV_URL set, a server that is already running is used instead (start it with TGB_DEV_FIXTURE=long-names).
+// With TGB_DEV_URL set, a server that is already running is used instead (start it with TGB_DEV_FIXTURE=long-names,
+// TGB_DEV_REMOTE_PORT and TGB_DEV_REMOTE_PASSWORD=secret1, and set TGB_DEV_REMOTE_URL too).
+// The phone's server (remote.spec) runs on TGB_DEV_REMOTE_PORT (default 8766, never the program's 47800) with the
+// password `secret1`; its `DEV_REMOTE_URL <url>` line goes to the tests as TGB_DEV_REMOTE_URL.
 // TGB_DEV_FIXTURE turns on the DevServer's test-only routes (POST /api/dev/export-state); `long-names` (the default
 // here) also seeds the long names layout.spec checks, `1` seeds nothing.
 import { spawn } from 'node:child_process';
@@ -17,7 +20,12 @@ function startDevServer() {
   const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
   const child = spawn(gradlew, [':desktop:devServer', '--console=plain', '-q'], {
     cwd: repo,
-    env: { ...process.env, TGB_DEV_FIXTURE: process.env.TGB_DEV_FIXTURE || 'long-names' },
+    env: {
+      ...process.env,
+      TGB_DEV_FIXTURE: process.env.TGB_DEV_FIXTURE || 'long-names',
+      TGB_DEV_REMOTE_PORT: process.env.TGB_DEV_REMOTE_PORT || '8766',
+      TGB_DEV_REMOTE_PASSWORD: 'secret1',
+    },
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
@@ -28,10 +36,11 @@ function startDevServer() {
     const onData = (chunk) => {
       out += chunk;
       process.stdout.write(chunk);
+      // DEV_REMOTE_URL is printed before DEV_URL.
       const m = out.match(/^DEV_URL (\S+)/m);
       if (m) {
         clearTimeout(timer);
-        resolve({ child, url: m[1] });
+        resolve({ child, url: m[1], remoteUrl: out.match(/^DEV_REMOTE_URL (\S+)/m)?.[1] });
       }
     };
     child.stdout.setEncoding('utf8').on('data', onData);
@@ -56,8 +65,11 @@ export default async function globalSetup() {
   let child = null;
   let url = process.env.TGB_DEV_URL;
   if (!url) {
-    ({ child, url } = await startDevServer());
+    let remoteUrl;
+    ({ child, url, remoteUrl } = await startDevServer());
     process.on('exit', () => stop(child));
+    // Workers start after this and inherit the environment.
+    if (remoteUrl) process.env.TGB_DEV_REMOTE_URL = remoteUrl;
   }
   const browser = await chromium.launch();
   const context = await browser.newContext();

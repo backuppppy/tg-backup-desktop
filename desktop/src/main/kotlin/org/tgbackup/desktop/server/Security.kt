@@ -71,6 +71,7 @@ internal fun Application.installSecurity(token: String, allowedHosts: Set<String
         candidate != null && MessageDigest.isEqual(candidate.toByteArray(Charsets.UTF_8), tokenBytes)
 
     intercept(ApplicationCallPipeline.Plugins) {
+        call.attributes.put(ViewerKey, VIEWER_LOCAL)
         val method = call.request.httpMethod
         val safe = method == HttpMethod.Get || method == HttpMethod.Head
 
@@ -111,28 +112,40 @@ internal fun Application.installSecurity(token: String, allowedHosts: Set<String
             return@intercept finish()
         }
 
-        try {
-            proceed()
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            // The client went away mid-response (a closed page, a dropped event stream): nothing to answer or log.
-            if (e is ChannelWriteException) return@intercept
-            val (status, message) = when (e) {
-                is BadRequestException, is ContentTransformationException ->
-                    HttpStatusCode.BadRequest to MSG_BAD_REQUEST
-                is NotFoundException -> HttpStatusCode.NotFound to MSG_NOT_FOUND
-                is UnsupportedMediaTypeException -> HttpStatusCode.UnsupportedMediaType to MSG_UNSUPPORTED_TYPE
-                is PayloadTooLargeException -> HttpStatusCode.PayloadTooLarge to MSG_TOO_LARGE
-                else -> {
-                    log.error("$MSG_INTERNAL (${call.request.httpMethod.value} $path): ${describeForLog(e)}")
-                    HttpStatusCode.InternalServerError to MSG_INTERNAL
-                }
-            }
-            if (!call.response.isCommitted) call.respondError(status, message)
-        }
+        proceedReportingErrors(call, path, log) { proceed() }
     }
+    installJsonErrorStatuses()
+}
 
-    // Bare status replies (routing's own 404/405, `call.respond(HttpStatusCode.X)`) become JSON errors too.
+/**
+ * Runs the rest of the call ([proceed]); an exception becomes a JSON error (a [Refusal] its own, an unexpected one
+ * a logged 500). Shared by both servers' guards.
+ */
+internal suspend fun proceedReportingErrors(call: ApplicationCall, path: String, log: LogBus, proceed: suspend () -> Unit) {
+    try {
+        proceed()
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        // The client went away mid-response (a closed page, a dropped event stream): nothing to answer or log.
+        if (e is ChannelWriteException) return
+        val (status, message) = when (e) {
+            is Refusal -> e.status to e.message
+            is BadRequestException, is ContentTransformationException ->
+                HttpStatusCode.BadRequest to MSG_BAD_REQUEST
+            is NotFoundException -> HttpStatusCode.NotFound to MSG_NOT_FOUND
+            is UnsupportedMediaTypeException -> HttpStatusCode.UnsupportedMediaType to MSG_UNSUPPORTED_TYPE
+            is PayloadTooLargeException -> HttpStatusCode.PayloadTooLarge to MSG_TOO_LARGE
+            else -> {
+                log.error("$MSG_INTERNAL (${call.request.httpMethod.value} $path): ${describeForLog(e)}")
+                HttpStatusCode.InternalServerError to MSG_INTERNAL
+            }
+        }
+        if (!call.response.isCommitted) call.respondError(status, message)
+    }
+}
+
+/** Bare status replies (routing's own 404/405, `call.respond(HttpStatusCode.X)`) become JSON errors too. */
+internal fun Application.installJsonErrorStatuses() {
     sendPipeline.intercept(ApplicationSendPipeline.Before) { subject ->
         val status = when (subject) {
             is HttpStatusCode -> subject

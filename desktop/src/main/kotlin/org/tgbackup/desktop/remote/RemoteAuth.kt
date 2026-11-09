@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.tgbackup.io.AtomicFiles
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
@@ -41,7 +42,8 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
 
     private class Failures(var count: Int = 0, var blockedUntil: Long = 0)
 
-    private val perWho = HashMap<String, Failures>()
+    /** Insertion order: the oldest entry is the first. */
+    private val perWho = LinkedHashMap<String, Failures>()
     private val recentFailures = ArrayDeque<Long>()
     private var lockedUntil = 0L
 
@@ -62,11 +64,12 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
     @Synchronized
     fun login(pw: String, who: String): LoginResult {
         val now = clock()
-        val f = perWho.getOrPut(who) { Failures() }
-        val blockedUntil = maxOf(lockedUntil, f.blockedUntil)
-        if (blockedUntil > now) return LoginResult.Wait(secondsUntil(blockedUntil, now))
+        // `who` comes from the client's headers: a caller gets an entry only on a failure, and the map is capped.
+        if (lockedUntil > now) return LoginResult.Wait(secondsUntil(lockedUntil, now))
+        val known = perWho[who]
+        if (known != null && known.blockedUntil > now) return LoginResult.Wait(secondsUntil(known.blockedUntil, now))
         if (!passwordMatches(pw)) {
-            fail(f, now)
+            fail(known ?: track(who), now)
             return LoginResult.Wrong
         }
         perWho.remove(who)
@@ -83,7 +86,11 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         val found = data.sessions.firstOrNull { it.sha256 == hash } ?: return false
         val now = clock()
         if (now - found.lastSeen >= SEEN_EVERY_MS) {
-            save(data.copy(sessions = data.sessions.map { if (it === found) it.copy(lastSeen = now) else it }))
+            // Best effort: a failed save (a full disk, a locked file) must not refuse a live session.
+            try {
+                save(data.copy(sessions = data.sessions.map { if (it === found) it.copy(lastSeen = now) else it }))
+            } catch (_: IOException) {
+            }
         }
         return true
     }
@@ -99,6 +106,18 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
     fun disconnectAll() {
         if (data.sessions.isEmpty()) return
         save(data.copy(sessions = emptyList()))
+    }
+
+    /** Callers with failures on record (tests). */
+    @Synchronized
+    internal fun trackedCallers(): Int = perWho.size
+
+    /** A new entry for [who]; past [MAX_CALLERS] the oldest entry goes. */
+    private fun track(who: String): Failures {
+        val f = Failures()
+        perWho[who] = f
+        if (perWho.size > MAX_CALLERS) perWho.remove(perWho.keys.first())
+        return f
     }
 
     private fun fail(f: Failures, now: Long) {
@@ -149,6 +168,7 @@ class RemoteAuth(private val dir: File, private val clock: () -> Long = System::
         const val GLOBAL_FAILURES = 20
         const val GLOBAL_WINDOW_MS = 10 * 60_000L
         const val GLOBAL_WAIT_S = 60L
+        const val MAX_CALLERS = 1_000
         val random = SecureRandom()
         val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
 

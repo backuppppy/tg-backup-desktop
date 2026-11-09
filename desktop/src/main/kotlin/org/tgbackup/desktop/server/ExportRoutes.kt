@@ -260,6 +260,8 @@ fun Route.exportRoutes(app: DesktopApp, events: Events, handles: ChatHandles, op
 
         post("open") {
             command {
+                // The folder opens on the PC: a phone would open nothing it can see.
+                call.requireLocal()
                 val finished = exports.running.value?.controller?.state?.value as? ExportState.Finished
                     ?: throw Refusal(HttpStatusCode.Conflict, MSG_NOT_FINISHED)
                 opener.open(finished.path)

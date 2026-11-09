@@ -1,6 +1,8 @@
 // The page's one state object, fed by the server's event stream (GET /api/events).
 // `reduce` is pure (unit-tested under node); `connect` wires it to EventSource.
 
+import { api } from './api.js';
+
 export const LOG_MAX = 500;
 /** A statuses event moves the clock offset only past this much (ms): the jitter of the stream's delivery would shake the run clocks. */
 export const OFFSET_JITTER_MS = 1000;
@@ -89,7 +91,11 @@ export function connect(onState) {
     s.addEventListener('error', () => {
       if (s !== source) return;
       lost();
-      if (s.readyState === EventSource.CLOSED) setTimeout(() => { if (s === source) open(); }, REOPEN_MS);
+      if (s.readyState === EventSource.CLOSED) {
+        // The stream cannot say why it was refused: ask once, so a phone whose session is gone goes to the login.
+        api('GET', '/api/state').catch(() => {});
+        setTimeout(() => { if (s === source) open(); }, REOPEN_MS);
+      }
     });
   };
   window.addEventListener('offline', () => {

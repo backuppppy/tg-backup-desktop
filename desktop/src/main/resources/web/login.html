@@ -1,0 +1,28 @@
+<!doctype html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TG Backup</title>
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="app.css">
+<script type="module" src="login.js"></script>
+<style>
+  .login { max-width: 360px; margin: 0 auto; padding: 48px 16px; }
+  .login h1 { margin: 0 0 24px; font-size: 24px; font-weight: 500; text-align: center; }
+  .login form { display: flex; flex-direction: column; gap: 10px; }
+</style>
+</head>
+<body>
+<!-- The phone's login (RemoteServer): the only page served without a session. -->
+<main class="login">
+  <h1>TG Backup</h1>
+  <form id="login-form" class="card" novalidate>
+    <label for="password">סיסמה</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <p id="login-error" class="error-text" role="alert" hidden></p>
+    <button type="submit" class="full">כניסה</button>
+  </form>
+</main>
+</body>
+</html>

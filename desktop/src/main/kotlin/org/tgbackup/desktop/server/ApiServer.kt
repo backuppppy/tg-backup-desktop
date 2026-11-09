@@ -53,6 +53,10 @@ class ApiServer(
     /** For a second launch only (written to `instance.json`); never the session token, which opens the API. */
     val instanceToken: String = randomToken()
 
+    /** The command locks and loaded chats, shared with [RemoteServer]: one program, one set of commands. */
+    val locks = CommandLocks()
+    val handles = ChatHandles()
+
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private var boundPort: Int = -1
 
@@ -63,7 +67,7 @@ class ApiServer(
         // Bind first (port 0 = any free port); the allowed Host values depend on the port we get.
         val hosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val created = embeddedServer(CIO, port = port, host = host) {
-            tgbModule(app, sessionToken, hosts, extraRoutes, instanceToken = instanceToken, onShow = onShow)
+            tgbModule(app, sessionToken, hosts, extraRoutes, handles, locks, instanceToken = instanceToken, onShow = onShow)
         }
         created.start(wait = false)
         val actual = runBlocking { created.engine.resolvedConnectors().first().port }
@@ -117,16 +121,30 @@ fun Application.tgbModule(
         internalShowRoute(instanceToken, onShow)
 
         // Authenticated: installSecurity rejects any call without the session cookie before routing,
-        // so every route below needs it. Later tasks install their routes here:
-        //   fooRoutes(app)   // fun Route.fooRoutes(app: DesktopApp) in its own file
-        // Origin is checked only on non-GET requests: never add a GET route that changes state.
-        stateRoutes(app, events)
-        jobRoutes(app, locks)
-        accountRoutes(app, locks, handles)
-        exportRoutes(app, events, handles)
-        extraRoutes(events)
-        webRoutes()
+        // so every route below needs it.
+        appRoutes(app, events, locks, handles, extraRoutes)
     }
+}
+
+/**
+ * The routes and screens both servers serve (the window's and the phone's). Later tasks install their routes here:
+ *   fooRoutes(app)   // fun Route.fooRoutes(app: DesktopApp) in its own file
+ * Origin is checked only on non-GET requests: never add a GET route that changes state. A command the phone may
+ * not run calls `call.requireLocal()`.
+ */
+fun Route.appRoutes(
+    app: DesktopApp,
+    events: Events,
+    locks: CommandLocks,
+    handles: ChatHandles,
+    extraRoutes: Route.(Events) -> Unit,
+) {
+    stateRoutes(app, events)
+    jobRoutes(app, locks)
+    accountRoutes(app, locks, handles)
+    exportRoutes(app, events, handles)
+    extraRoutes(events)
+    webRoutes()
 }
 
 /** `POST /internal/show`: from loopback with the header [INSTANCE_HEADER] equal to [instanceToken], else 403. */

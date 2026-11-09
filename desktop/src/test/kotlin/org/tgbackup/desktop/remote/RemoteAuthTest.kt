@@ -167,4 +167,35 @@ class RemoteAuthTest {
         assertFalse(auth.validate("anything"))
         assertEquals(LoginResult.Wrong, auth.login("secret1", "phone"))
     }
+    @Test
+    fun failedCallersAreCappedAndAWaitAddsNone() {
+        val clock = Clock()
+        // No password: every login is Wrong at once (no PBKDF2), so many callers stay fast.
+        val auth = RemoteAuth(dir(), clock)
+        repeat(20) { assertEquals(LoginResult.Wrong, auth.login("bad-pass", "who-$it")) }
+        assertEquals(20, auth.trackedCallers())
+        // During the global lock nothing is counted, so new names add nothing.
+        repeat(50) { assertIs<LoginResult.Wait>(auth.login("bad-pass", "new-$it")) }
+        assertEquals(20, auth.trackedCallers())
+        // A minute apart, no global lock: each name is one failure; the map stops at 1000.
+        repeat(1_100) {
+            clock.now += 60_001
+            assertEquals(LoginResult.Wrong, auth.login("bad-pass", "many-$it"))
+        }
+        assertEquals(1_000, auth.trackedCallers())
+    }
+
+    @Test
+    fun validateIsTrueWhenTheLastSeenSaveFails() {
+        val clock = Clock()
+        val d = dir()
+        val auth = RemoteAuth(d, clock)
+        auth.setPassword("secret1")
+        val s = auth.session()
+        // A directory where the temp file goes: the save throws (as on a full disk or a locked file).
+        File(d, "remote.json.tmp").mkdir()
+        clock.now += 61_000
+        assertTrue(auth.validate(s))
+        assertEquals(1, auth.devices.value)
+    }
 }

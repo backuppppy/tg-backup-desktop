@@ -161,13 +161,16 @@ class Events(private val app: DesktopApp) {
 
     private val passwords: Flow<List<PasswordRequestDto>> = app.exports.passwords.map { it.toDtos() }
 
-    /** One SSE connection: `snapshot`, then changes. Cancelled with the collector (the connection). */
-    fun stream(): Flow<ServerSentEvent> = channelFlow {
+    /**
+     * One SSE connection: `snapshot` (with [viewer], `local` or `remote`), then changes. Cancelled with the collector
+     * (the connection).
+     */
+    fun stream(viewer: String = VIEWER_LOCAL): Flow<ServerSentEvent> = channelFlow {
         // Subscribe to published events before the snapshot is taken, and hold them until it is sent.
         val held = Channel<ServerSentEvent>(HELD_CAPACITY, BufferOverflow.DROP_OLDEST)
         launch(start = CoroutineStart.UNDISPATCHED) { published.collect { held.trySend(it) } }
 
-        val snap = snapshot()
+        val snap = snapshot().copy(viewer = viewer)
         send(event("snapshot", SnapshotDto.serializer(), snap))
         launch { for (e in held) send(e) }
 

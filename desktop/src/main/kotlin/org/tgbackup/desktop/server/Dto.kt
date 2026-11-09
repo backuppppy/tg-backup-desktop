@@ -215,6 +215,8 @@ data class SnapshotDto(
     val serverNow: Long = 0,
     /** Settings: start with Windows and keep awake (also `GET /api/desktop-prefs`). */
     val desktopPrefs: DesktopPrefsData = DesktopPrefsData(),
+    /** Who reads this: `local` (the window) or `remote` (the phone, through [RemoteServer]). */
+    val viewer: String = VIEWER_LOCAL,
 )
 
 /** The `statuses` event: the jobs' statuses and the server's clock (epoch ms) when it was sent. */
