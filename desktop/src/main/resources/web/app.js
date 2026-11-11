@@ -3,7 +3,7 @@
 import { connect } from './lib/store.js';
 import { api } from './lib/api.js';
 import { h, formDialog, toast } from './lib/ui.js';
-import { nextPassword, passwordAsker, waitingPasswords } from './lib/password.js';
+import { nextPassword, passwordAsker, passwordText, waitingPasswords } from './lib/password.js';
 import * as jobs from './screens/jobs.js';
 import * as accounts from './screens/accounts.js';
 import * as exportScreen from './screens/export.js';
@@ -289,7 +289,7 @@ function passwordDialog(request) {
     open = null;
   }
   if (!request || open || answered.has(request.id)) return;
-  const { id, hint } = request;
+  const { id } = request;
   const field = h('input', { type: 'password', autocomplete: 'off', 'aria-label': 'סיסמה' });
   // 409: the request was already answered or is gone (another window, or it timed out); nothing to tell. Any other
   // failure (the network, the server) leaves the request unanswered: it can be answered again, so the dialog comes
@@ -306,7 +306,7 @@ function passwordDialog(request) {
     ...(asker.account ? [' · חשבון: ', h('bdi', {}, asker.account)] : []));
   const dialog = formDialog({
     title: 'סיסמת אימות דו-שלבי',
-    text: 'סשן הייצוא צריך את הסיסמה של החשבון.' + (hint && hint.trim() ? `\nרמז: ${hint}` : ''),
+    text: passwordText(request),
     content: askerLine ? [askerLine, field] : [field],
   });
   open = { id, dialog };

@@ -11,6 +11,8 @@ import org.tgbackup.app.engine.JobStatus
 import org.tgbackup.app.engine.LogEntry
 import org.tgbackup.app.export.ExportPrefs
 import org.tgbackup.desktop.DesktopPrefsData
+import org.tgbackup.app.export.PasswordOrigin
+import org.tgbackup.app.export.PasswordRequest
 import org.tgbackup.app.export.RunningExport
 import org.tgbackup.app.tg.AccountClient
 import org.tgbackup.app.tg.AuthUi
@@ -182,9 +184,21 @@ data class RunningExportDto(val accountId: String, val title: String, val state:
 
 fun RunningExport.toDto(state: ExportState = controller.state.value) = RunningExportDto(accountId, title, state.toDto())
 
-/** [origin] is "screen" (the export screen's login) or "job" (a copying job's login). */
+/**
+ * [origin] is "screen" (the export screen's login) or "job" (a copying job's login); [wrong] is true when the previous
+ * answer was a wrong password.
+ */
 @Serializable
-data class PasswordRequestDto(val id: String, val hint: String, val accountId: String = "", val origin: String = "screen")
+data class PasswordRequestDto(
+    val id: String,
+    val hint: String,
+    val accountId: String = "",
+    val origin: String = "screen",
+    val wrong: Boolean = false,
+)
+
+fun PasswordRequest.toDto(id: String) =
+    PasswordRequestDto(id, hint, accountId, if (origin == PasswordOrigin.Job) "job" else "screen", wrong)
 
 @Serializable
 data class LogEntryDto(val seq: Long, val time: String, val level: String, val msg: String)

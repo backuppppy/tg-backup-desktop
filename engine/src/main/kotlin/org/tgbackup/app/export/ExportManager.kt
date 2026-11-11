@@ -62,6 +62,8 @@ class PasswordRequest(
     val answer: CompletableDeferred<String?>,
     val accountId: String = "",
     val origin: PasswordOrigin = PasswordOrigin.Screen,
+    /** The previous answer was a wrong password: the dialog says so. */
+    val wrong: Boolean = false,
 )
 
 /**
@@ -80,8 +82,8 @@ class PasswordQueue {
     }
 
     /** Waits for the answer to a new request; null is the dialog's cancel. */
-    suspend fun ask(accountId: String, origin: PasswordOrigin, hint: String): String? {
-        val request = PasswordRequest(hint, CompletableDeferred(), accountId, origin)
+    suspend fun ask(accountId: String, origin: PasswordOrigin, hint: String, wrong: Boolean = false): String? {
+        val request = PasswordRequest(hint, CompletableDeferred(), accountId, origin, wrong)
         change { it + request }
         try {
             return request.answer.await()
@@ -123,8 +125,16 @@ class ExportManager(
     val password: StateFlow<PasswordRequest?> = passwordQueue.first
 
     /** Asks for the 2FA password of [accountId]; null is the dialog's cancel. */
-    suspend fun askPassword(accountId: String, origin: PasswordOrigin, hint: String): String? =
-        passwordQueue.ask(accountId, origin, hint)
+    suspend fun askPassword(accountId: String, origin: PasswordOrigin, hint: String, wrong: Boolean = false): String? =
+        passwordQueue.ask(accountId, origin, hint, wrong)
+
+    private val loginLocks = HashMap<String, Mutex>()
+
+    /** Runs [block] as the only login of [accountId] at a time (the export screen and a job share it); others wait. */
+    internal suspend fun <T> serialLogin(accountId: String, block: suspend () -> T): T {
+        val mutex = synchronized(loginLocks) { loginLocks.getOrPut(accountId) { Mutex() } }
+        return mutex.withLock { block() }
+    }
 
     private val _running = MutableStateFlow<RunningExport?>(null)
     val running: StateFlow<RunningExport?> = _running.asStateFlow()
@@ -186,26 +196,50 @@ class ExportManager(
 
     suspend fun isLoggedIn(account: Account): Boolean = MtpLogin(client(account)).isLoggedIn
 
-    /** Logs the export session in by confirming a QR token with the account's TDLib session. */
+    /**
+     * Logs the export session in by confirming a QR token with the account's TDLib session. One login per account
+     * at a time: a caller that waited finds the session the other one made, and only checks it.
+     */
     suspend fun login(account: Account, origin: PasswordOrigin = PasswordOrigin.Screen): Result<Unit> = runCatching {
         val tdlib = accounts[account.id] ?: error("החשבון לא מחובר ב-TG Backup")
         if (!tdlib.isReady) error("החשבון לא מחובר ב-TG Backup")
         val me = tdlib.client.getMe().getOrNull() ?: error("לא ניתן לקרוא את פרטי החשבון")
-        val c = client(account)
-        val login = MtpLogin(c)
-        if (login.isLoggedIn && login.checkSession()) return@runCatching
-        login.loginWithQr(
-            expectedUserId = me.id,
-            confirm = { link ->
-                when (val r = tdlib.client.confirmQrCodeAuthentication(link)) {
-                    is TdlResult.Failure -> error("אישור ההתחברות נכשל: ${r.code} ${r.message}")
-                    is TdlResult.Success -> log.info("[${tdlib.tag}] סשן הייצוא אושר")
+        serialLogin(account.id) {
+            val c = client(account)
+            var stage = "check-session"
+            try {
+                val login = MtpLogin(c)
+                if (login.isLoggedIn && login.checkSession()) return@serialLogin
+                login.loginWithQr(
+                    expectedUserId = me.id,
+                    confirm = { link ->
+                        when (val r = tdlib.client.confirmQrCodeAuthentication(link)) {
+                            is TdlResult.Failure -> error("אישור ההתחברות נכשל: ${r.code} ${r.message}")
+                            is TdlResult.Success -> log.info("[${tdlib.tag}] החשבון אישר את קוד ה-QR — ממשיך בהתחברות")
+                        }
+                    },
+                    password = { hint, wrong -> askPassword(account.id, origin, hint, wrong) ?: throw LoginCancelled() },
+                    onStage = { stage = it },
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.error("[${tdlib.tag}] התחברות סשן הייצוא נכשלה ($stage): ${e.message ?: e.javaClass.simpleName}")
+                if (e !is LoginCancelled) {
+                    val dc = c.mainDc.toString()
+                    SentryOnce.exception("export-login|$stage|${e::class.java.name}|$dc", e) { s ->
+                        s.setTag("stage", stage)
+                        s.setTag("dc", dc)
+                    }
                 }
-            },
-            password = { hint -> askPassword(account.id, origin, hint) ?: error("ההתחברות בוטלה") },
-        )
-        log.success("[${tdlib.tag}] סשן הייצוא מחובר")
+                throw e
+            }
+            log.success("[${tdlib.tag}] סשן הייצוא מחובר")
+        }
     }
+
+    /** The 2FA dialog was cancelled: not a failure to report. */
+    private class LoginCancelled : Exception("ההתחברות בוטלה")
 
     /** The account's export session, logged in, for copying jobs (see TakeoutJobRunner). */
     suspend fun copyClient(account: Account): Result<MtpClient> = login(account, PasswordOrigin.Job).map { client(account) }

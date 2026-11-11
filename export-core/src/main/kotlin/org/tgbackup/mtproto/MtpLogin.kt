@@ -30,6 +30,8 @@ class LoginException(message: String) : Exception(message)
  * the account has one.
  */
 class MtpLogin(private val client: MtpClient) {
+    /** The current [loginWithQr]'s onStage. */
+    private var stage: (String) -> Unit = {}
 
     val isLoggedIn: Boolean get() = client.storage.userId != 0L
 
@@ -49,22 +51,30 @@ class MtpLogin(private val client: MtpClient) {
 
     /**
      * [confirm] receives a "tg://login?token=..." link and must have it
-     * accepted by a logged in session. [password] is asked when 2FA is on.
+     * accepted by a logged in session. [password] is asked when 2FA is on,
+     * with `wrong = true` after a wrong password. [onStage] is told each step
+     * as it starts: `config`, `export-token`, `confirm`, `migrate-DC<n>`,
+     * `import-token`, `password`, `check-password`, `done`.
      */
     suspend fun loginWithQr(
         expectedUserId: Long,
         confirm: suspend (String) -> Unit,
-        password: suspend (hint: String) -> String,
+        password: suspend (hint: String, wrong: Boolean) -> String,
+        onStage: (String) -> Unit = {},
     ) {
+        stage = onStage
+        stage("config")
         client.loadConfig()
         var confirmed = false
         repeat(20) {
+            if (!confirmed) stage("export-token")
             val result = try {
                 client.invoke(MTPauth_ExportLoginToken(client.app.apiId, client.apiHash, emptyList()))
             } catch (e: RpcError) {
                 if (e.type == "SESSION_PASSWORD_NEEDED") {
                     checkPassword(password)
                     finish(expectedUserId)
+                    stage("done")
                     return
                 }
                 throw e
@@ -73,6 +83,7 @@ class MtpLogin(private val client: MtpClient) {
                 is MTPDauth_loginToken -> {
                     if (!confirmed) {
                         val link = "tg://login?token=" + org.tgbackup.mtproto.B64.urlNoPad(r.vtoken)
+                        stage("confirm")
                         confirm(link)
                         confirmed = true
                     }
@@ -80,6 +91,7 @@ class MtpLogin(private val client: MtpClient) {
                 }
                 null -> {
                     finish(expectedUserId)
+                    stage("done")
                     return
                 }
                 else -> Unit
@@ -89,11 +101,16 @@ class MtpLogin(private val client: MtpClient) {
     }
 
     /** Returns the token to wait on, or null when logged in. */
-    private suspend fun handleToken(result: MTPauth_LoginToken, password: suspend (String) -> String): MTPDauth_loginToken? {
+    private suspend fun handleToken(
+        result: MTPauth_LoginToken,
+        password: suspend (String, Boolean) -> String,
+    ): MTPDauth_loginToken? {
         return when (result) {
             is MTPDauth_loginToken -> result
             is MTPDauth_loginTokenMigrateTo -> {
+                stage("migrate-DC${result.vdc_id}")
                 client.setMainDc(result.vdc_id)
+                stage("import-token")
                 val imported = try {
                     client.invoke(MTPauth_ImportLoginToken(result.vtoken))
                 } catch (e: RpcError) {
@@ -134,16 +151,22 @@ class MtpLogin(private val client: MtpClient) {
         }
     }
 
-    private suspend fun checkPassword(password: suspend (String) -> String) {
+    private suspend fun checkPassword(password: suspend (String, Boolean) -> String) {
+        var wrong = false
         while (true) {
+            stage("password")
             val state = client.invoke(MTPaccount_GetPassword()) as MTPDaccount_password
-            val entered = password(state.vhint ?: "")
+            val entered = password(state.vhint ?: "", wrong)
+            stage("check-password")
             val check = Srp.compute(state, entered)
             try {
                 authorized(client.invoke(MTPauth_CheckPassword(check)))
                 return
             } catch (e: RpcError) {
-                if (e.type == "PASSWORD_HASH_INVALID") continue
+                if (e.type == "PASSWORD_HASH_INVALID") {
+                    wrong = true
+                    continue
+                }
                 throw e
             }
         }

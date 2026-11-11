@@ -20,3 +20,10 @@ export function passwordAsker(request, accounts = []) {
   const account = request.accountId ? (accounts.find((a) => a.id === request.accountId)?.name || request.accountId) : '';
   return { who: request.origin === 'job' ? 'משימה' : 'ייצוא', account };
 }
+
+/** The dialog's text: what is asked, the hint when there is one, and a notice after a wrong password. */
+export function passwordText(request) {
+  const hint = request.hint && request.hint.trim() ? `\nרמז: ${request.hint}` : '';
+  const wrong = request.wrong ? '\nהסיסמה שגויה. נסה שוב.' : '';
+  return 'סשן הייצוא צריך את הסיסמה של החשבון.' + hint + wrong;
+}

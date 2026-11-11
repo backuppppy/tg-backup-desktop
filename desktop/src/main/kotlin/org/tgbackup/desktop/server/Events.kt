@@ -26,7 +26,6 @@ import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.json.JsonElement
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.app.engine.LogEntry
-import org.tgbackup.app.export.PasswordOrigin
 import org.tgbackup.app.export.PasswordRequest
 import org.tgbackup.app.export.RunningExport
 import org.tgbackup.desktop.DesktopApp
@@ -97,9 +96,7 @@ class Events(private val app: DesktopApp) {
         return map { it.toDto() }
     }
 
-    private fun PasswordRequest.toDto() = PasswordRequestDto(
-        passwordId(this), hint, accountId, if (origin == PasswordOrigin.Job) "job" else "screen",
-    )
+    private fun PasswordRequest.toDto() = toDto(passwordId(this))
 
     private fun exportPrefs() = app.exports.prefs.value.toDto(app.exports.defaultPath())
 

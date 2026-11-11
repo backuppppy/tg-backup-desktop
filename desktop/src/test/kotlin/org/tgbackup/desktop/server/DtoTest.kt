@@ -115,4 +115,17 @@ class DtoTest {
         val idle = TgbJson.encodeToJsonElement(ExportStateDto.serializer(), ExportState.Idle.toDto()).jsonObject
         assertEquals("Idle", idle["type"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun aPasswordRequestCarriesWrong() {
+        val again = org.tgbackup.app.export.PasswordRequest(
+            "רמז", kotlinx.coroutines.CompletableDeferred(), "a1", org.tgbackup.app.export.PasswordOrigin.Job, wrong = true,
+        ).toDto("p1")
+        assertEquals(PasswordRequestDto("p1", "רמז", "a1", "job", wrong = true), again)
+        val first = org.tgbackup.app.export.PasswordRequest("", kotlinx.coroutines.CompletableDeferred()).toDto("p2")
+        assertFalse(first.wrong)
+        assertEquals("screen", first.origin)
+        val json = TgbJson.parseToJsonElement(TgbJson.encodeToString(PasswordRequestDto.serializer(), again)).jsonObject
+        assertEquals("true", json["wrong"]!!.jsonPrimitive.content)
+    }
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { waitingPasswords, nextPassword, passwordAsker } from '../../desktop/src/main/resources/web/lib/password.js';
+import { waitingPasswords, nextPassword, passwordAsker, passwordText } from '../../desktop/src/main/resources/web/lib/password.js';
 import { reduce } from '../../desktop/src/main/resources/web/lib/store.js';
 
 const p1 = { id: 'p1', hint: '', accountId: 'a1', origin: 'job' };
@@ -52,4 +52,14 @@ test('a `passwords` event sets the list and its oldest as `password`', () => {
   s = reduce(s, 'passwords', []);
   assert.deepEqual(s.passwords, []);
   assert.equal(s.password, null);
+});
+
+test('the dialog text: the hint when there is one, and the wrong-password line only after a wrong password', () => {
+  assert.equal(passwordText({ id: 'x', hint: '' }), 'סשן הייצוא צריך את הסיסמה של החשבון.');
+  assert.equal(passwordText({ id: 'x', hint: 'כלב' }), 'סשן הייצוא צריך את הסיסמה של החשבון.\nרמז: כלב');
+  assert.ok(!passwordText({ id: 'x', hint: 'כלב', wrong: false }).includes('הסיסמה שגויה. נסה שוב.'));
+  assert.ok(!passwordText({ id: 'x', hint: 'כלב' }).includes('הסיסמה שגויה'));
+  const again = passwordText({ id: 'x', hint: 'כלב', wrong: true });
+  assert.ok(again.includes('הסיסמה שגויה. נסה שוב.'), again);
+  assert.ok(again.includes('רמז: כלב'), again);
 });
