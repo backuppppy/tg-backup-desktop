@@ -61,13 +61,10 @@ class DesktopApp(
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val log = LogBus(dir)
 
-    private val power: PowerRequests = power ?: PowerRequests.forCurrentOs(dir, sleepOverride) { log.info(it) }
+    private val power: PowerRequests =
+        power ?: PowerRequests.forCurrentOs(dir, sleepOverride, log = { log.info(it) }, warn = { log.warn(it) })
     private val sleepGuard = SleepGuard(this.power)
     private val sleepWatch = SleepWatch(System::currentTimeMillis)
-
-    /** What the sleep guard should be (work runs and the switch is on); a failed call is retried every tick. */
-    @Volatile
-    private var keepAwakeWanted = false
 
     /** The last power failure logged, so a call retried every tick logs (and reports) it once. */
     private var lastPowerError: String? = null
@@ -113,10 +110,7 @@ class DesktopApp(
         // on IO and never break the collector.
         scope.launch(Dispatchers.IO) {
             sleepSignal(busy, prefs.value.map { it.keepAwake })
-                .collect { active ->
-                    keepAwakeWanted = active
-                    updateSleepGuard(active)
-                }
+                .collect { active -> updateSleepGuard { sleepGuard.update(active) } }
         }
 
         // Every tick: notice a sleep that happened while work ran anyway, and retry a power call that failed.
@@ -127,7 +121,8 @@ class DesktopApp(
                 watching = busy.value
                 delay(sleepWatch.tickMs)
                 if (watching && busy.value) sleepWatch.check().takeIf { it > 0 }?.let(::reportSleep)
-                updateSleepGuard(keepAwakeWanted)
+                // The guard's own last wanted state, read under its lock: never an older value than the collector's.
+                updateSleepGuard { sleepGuard.retry() }
             }
         }
 
@@ -187,23 +182,26 @@ class DesktopApp(
             }
             if (done == null) log.warn("סגירת החשבונות לא הסתיימה תוך 15 שניות")
         }
-        updateSleepGuard(false)
+        updateSleepGuard { sleepGuard.update(false) }
     }
 
-    private fun updateSleepGuard(active: Boolean) {
-        runCatching { sleepGuard.update(active) }
-            .onSuccess { changed ->
+    /** Runs one guard call; logs the change it made, or the failure. */
+    private fun updateSleepGuard(call: () -> Boolean) {
+        // Under the guard's lock (its methods lock the same object): the state read is the one this call set.
+        runCatching { synchronized(sleepGuard) { call().takeIf { it }?.let { sleepGuard.state } } }
+            .onSuccess { on ->
                 synchronized(this) { lastPowerError = null }
-                if (changed) log.info(if (active) "מניעת שינה פעילה" else "מניעת שינה שוחררה")
+                if (on != null) log.info(if (on) "מניעת שינה פעילה" else "מניעת שינה שוחררה")
             }
             .onFailure { powerFailed(it) }
     }
 
     private fun powerFailed(e: Throwable) {
-        val first = synchronized(this) { (e.message != lastPowerError).also { lastPowerError = e.message } }
+        val msg = e.message ?: e::class.java.simpleName
+        val first = synchronized(this) { (msg != lastPowerError).also { lastPowerError = msg } }
         if (!first) return
-        log.warn("בקשת מניעת שינה נכשלה: ${e.message}")
-        SentryOnce.exception("power-request|${e::class.java.name}|${e.message}", e)
+        log.warn("בקשת מניעת שינה נכשלה: $msg")
+        SentryOnce.exception("power-request|$VERSION|${e::class.java.name}|$msg", e)
     }
 
     /** The PC slept for [gapMs] although work ran: the log, and Sentry once per version and length. */

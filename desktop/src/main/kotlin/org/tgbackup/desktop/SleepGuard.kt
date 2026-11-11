@@ -14,6 +14,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /** Asks the OS to stay awake (or stop asking). */
 fun interface PowerRequests {
@@ -27,10 +28,15 @@ fun interface PowerRequests {
          * Windows: power requests plus, when [sleepOverride], the temporary "sleep after: never" saved in [dataDir]
          * (`--smoke` runs without it). [log] gets the user-facing lines of [SleepOverride]. Other systems: a no-op.
          */
-        fun forCurrentOs(dataDir: File, sleepOverride: Boolean = true, log: (String) -> Unit = {}): PowerRequests =
+        fun forCurrentOs(
+            dataDir: File,
+            sleepOverride: Boolean = true,
+            log: (String) -> Unit = {},
+            warn: (String) -> Unit = log,
+        ): PowerRequests =
             if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) {
                 WindowsPowerRequests(
-                    if (sleepOverride) SleepOverride(File(dataDir, SleepOverride.FILE_NAME), WindowsPowerSettings(), log) else null,
+                    if (sleepOverride) SleepOverride(File(dataDir, SleepOverride.FILE_NAME), WindowsPowerSettings(), log, warn) else null,
                 )
             } else {
                 PowerRequests { }
@@ -43,16 +49,34 @@ fun interface PowerRequests {
  * Android wake lock). Calls [PowerRequests.keepAwake] only when the state changes.
  */
 class SleepGuard(private val power: PowerRequests) {
-    private var active = false
+    /** The state the system is in; null after a failed call (some of its parts may have been done). */
+    private var active: Boolean? = false
+
+    /** The state the system is in (null: unknown after a failed call). */
+    val state: Boolean?
+        @Synchronized get() = active
+
+    /** The state last asked for ([update]); [retry] sends it again under the same lock. */
+    private var wanted = false
+
+    /** Sends the last wanted state again when the system may not be in it (a call failed). */
+    @Synchronized
+    fun retry(): Boolean = update(wanted)
 
     /**
-     * Returns true when the state changed (the call was made and succeeded). The state changes only after a
-     * successful call, so a call that threw is made again on the next update.
+     * Returns true when the state changed (the call was made and succeeded). After a call that threw the state is
+     * unknown, so the next update calls again, in either direction.
      */
     @Synchronized
     fun update(active: Boolean): Boolean {
+        wanted = active
         if (active == this.active) return false
-        power.keepAwake(active)
+        try {
+            power.keepAwake(active)
+        } catch (t: Throwable) {
+            this.active = null
+            throw t
+        }
         this.active = active
         return true
     }
@@ -89,7 +113,7 @@ internal class WindowsPowerRequests(private val override: SleepOverride?) : Powe
                 }
                 requestsSet = true
             }
-            Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED)
+            executionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED)
             override?.hold()
         } else {
             request?.takeIf { requestsSet }?.let { h ->
@@ -101,7 +125,7 @@ internal class WindowsPowerRequests(private val override: SleepOverride?) : Powe
                 check(system) { "PowerClearRequest(SystemRequired): error $systemError" }
                 check(execution) { "PowerClearRequest(ExecutionRequired): error $executionError" }
             }
-            Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS)
+            executionState(ES_CONTINUOUS)
             override?.release()
         }
     }
@@ -121,6 +145,13 @@ internal class WindowsPowerRequests(private val override: SleepOverride?) : Powe
         return h
     }
 
+    /** `SetThreadExecutionState` returns the previous state, 0 on failure. */
+    private fun executionState(flags: Int) {
+        if (Kernel32.INSTANCE.SetThreadExecutionState(flags) == 0) {
+            throw IllegalStateException("SetThreadExecutionState: error ${Native.getLastError()}")
+        }
+    }
+
     private fun win(call: String, ok: Boolean) {
         if (!ok) throw IllegalStateException("$call: error ${Native.getLastError()}")
     }
@@ -130,6 +161,8 @@ internal class WindowsPowerRequests(private val override: SleepOverride?) : Powe
             executor.submit(Callable { block() }).get(5, TimeUnit.SECONDS)
         } catch (e: ExecutionException) {
             throw e.cause ?: e
+        } catch (e: TimeoutException) {
+            throw IllegalStateException("פג הזמן (5 שניות)", e)
         }
 
     /** kernel32's power request calls (not in jna-platform). `GetLastError` is kept by JNA: [Native.getLastError]. */

@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.tgbackup.io.AtomicFiles
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Windows' "sleep after" and "hibernate after" of the active power scheme, in seconds (0 = never), on mains (ac) and
@@ -34,27 +36,19 @@ class SleepOverride(
     private val file: File,
     private val settings: PowerSettings,
     private val log: (String) -> Unit = {},
+    private val warn: (String) -> Unit = log,
 ) {
     /** Saves the current values once (only when no saved file exists), then writes "never" to all of them. */
     @Synchronized
     fun hold() {
-        val saved = if (file.exists()) {
-            load()
-        } else {
-            settings.read().also(::save)
-        }
+        val saved = loadOrSetAside() ?: settings.read().also(::save)
         settings.write(saved.never())
     }
 
     /** Writes the saved values back and deletes the file. False when nothing was held. */
     @Synchronized
     fun release(): Boolean {
-        if (!file.exists()) return false
-        val saved = runCatching { load() }.getOrElse { e ->
-            // An unreadable file can never be restored: drop it, so it does not fail every launch.
-            file.delete()
-            throw IllegalStateException("power-restore.json unreadable: ${e.message}", e)
-        }
+        val saved = loadOrSetAside() ?: return false
         settings.write(saved)
         file.delete()
         log(MSG_RESTORED)
@@ -64,7 +58,19 @@ class SleepOverride(
     /** At launch (and on uninstall): restores what a crashed run left overridden. */
     fun recover(): Boolean = release()
 
-    private fun load(): SleepTimeouts = json.decodeFromString(SleepTimeouts.serializer(), file.readText())
+    /**
+     * The saved values, or null when there is no file. An unreadable file is kept as `power-restore.json.bad` (never
+     * deleted) with a warning, and counts as none, so it does not fail every launch and [hold] saves afresh.
+     */
+    private fun loadOrSetAside(): SleepTimeouts? {
+        if (!file.exists()) return null
+        return runCatching { json.decodeFromString(SleepTimeouts.serializer(), file.readText()) }.getOrElse { e ->
+            val bad = File(file.parentFile, "${file.name}.bad")
+            Files.move(file.toPath(), bad.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            warn("$FILE_NAME פגום ונשמר בשם ${bad.name}: ${e.message}")
+            null
+        }
+    }
 
     private fun save(t: SleepTimeouts) {
         file.parentFile?.mkdirs()

@@ -92,4 +92,33 @@ class SleepOverrideTest {
         o.release()
         assertEquals(user.copy(acHibernate = -1, dcHibernate = -1), s.current)
     }
+
+    @Test
+    fun aCorruptFileIsKeptAsBadAndHoldSavesAgain() {
+        val f = file()
+        f.writeText("{not json")
+        val s = FakeSettings(user)
+        val warnings = mutableListOf<String>()
+        val o = SleepOverride(f, s, warn = warnings::add)
+        o.hold()
+        val bad = File(f.parentFile, "power-restore.json.bad")
+        assertEquals("{not json", bad.readText())
+        assertEquals(1, warnings.size)
+        assertEquals(never, s.current)
+        assertTrue(o.release())
+        assertEquals(user, s.current)
+    }
+
+    @Test
+    fun recoverWithACorruptFileKeepsItAndRestoresNothing() {
+        val f = file()
+        f.writeText("{not json")
+        val s = FakeSettings(user)
+        val warnings = mutableListOf<String>()
+        assertFalse(SleepOverride(f, s, warn = warnings::add).recover())
+        assertFalse(f.exists())
+        assertTrue(File(f.parentFile, "power-restore.json.bad").exists())
+        assertEquals(1, warnings.size)
+        assertTrue(s.writes.isEmpty())
+    }
 }

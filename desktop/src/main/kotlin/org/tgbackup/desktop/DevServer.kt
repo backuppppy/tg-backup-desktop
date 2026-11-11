@@ -35,7 +35,8 @@ fun main(args: Array<String>) {
     val port = System.getenv("TGB_DEV_PORT")?.toIntOrNull() ?: 8765
 
     val fixture = System.getenv("TGB_DEV_FIXTURE")
-    val app = DesktopApp(dataDir)
+    // Like the smoke: a dev server never changes Windows' sleep settings.
+    val app = DesktopApp(dataDir, sleepOverride = false)
     if (fixture == "long-names") seedLongNames(app)
     app.start()
     val server = ApiServer(app, "127.0.0.1", port, devExtraRoutes(fixture))
