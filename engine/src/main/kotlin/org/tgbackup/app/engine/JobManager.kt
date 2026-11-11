@@ -47,6 +47,9 @@ data class JobStatus(
     /** The last handled message in the source. */
     val lastLink: String? get() = messageLink(sourceChatId, lastId)
 
+    /** The newest message in the source. */
+    val latestLink: String? get() = messageLink(sourceChatId, latestId)
+
     /** The last message copied into the target. */
     val lastTargetLink: String? get() = messageLink(targetChatId, lastTargetId)
 

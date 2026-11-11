@@ -147,10 +147,10 @@ test('the run totals on the fixture cards: copied, position and run time, inside
   const one = page.locator('.job-card[data-job-id="longjob1"]');
   const two = page.locator('.job-card[data-job-id="longjob2"]');
   await expect(one).toContainText('הועתקו: 12,340');
-  await expect(one.locator('.last')).toHaveText('אוחז ב-id 45,210 מתוך 50,000');
+  await expect(one.locator('.last')).toHaveText('אוחז במקור ב-id 45,210 מתוך 50,000');
   await expect(one.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
   await expect(two).toContainText('הועתקו: 1,234,567');
-  await expect(two.locator('.last')).toHaveText('אוחז ב-id 987,654');
+  await expect(two.locator('.last')).toHaveText('אוחז במקור ב-id 987,654');
   await expect(two.locator('.run-time')).toHaveText('⏱ רץ: 25:01:01');
   await expect(page.locator('.jobs-summary')).toContainText('הועתקו: 1,246,907');
   for (const c of [one, two]) {

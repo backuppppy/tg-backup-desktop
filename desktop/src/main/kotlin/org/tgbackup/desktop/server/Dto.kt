@@ -70,11 +70,13 @@ data class JobStatusDto(
     val runningSince: Long,
     /** The source's newest message id, 0 = not known yet. */
     val latestId: Long,
+    /** Link to the source's newest message, null while unknown. */
+    val latestLink: String? = null,
 )
 
 fun JobStatus.toDto() = JobStatusDto(
     running, paused, phase, lastId, sourceChatId, sourceTitle, isProtected, copied, failed, targetChatId, lastTargetId,
-    lastLink, lastTargetLink, copiedTotal, runMillis, runningSince, latestId,
+    lastLink, lastTargetLink, copiedTotal, runMillis, runningSince, latestId, latestLink,
 )
 
 @Serializable

@@ -24,6 +24,11 @@ export function runMillisAt(status, now, offset = 0) {
   return saved + (since > 0 ? Math.max(0, now + (Number(offset) || 0) - since) : 0);
 }
 
+/** The phase as shown: the message a copy or upload phase names is in the target (`מעתיק הודעה ביעד 9384`). */
+export function phaseText(phase) {
+  return String(phase ?? '').replace(/^(מעתיק|מעלה) הודעה(?= )/, '$1 הודעה ביעד');
+}
+
 /** The run time line is shown once there is a saved time or the clock runs. */
 export function runTimeShown(status) {
   return (Number(status.runMillis) || 0) > 0 || (Number(status.runningSince) || 0) > 0;

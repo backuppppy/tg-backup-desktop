@@ -44,6 +44,9 @@ class DtoTest {
         assertEquals(s.lastTargetLink, dto.lastTargetLink)
         assertEquals(3, dto.copied)
         assertNull(JobStatus().toDto().lastLink)
+        assertNull(JobStatus().toDto().latestLink)
+        val latest = JobStatus(sourceChatId = -1001234567890, latestId = 50_000).toDto()
+        assertEquals("https://t.me/c/1234567890/50000", latest.latestLink)
     }
 
     @Test

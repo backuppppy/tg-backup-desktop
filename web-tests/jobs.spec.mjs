@@ -278,7 +278,7 @@ async function visualOrder(line, parts) {
 const status = (over) => ({
   running: false, paused: false, phase: '', lastId: 0, sourceChatId: 0, sourceTitle: '', isProtected: false,
   copied: 0, failed: 0, targetChatId: 0, lastTargetId: 0, lastLink: null, lastTargetLink: null,
-  copiedTotal: 0, runMillis: 0, runningSince: 0, latestId: 0, ...over,
+  copiedTotal: 0, runMillis: 0, runningSince: 0, latestId: 0, latestLink: null, ...over,
 });
 const job = (over) => ({
   id: 'x', name: '', source: 's', target: 't', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [],
@@ -314,18 +314,18 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c1).toContainText('הכל · מהיר · 📡 בלי הורדה · חשבונות: —');
   await expect(c1).toContainText('📡 קריאה דרך סשן הייצוא ושליחה בלי הורדה');
   await expect(c1).toContainText('הועתקו: 3 · נכשלו: 2');
-  const phase = c1.getByRole('link', { name: 'מעתיק הודעה 5 · ההודעה האחרונה ביעד' });
-  await expect(phase).toHaveText('מעתיק הודעה 5');
+  const phase = c1.getByRole('link', { name: 'מעתיק הודעה ביעד 5 · ההודעה האחרונה ביעד' });
+  await expect(phase).toHaveText('מעתיק הודעה ביעד 5');
   await expect(phase).toHaveAttribute('href', 'https://t.me/c/200/5');
   await expect(phase).toHaveAttribute('target', '_blank');
   await expect(phase).toHaveAttribute('rel', 'noopener');
   // The link is on the number only.
-  await expect(c1.locator('.last')).toHaveText('אוחז ב-id 77');
+  await expect(c1.locator('.last')).toHaveText('אוחז במקור ב-id 77');
   const last = c1.locator('.last').getByRole('link', { name: 'הודעה 77 במקור', exact: true });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(last).toHaveAttribute('target', '_blank');
   // As in Android: הודעה אחרונה שטופלה opens the source's message, the phase the target's.
-  await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה: 77');
+  await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה מהמקור: 77');
   const handled = c1.locator('.last-handled').getByRole('link', { name: 'הודעה 77 במקור', exact: true });
   await expect(handled).toHaveAttribute('href', 'https://t.me/c/100/77');
   await expect(handled).toHaveAttribute('target', '_blank');
@@ -342,7 +342,7 @@ test('header, warning and card lines from a faked state', async ({ page }) => {
   await expect(c2.getByRole('button', { name: '⏸ השהה' })).toBeVisible();
 
   const c3 = card(page, 'שלישית');
-  await expect(c3.getByText('אוחז ב-id 9')).toBeVisible();
+  await expect(c3.getByText('אוחז במקור ב-id 9')).toBeVisible();
   await expect(c3.getByRole('link')).toHaveCount(0);
   await expect(c3).not.toContainText('נכשלו');
 });
@@ -380,7 +380,7 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
     ],
     statuses: {
       s1: status({ copiedTotal: 12340, copied: 5, failed: 1234, lastId: 45210, latestId: 50000, runMillis: 8045000,
-        lastLink: 'https://t.me/c/100/45210' }),
+        lastLink: 'https://t.me/c/100/45210', latestLink: 'https://t.me/c/100/50000' }),
       s2: status({ copiedTotal: 1234567, lastId: 987654, runMillis: 90061000 }),
       s3: status({ latestId: 50000 }),
     },
@@ -390,21 +390,26 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
 
   const c1 = card(page, 'מלאה');
   await expect(c1).toContainText('הועתקו: 12,340 · נכשלו: 1,234');
-  await expect(c1.locator('.last')).toHaveText('אוחז ב-id 45,210 מתוך 50,000');
+  await expect(c1.locator('.last')).toHaveText('אוחז במקור ב-id 45,210 מתוך 50,000');
   await expect(c1.locator('.run-time')).toHaveText('⏱ רץ: 2:14:05');
-  await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה: 45210');
-  expect(await visualOrder(c1.locator('.last-handled'), ['הודעה', 'אחרונה', 'שטופלה:', '45210'])).toBe(true);
+  await expect(c1.locator('.last-handled')).toHaveText('הודעה אחרונה שטופלה מהמקור: 45210');
+  expect(await visualOrder(c1.locator('.last-handled'), ['הודעה', 'אחרונה', 'שטופלה', 'מהמקור:', '45210'])).toBe(true);
   // Not shown before any message was handled.
   await expect(card(page, 'רק אחרון').locator('.last-handled')).toHaveCount(0);
   // Read right to left: אוחז ב-id, 45,210, מתוך, 50,000; and ⏱ רץ: then the time, הועתקו: then the count.
-  expect(await visualOrder(c1.locator('.last'), ['אוחז ב-', 'id', '45,210', 'מתוך', '50,000'])).toBe(true);
+  expect(await visualOrder(c1.locator('.last'), ['אוחז', 'במקור', 'ב-', 'id', '45,210', 'מתוך', '50,000'])).toBe(true);
   expect(await visualOrder(c1.locator('.run-time'), ['⏱', 'רץ:', '2:14:05'])).toBe(true);
   expect(await visualOrder(c1.locator('.copied'), ['הועתקו:', '12,340', '·', 'נכשלו:', '1,234'])).toBe(true);
-  expect(await visualOrder(card(page, 'בלי אחרון').locator('.last'), ['אוחז ב-', 'id', '987,654'])).toBe(true);
+  expect(await visualOrder(card(page, 'בלי אחרון').locator('.last'), ['אוחז', 'במקור', 'ב-', 'id', '987,654'])).toBe(true);
   // The link is on X only.
   const last = c1.locator('.last').getByRole('link', { name: 'הודעה 45,210 במקור', exact: true });
   await expect(last).toHaveAttribute('href', 'https://t.me/c/100/45210');
   await expect(last).toHaveText('45,210');
+  const latest = c1.locator('.last').getByRole('link', { name: 'הודעה 50,000 במקור', exact: true });
+  await expect(latest).toHaveAttribute('href', 'https://t.me/c/100/50000');
+  await expect(latest).toHaveText('50,000');
+  await expect(c1.locator('.last').getByRole('link')).toHaveCount(2);
+  await expect(c1.locator('.copied').getByRole('link')).toHaveCount(0);
   const handled = c1.locator('.last-handled').getByRole('link', { name: 'הודעה 45210 במקור', exact: true });
   await expect(handled).toHaveAttribute('href', 'https://t.me/c/100/45210');
   await expect(handled).toHaveText('45210');
@@ -412,11 +417,11 @@ test('run totals: הועתקו with thousands, אוחז ב-id X מתוך Y, ⏱ 
   const c2 = card(page, 'בלי אחרון');
   await expect(c2).toContainText('הועתקו: 1,234,567');
   await expect(c2).not.toContainText('נכשלו');
-  await expect(c2.locator('.last')).toHaveText('אוחז ב-id 987,654');
+  await expect(c2.locator('.last')).toHaveText('אוחז במקור ב-id 987,654');
   await expect(c2.locator('.run-time')).toHaveText('⏱ רץ: 25:01:01');
 
   const c3 = card(page, 'רק אחרון');
-  await expect(c3.locator('.last')).toHaveText('אוחז ב-id 0 מתוך 50,000');
+  await expect(c3.locator('.last')).toHaveText('אוחז במקור ב-id 0 מתוך 50,000');
   await expect(c3.locator('.run-time')).toHaveCount(0);
 
   // A job with no status yet: nothing copied, no position, no run time.
@@ -635,7 +640,7 @@ test('a link that is not http(s) is shown as plain text', async ({ page }) => {
   });
   await page.goto('/#jobs');
   const c = card(page, 'סכמה');
-  await expect(c.getByText('אוחז ב-id 5')).toBeVisible();
+  await expect(c.getByText('אוחז במקור ב-id 5')).toBeVisible();
   await expect(c.getByText('שלב')).toBeVisible();
   await expect(page.locator('a[href^="javascript" i]')).toHaveCount(0);
   await expect(c.getByRole('link')).toHaveCount(0);

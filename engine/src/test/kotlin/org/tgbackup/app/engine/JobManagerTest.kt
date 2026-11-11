@@ -116,6 +116,12 @@ class JobManagerTest {
     }
 
     @Test
+    fun latestLinkPointsAtTheSourcesLatestMessage() {
+        assertEquals("https://t.me/c/1234567890/50", JobStatus(sourceChatId = -1001234567890, latestId = 50).latestLink)
+        assertNull(JobStatus(sourceChatId = -1001234567890, latestId = 0).latestLink)
+    }
+
+    @Test
     fun idleJobShowsTheSavedTotals() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir, Progress(lastId = 40, copiedTotal = 7, runMillis = 1_000, latestId = 50))

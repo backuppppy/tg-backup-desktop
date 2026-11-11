@@ -2,7 +2,7 @@
 // JobDialog, and the delete and reset dialogs. Texts and enable rules are the Android ones.
 import { api } from '../lib/api.js';
 import { h, toast, formDialog, confirmDialog } from '../lib/ui.js';
-import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionParts } from '../lib/jobsFormat.js';
+import { formatCount, formatRunTime, runMillisAt, runTimeShown, positionParts, phaseText } from '../lib/jobsFormat.js';
 import { DESKTOP_QUERY, jobsListOrder } from '../lib/layout.js';
 
 const MEDIA_TYPES = [
@@ -21,7 +21,7 @@ const NEW_JOB = {
   id: '', name: '', source: '', target: '', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [],
   startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false,
 };
-const IDLE = { running: false, paused: false, phase: '', lastId: 0, sourceTitle: '', isProtected: false, copied: 0, failed: 0, lastLink: null, lastTargetLink: null,
+const IDLE = { running: false, paused: false, phase: '', lastId: 0, sourceTitle: '', isProtected: false, copied: 0, failed: 0, lastLink: null, lastTargetLink: null, latestLink: null,
   copiedTotal: 0, runMillis: 0, runningSince: 0, latestId: 0 };
 
 const blank = (s) => !s || !s.trim();
@@ -200,9 +200,9 @@ function maybeLink(cls, url, text, label) {
 }
 
 /** A number as a link to the source message when there is an http(s) one (named for a screen reader), else the number alone. */
-function numberLink(url, text) {
+function numberLink(url, text, place = 'במקור') {
   return typeof url === 'string' && /^https?:\/\//i.test(url)
-    ? h('a', { class: 'link', href: url, target: '_blank', rel: 'noopener', 'aria-label': `הודעה ${text} במקור` }, text)
+    ? h('a', { class: 'link', href: url, target: '_blank', rel: 'noopener', 'aria-label': `הודעה ${text} ${place}` }, text)
     : text;
 }
 
@@ -243,9 +243,9 @@ function jobCard(job, status, accounts, state) {
   // Each number in its own <bdi>: in RTL `id` stays before X (one LTR run would put X first), and the link is on X.
   const position = positionParts(status.lastId, status.latestId);
   const positionLine = position && h('div', { class: 'last' },
-    'אוחז ב-id ',
+    'אוחז במקור ב-id ',
     h('bdi', {}, numberLink(status.lastLink, position.last)),
-    position.latest ? [' מתוך ', h('bdi', {}, position.latest)] : null);
+    position.latest ? [' מתוך ', h('bdi', {}, numberLink(status.latestLink, position.latest))] : null);
   let clock = null;
   if (runTimeShown(status)) {
     const time = h('bdi', {}, runTimeOf(status, Date.now(), view.offset));
@@ -264,8 +264,8 @@ function jobCard(job, status, accounts, state) {
     note ? h('div', { class: 'small' }, note) : null,
     h('hr'),
     // As in Android: the phase opens the last message copied into the target, the last handled one the source's.
-    running ? maybeLink('phase', status.lastTargetLink, status.phase, `${status.phase} · ההודעה האחרונה ביעד`) : null,
-    (Number(status.lastId) || 0) > 0 ? h('div', { class: 'last-handled' }, 'הודעה אחרונה שטופלה: ',
+    running ? maybeLink('phase', status.lastTargetLink, phaseText(status.phase), `${phaseText(status.phase)} · ההודעה האחרונה ביעד`) : null,
+    (Number(status.lastId) || 0) > 0 ? h('div', { class: 'last-handled' }, 'הודעה אחרונה שטופלה מהמקור: ',
       h('bdi', {}, numberLink(status.lastLink, String(status.lastId)))) : null,
     h('div', { class: 'copied' }, 'הועתקו: ', h('bdi', {}, formatCount(status.copiedTotal)),
       status.failed > 0 ? [' · נכשלו: ', h('bdi', {}, formatCount(status.failed))] : null),

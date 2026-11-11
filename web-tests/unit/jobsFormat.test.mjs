@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatCount, formatRunTime, runMillisAt, positionParts, runTimeShown,
+  formatCount, formatRunTime, runMillisAt, positionParts, runTimeShown, phaseText,
 } from '../../desktop/src/main/resources/web/lib/jobsFormat.js';
 
 test('formatCount puts a comma between thousands', () => {
@@ -50,4 +50,12 @@ test('positionParts: the formatted numbers the screen puts in their own <bdi>', 
   assert.deepEqual(positionParts(45210, 0), { last: '45,210', latest: null });
   assert.deepEqual(positionParts(0, 50000), { last: '0', latest: '50,000' });
   assert.equal(positionParts(0, 0), null);
+});
+
+test('phaseText: the copy and upload phases say the message is in the target', () => {
+  assert.equal(phaseText('מעתיק הודעה 9384'), 'מעתיק הודעה ביעד 9384');
+  assert.equal(phaseText('מעלה הודעה 12'), 'מעלה הודעה ביעד 12');
+  assert.equal(phaseText('מאתר ערוצים'), 'מאתר ערוצים');
+  assert.equal(phaseText(''), '');
+  assert.equal(phaseText(undefined), '');
 });
