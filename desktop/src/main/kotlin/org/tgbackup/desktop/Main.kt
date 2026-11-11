@@ -58,6 +58,7 @@ fun main(args: Array<String>) {
 private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     val dataDir = if (smoke.enabled) smokeDataDir(AppDirs.dataDir()) else AppDirs.dataDir()
     println("DATA_DIR $dataDir")
+    Telemetry.init(dataDir, DesktopBuildConfig.SENTRY_DSN, smoke.enabled)
     // One program per data dir: a second launch shows the running one's window and exits.
     val instance = SingleInstance(dataDir)
     if (!instance.acquire()) {

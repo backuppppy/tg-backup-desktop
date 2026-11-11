@@ -25,6 +25,30 @@ val WEBVIEW_DLL_SHA256 = mapOf(
 )
 val webviewNatives: Configuration by configurations.creating
 
+// The DSN of the Sentry project (a public ingest key); -Ptgb.sentryDsn=... overrides it.
+val sentryDsn = providers.gradleProperty("tgb.sentryDsn")
+    .orElse("https://4d012b67000db5cb50794b15ff6c165c@o4510215210598400.ingest.de.sentry.io/4512414932729936")
+val generateDesktopBuildConfig = tasks.register("generateDesktopBuildConfig") {
+    val outDir = layout.buildDirectory.dir("generated/desktopbuildconfig")
+    val dsn = sentryDsn
+    inputs.property("sentryDsn", dsn)
+    outputs.dir(outDir)
+    doLast {
+        val f = outDir.get().file("org/tgbackup/desktop/DesktopBuildConfig.kt").asFile
+        f.parentFile.mkdirs()
+        f.writeText(
+            """
+            package org.tgbackup.desktop
+
+            object DesktopBuildConfig {
+                const val SENTRY_DSN: String = "${dsn.get()}"
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+}
+sourceSets["main"].kotlin.srcDir(generateDesktopBuildConfig)
+
 dependencies {
     implementation(project(":export-core"))
     implementation(project(":engine"))
@@ -37,6 +61,7 @@ dependencies {
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     // Embedded view (WebView2).
+    implementation("io.sentry:sentry:8.61.0")
     implementation("net.java.dev.jna:jna:5.19.1")
     implementation("net.java.dev.jna:jna-platform:5.19.1")
     testImplementation(kotlin("test"))
