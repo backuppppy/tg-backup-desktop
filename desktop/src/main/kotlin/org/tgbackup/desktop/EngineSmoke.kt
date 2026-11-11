@@ -24,7 +24,7 @@ fun main(args: Array<String>) {
 
     var code = 0
     try {
-        val app = DesktopApp(AppDirs.dataDir().resolve("engine-smoke"))
+        val app = DesktopApp(AppDirs.dataDir().resolve("engine-smoke"), sleepOverride = false)
         try {
             app.store.updateConfig {
                 it.copy(accounts = listOf(Account(id = "smoke", name = "smoke", apiId = 1, apiHash = "0".repeat(32), phone = "")))

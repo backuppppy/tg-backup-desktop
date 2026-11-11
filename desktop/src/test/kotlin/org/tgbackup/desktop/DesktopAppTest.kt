@@ -79,6 +79,37 @@ class DesktopAppTest {
     }
 
     @Test
+    fun startRecoversAnOverrideLeftByACrash() {
+        val calls = Collections.synchronizedList(mutableListOf<String>())
+        val power = object : PowerRequests {
+            override fun keepAwake(on: Boolean) {
+                calls += "keepAwake $on"
+            }
+            override fun recover(): Boolean {
+                calls += "recover"
+                return true
+            }
+        }
+        val app = DesktopApp(dataDir(), power)
+        app.start()
+        app.close()
+        assertEquals("recover", calls.first())
+        assertEquals(1, calls.count { it == "recover" })
+    }
+
+    @Test
+    fun aFailingRecoverDoesNotBreakStart() {
+        val power = object : PowerRequests {
+            override fun keepAwake(on: Boolean) {}
+            override fun recover(): Boolean = error("powrprof down")
+        }
+        val app = DesktopApp(dataDir(), power)
+        app.start()
+        assertTrue(app.log.entries.value.any { it.msg == "בקשת מניעת שינה נכשלה: powrprof down" })
+        app.close()
+    }
+
+    @Test
     fun aFailingPowerApiDoesNotBreakClose() {
         val app = DesktopApp(dataDir(), PowerRequests { error("power API down") })
         app.start()

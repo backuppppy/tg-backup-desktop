@@ -34,6 +34,8 @@ private const val SHUTDOWN_LIMIT_MS = 40_000L
  * checks the API and the real screen, and exits 0 (or 1 with `PAGE_FAIL <reason>`).
  */
 fun main(args: Array<String>) {
+    // The uninstaller: put back Windows' "sleep after" that a running or crashed program left at "never", and end.
+    if ("--restore-power" in args) restorePowerAndExit()
     // First: TDLib extracts its DLLs to java.io.tmpdir, which must be ASCII.
     NativeTmp.ensureAsciiTmpdir("org.tgbackup.desktop.MainKt", args)
     println("TGBackup $VERSION")
@@ -69,7 +71,8 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     // The smoke's throw-away dir is wiped only once it is ours (never under a running smoke).
     if (smoke.enabled) wipeExceptLock(dataDir)
     // `--smoke` never touches the real Run key (its throw-away prefs would switch "start with Windows" off).
-    val app = DesktopApp(dataDir, autostart = Autostart.forLaunch(smoke.enabled))
+    // `--smoke` never changes Windows' sleep settings (its seeded job could count as work).
+    val app = DesktopApp(dataDir, autostart = Autostart.forLaunch(smoke.enabled), sleepOverride = !smoke.enabled)
     var server: ApiServer? = null
     val shutdown = {
         val started = System.nanoTime()
@@ -133,6 +136,19 @@ private fun handOffOrOwn(instance: SingleInstance, smoke: AppSmoke) {
             if (!smoke.enabled) showMessage(MSG_ALREADY_RUNNING, MB_ICONINFORMATION)
         }
     }
+    exitQuietly(null)
+}
+
+/**
+ * `--restore-power` (run by the uninstaller): [SleepOverride.recover] on the real data dir, then exit 0 whatever
+ * happened (an uninstall never stops on it). Prints `POWER_RESTORED yes|no` or `POWER_RESTORE_FAIL <reason>`.
+ */
+private fun restorePowerAndExit(): Nothing {
+    val restored = runCatching {
+        PowerRequests.forCurrentOs(AppDirs.dataDir().toFile(), log = ::println).recover()
+    }
+    restored.onSuccess { println("POWER_RESTORED ${if (it) "yes" else "no"}") }
+        .onFailure { println("POWER_RESTORE_FAIL ${it::class.java.simpleName}: ${it.message}") }
     exitQuietly(null)
 }
 

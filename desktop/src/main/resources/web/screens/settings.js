@@ -62,7 +62,7 @@ function build(root) {
   const version = h('p', {});
   const link = (href, label) => h('a', { class: 'button text', href, target: '_blank', rel: 'noopener' }, label);
   const autostart = toggle('הפעלה עם Windows (בלי חלון, ליד השעון)');
-  const keepAwake = toggle('מניעת שינה בזמן שמשימה או ייצוא רצים');
+  const keepAwake = toggle('מניעת שינה בזמן שמשימה או ייצוא רצים (המסך ממשיך להיכבות)');
   root.replaceChildren(
     h('section', { class: 'card' },
       h('h2', {}, 'עבודה ברקע'),

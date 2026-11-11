@@ -22,6 +22,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -29,6 +30,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.tgbackup.app.data.Store
 import org.tgbackup.app.engine.JobManager
 import org.tgbackup.app.engine.LogBus
+import org.tgbackup.app.engine.SentryOnce
+import io.sentry.SentryLevel
 import org.tgbackup.app.export.ExportManager
 import org.tgbackup.app.tg.AccountManager
 import org.tgbackup.app.tg.AuthUi
@@ -46,16 +49,28 @@ import kotlin.time.Duration.Companion.seconds
 @OptIn(ExperimentalCoroutinesApi::class)
 class DesktopApp(
     dataDir: Path,
-    power: PowerRequests = PowerRequests.forCurrentOs(),
+    power: PowerRequests? = null,
     private val autostart: Autostart = Autostart.forCurrentOs(),
+    /** The temporary "sleep after: never" while work runs (off under `--smoke`). Used only when [power] is null. */
+    sleepOverride: Boolean = true,
 ) : AutoCloseable {
 
     private val dir = Files.createDirectories(dataDir).toFile()
-    private val sleepGuard = SleepGuard(power)
     private val closed = AtomicBoolean(false)
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val log = LogBus(dir)
+
+    private val power: PowerRequests = power ?: PowerRequests.forCurrentOs(dir, sleepOverride) { log.info(it) }
+    private val sleepGuard = SleepGuard(this.power)
+    private val sleepWatch = SleepWatch(System::currentTimeMillis)
+
+    /** What the sleep guard should be (work runs and the switch is on); a failed call is retried every tick. */
+    @Volatile
+    private var keepAwakeWanted = false
+
+    /** The last power failure logged, so a call retried every tick logs (and reports) it once. */
+    private var lastPowerError: String? = null
     val store = Store(dir)
     val accounts = AccountManager(dir, log)
     val exports = ExportManager(dir, accounts, log)
@@ -82,6 +97,9 @@ class DesktopApp(
 
     /** Mirrors `App.onCreate()` (without Sentry and the foreground service) plus the `jobs.restore()` call. */
     fun start() {
+        // First: a run that died with "sleep after: never" set puts the user's values back (it logs the line).
+        runCatching { power.recover() }.onFailure { powerFailed(it) }
+
         if (store.migratedFromLegacy) {
             log.info("ההגדרות יובאו מהגרסה הקודמת. יש להתחבר מחדש לכל חשבון (פעם אחת).")
         }
@@ -95,7 +113,22 @@ class DesktopApp(
         // on IO and never break the collector.
         scope.launch(Dispatchers.IO) {
             sleepSignal(busy, prefs.value.map { it.keepAwake })
-                .collect { active -> updateSleepGuard(active) }
+                .collect { active ->
+                    keepAwakeWanted = active
+                    updateSleepGuard(active)
+                }
+        }
+
+        // Every tick: notice a sleep that happened while work ran anyway, and retry a power call that failed.
+        scope.launch(Dispatchers.IO) {
+            var watching = false
+            while (true) {
+                if (busy.value && !watching) sleepWatch.reset()
+                watching = busy.value
+                delay(sleepWatch.tickMs)
+                if (watching && busy.value) sleepWatch.check().takeIf { it > 0 }?.let(::reportSleep)
+                updateSleepGuard(keepAwakeWanted)
+            }
         }
 
         // The Run value follows the switch, now and on every change (a moved exe is rewritten at launch).
@@ -159,7 +192,35 @@ class DesktopApp(
 
     private fun updateSleepGuard(active: Boolean) {
         runCatching { sleepGuard.update(active) }
-            .onFailure { log.warn("בקשת מניעת שינה נכשלה: ${it.message}") }
+            .onSuccess { changed ->
+                synchronized(this) { lastPowerError = null }
+                if (changed) log.info(if (active) "מניעת שינה פעילה" else "מניעת שינה שוחררה")
+            }
+            .onFailure { powerFailed(it) }
+    }
+
+    private fun powerFailed(e: Throwable) {
+        val first = synchronized(this) { (e.message != lastPowerError).also { lastPowerError = e.message } }
+        if (!first) return
+        log.warn("בקשת מניעת שינה נכשלה: ${e.message}")
+        SentryOnce.exception("power-request|${e::class.java.name}|${e.message}", e)
+    }
+
+    /** The PC slept for [gapMs] although work ran: the log, and Sentry once per version and length. */
+    private fun reportSleep(gapMs: Long) {
+        val minutes = (gapMs + 30_000) / 60_000
+        val bucket = when {
+            minutes < 10 -> "2-9"
+            minutes < 60 -> "10-59"
+            minutes < 240 -> "60-239"
+            else -> "240+"
+        }
+        log.warn("המחשב היה במצב שינה $minutes דקות בזמן שמשימה רצה")
+        val keepAwake = prefs.value.value.keepAwake
+        SentryOnce.message("pc-slept|$VERSION|$bucket", "The PC slept while work ran ($bucket min)", SentryLevel.WARNING) { s ->
+            s.setExtra("minutes", minutes.toString())
+            s.setExtra("keepAwake", keepAwake.toString())
+        }
     }
 }
 

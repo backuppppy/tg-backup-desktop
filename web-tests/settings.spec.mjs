@@ -4,7 +4,7 @@
 import { test, expect } from '@playwright/test';
 
 const AUTOSTART = 'הפעלה עם Windows (בלי חלון, ליד השעון)';
-const KEEP_AWAKE = 'מניעת שינה בזמן שמשימה או ייצוא רצים';
+const KEEP_AWAKE = 'מניעת שינה בזמן שמשימה או ייצוא רצים (המסך ממשיך להיכבות)';
 
 async function prefs(page) {
   return (await page.request.get('/api/desktop-prefs')).json();
@@ -25,7 +25,7 @@ test('the background card explains closing the window and has both switches', as
   await expect(page.getByRole('heading', { name: 'עבודה ברקע' })).toBeVisible();
   await expect(page.getByText('כשמשימה או ייצוא רצים וסוגרים את החלון, התוכנה שואלת אם להמשיך ברקע (סמל ליד השעון) או להיסגר. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.')).toBeVisible();
   await expect(page.getByRole('switch', { name: AUTOSTART })).toBeVisible();
-  await expect(page.getByRole('switch', { name: KEEP_AWAKE })).toBeVisible();
+  await expect(page.getByRole('switch', { name: KEEP_AWAKE, exact: true })).toBeVisible();
 });
 
 test('the switches show the saved prefs and follow a change made elsewhere', async ({ page }) => {
