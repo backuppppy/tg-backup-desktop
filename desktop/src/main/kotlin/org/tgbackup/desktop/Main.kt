@@ -29,7 +29,7 @@ private const val SHUTDOWN_LIMIT_MS = 40_000L
 
 /**
  * TGBackup.exe: the engine, the internal server on 127.0.0.1, and the screens in a WebView2 window. Closing the
- * window ends the program, unless work runs and the user chooses to go on in the background ([WindowLoop], the
+ * window ends the program, unless work runs: then it goes on by the clock, with a balloon the first time ([WindowLoop], the
  * tray); `--minimized` (start with Windows) starts in the tray. `--smoke` runs the same program on a throw-away data dir,
  * checks the API and the real screen, and exits 0 (or 1 with `PAGE_FAIL <reason>`).
  */
@@ -94,7 +94,6 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
             )
         },
         busy = app::isBusy,
-        askBackground = ::askBackground,
         tray = tray,
         startHidden = startHidden,
         toFront = AppWindow::toFront,
@@ -175,20 +174,11 @@ private fun showMessage(text: String, icon: Int, buttons: Int = MB_OK): Int =
     Native.load("user32", User32Box::class.java)
         .MessageBoxW(null, WString(text), WString(WINDOW_TITLE), buttons or icon or MB_RTLREADING or MB_RIGHT)
 
-/** The window was closed while work runs: true (Yes) → on in the background, false (No) → the program ends. */
-private fun askBackground(): Boolean =
-    // MB_SETFOREGROUND: the window is gone, the box must not open behind another program.
-    showMessage(MSG_GO_ON_IN_BACKGROUND, MB_ICONQUESTION or MB_SETFOREGROUND, MB_YESNO) == IDYES
-
 private interface User32Box : Library {
     fun MessageBoxW(hwnd: Pointer?, text: WString, caption: WString, type: Int): Int
 }
 
 private const val MB_OK = 0x0
-private const val MB_YESNO = 0x4
-private const val MB_ICONQUESTION = 0x20
-private const val MB_SETFOREGROUND = 0x10000
-private const val IDYES = 6
 private const val ASFW_ANY = -1
 private const val MB_ICONERROR = 0x10
 private const val MB_ICONINFORMATION = 0x40
@@ -196,7 +186,6 @@ private const val MB_RIGHT = 0x80000
 private const val MB_RTLREADING = 0x100000
 
 private const val MSG_ALREADY_RUNNING = "התוכנה כבר פועלת."
-private const val MSG_GO_ON_IN_BACKGROUND = "יש משימה או ייצוא שרצים. להמשיך לרוץ ברקע?\nכן – ממשיכה ליד השעון.\nלא – התוכנה תיסגר, והמשימות ימשיכו מאותו מקום בפתיחה הבאה."
 
 /**
  * `--smoke` only: reports that WebView2 used the smoke profile, then removes the throw-away data dir. WebView2's

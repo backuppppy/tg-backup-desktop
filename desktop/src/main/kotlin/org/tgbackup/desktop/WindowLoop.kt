@@ -6,14 +6,14 @@ import kotlin.concurrent.withLock
 /** The icon by the clock ([Tray]); it exists only while the program runs in the background without a window. */
 interface TrayControl {
     /** Shows the icon; [onOpen] runs on a click or "פתח", [onQuit] on "יציאה". */
-    fun showIcon(onOpen: () -> Unit, onQuit: () -> Unit)
+    fun showIcon(onOpen: () -> Unit, onQuit: () -> Unit, notice: Pair<String, String>? = null)
     fun hideIcon()
 }
 
 /**
  * The window, closed and opened again while the program runs. After [window] closes: nothing [busy] → the end;
- * work running → [askBackground] (No → the end; Yes → the tray icon, until [show] opens the window again or
- * [quit] ends the program). Without a [tray] (`--smoke`, no system tray) closing the window always ends it.
+ * work running → the tray icon at once, without a question (until [show] opens the window again or [quit] ends
+ * the program); the first time in a launch the icon comes with a balloon ([BACKGROUND_NOTICE]), never for `--minimized`. Without a [tray] (`--smoke`, no system tray) closing the window always ends it.
  * [startHidden] (`--minimized`) starts in the tray. [show] and [quit] may come from any thread (the tray's EDT,
  * the server's `/internal/show`); a [show] while the window is open brings it to the front ([toFront], true when
  * a window was there to bring forward). [windowUp] tells the loop that the window it opened is on screen.
@@ -25,7 +25,6 @@ interface TrayControl {
 class WindowLoop(
     private val window: () -> WindowOutcome,
     private val busy: () -> Boolean,
-    private val askBackground: () -> Boolean,
     private val tray: TrayControl?,
     private val startHidden: Boolean,
     private val toFront: () -> Boolean = { false },
@@ -39,6 +38,9 @@ class WindowLoop(
     private val requested = lock.newCondition()
     private var state = State.STARTING
     private var request: Request? = null
+
+    /** The balloon still to be shown (once per launch; none when the launch starts hidden). */
+    private var notice: Pair<String, String>? = if (startHidden) null else BACKGROUND_NOTICE
 
     /** Blocks until the program should end; returns how the last window ended. */
     fun run(): WindowOutcome {
@@ -63,19 +65,19 @@ class WindowLoop(
                     // The window could not be opened again: back to the tray (the icon again), the way in.
                     println("WINDOW_BACK_TO_TRAY")
                     lock.withLock { request = null }
-                    if (waitInTray(tray) == Request.QUIT) return WindowOutcome.CLOSED
+                    if (waitInTray(tray, withNotice = false) == Request.QUIT) return WindowOutcome.CLOSED
                     continue
                 }
                 if (outcome != WindowOutcome.CLOSED) return outcome
-                // A second launch that came while the window closed (or while the question was up) wins over the end.
-                val background = tray != null && !showPending() && busy() && !showPending() && askBackground()
+                // A second launch that came while the window closed wins over the end.
+                val background = tray != null && !showPending() && busy() && !showPending()
                 if (!background) {
                     if (endUnlessShown()) return outcome
                     continue
                 }
             }
             hidden = false
-            if (waitInTray(tray!!) == Request.QUIT) return WindowOutcome.CLOSED
+            if (waitInTray(tray!!, withNotice = true) == Request.QUIT) return WindowOutcome.CLOSED
         }
     }
 
@@ -126,16 +128,18 @@ class WindowLoop(
         true
     }
 
-    /** The icon until [show] or [quit]. A [show] that came while the question was up opens the window at once. */
-    private fun waitInTray(tray: TrayControl): Request {
+    /** The icon until [show] or [quit]. A [show] that came before it was up opens the window at once. */
+    private fun waitInTray(tray: TrayControl, withNotice: Boolean): Request {
         lock.withLock {
             if (request == Request.SHOW) return Request.SHOW
             state = State.HIDDEN
         }
-        // Without an icon the program could not be reached again: then it ends, as after No.
-        val shown = runCatching { tray.showIcon(onOpen = ::show, onQuit = ::quit) }
+        // Without an icon the program could not be reached again: then it ends, as after a close with nothing running.
+        val balloon = if (withNotice) notice else null
+        val shown = runCatching { tray.showIcon(onOpen = ::show, onQuit = ::quit, notice = balloon) }
             .onFailure { println("TRAY_FAIL ${it::class.java.simpleName}") }.isSuccess
         if (!shown) return Request.QUIT
+        if (balloon != null) notice = null
         try {
             return lock.withLock {
                 while (request == null) requested.await()
@@ -176,3 +180,6 @@ class WindowLoop(
 
 /** How long a failed reopen waits before its one retry (the last window's WebView2 may still be letting go). */
 const val REOPEN_RETRY_MS = 1_500L
+
+/** The balloon by the clock the first time the window goes away while work runs (title, text). */
+val BACKGROUND_NOTICE = "TG Backup" to "TG Backup ממשיכה לפעול ברקע. לחיצה על הענן פותחת את החלון."

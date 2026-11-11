@@ -27,7 +27,7 @@ class Tray private constructor() : TrayControl {
     /** EDT only. */
     private var icon: TrayIcon? = null
 
-    override fun showIcon(onOpen: () -> Unit, onQuit: () -> Unit) = onEdt {
+    override fun showIcon(onOpen: () -> Unit, onQuit: () -> Unit, notice: Pair<String, String>?) = onEdt {
         if (icon != null) return@onEdt
         val tray = SystemTray.getSystemTray()
         val menu = PopupMenu().apply {
@@ -45,6 +45,7 @@ class Tray private constructor() : TrayControl {
         }
         tray.add(t)
         icon = t
+        notice?.let { (title, text) -> t.displayMessage(title, text, TrayIcon.MessageType.INFO) }
     }
 
     override fun hideIcon() = onEdt {
