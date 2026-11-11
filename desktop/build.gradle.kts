@@ -138,8 +138,11 @@ tasks.register<JavaExec>("devServer") {
 // installing TGBackup.exe. All native libraries are placed inside the app dir at build time.
 // ---------------------------------------------------------------------------------------------
 
-/** The program icon (exe, window, installer), made by tools/make-icons.py. */
+/** The program icon (exe, installer, shortcuts, Add/Remove Programs), made by tools/make-icons.py. */
 val programIcon = layout.projectDirectory.file("src/main/icons/TGBackup.ico")
+
+/** The window's own icons (taskbar button, also pinned; title bar; Alt+Tab): the tray's cloud, by make-icons.py. */
+val windowIcon = layout.projectDirectory.file("src/main/icons/TGBackup-window.ico")
 
 val isWindowsHost = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 val spikeLauncher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }
@@ -203,8 +206,8 @@ for (c in spikeCandidates) {
                 eachFile { path = "natives/$name" }
                 includeEmptyDirs = false
             }
-            // The window icon (AppWindow loads it from -Dtgb.natives at run time).
-            into("natives") { from(programIcon) }
+            // The program icon, and the window's (AppWindow loads it from -Dtgb.natives at run time).
+            into("natives") { from(programIcon, windowIcon) }
             // jitpack builds from a movable tag: pin the DLLs we ship to known SHA-256 hashes.
             doLast {
                 val dir = base.get().dir("input/natives").asFile

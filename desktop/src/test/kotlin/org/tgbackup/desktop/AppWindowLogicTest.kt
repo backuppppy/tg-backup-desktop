@@ -210,3 +210,27 @@ class ShutdownTest {
         assertTrue((System.nanoTime() - started) / 1_000_000 < 5_000)
     }
 }
+
+class WindowAppPropertiesTest {
+    @Test
+    fun theIdComesFirstThenTheRelaunchCommandNameAndCloudIcon() {
+        val natives = java.io.File("C:\\Program Files\\TGBackup\\app\\natives")
+        assertEquals(
+            listOf(
+                WindowAppProperties.PID_ID to "TGBackup.Desktop",
+                WindowAppProperties.PID_RELAUNCH_COMMAND to "\"C:\\Program Files\\TGBackup\\TGBackup.exe\"",
+                WindowAppProperties.PID_RELAUNCH_DISPLAY_NAME to "TG Backup",
+                WindowAppProperties.PID_RELAUNCH_ICON to "${java.io.File(natives, WINDOW_ICON_FILE).path},0",
+            ),
+            WindowAppProperties.of("C:\\Program Files\\TGBackup\\TGBackup.exe", natives),
+        )
+        assertEquals("TGBackup-window.ico", WINDOW_ICON_FILE)
+    }
+
+    @Test
+    fun withoutTheInstalledExeNothingIsWritten() {
+        // A Gradle run has no TGBackup.exe to relaunch: a pinned button would point at java.exe.
+        assertNull(WindowAppProperties.of(null, java.io.File("natives")))
+        assertNull(WindowAppProperties.of("  ", java.io.File("natives")))
+    }
+}

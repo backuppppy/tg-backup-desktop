@@ -7,6 +7,8 @@ and desktop/src/main/icons/source/cloud.jpg (the white cloud).
 Outputs, committed so the build needs no Python:
   desktop/src/main/icons/TGBackup.ico          16,24,32,48,64,128,256; the drawing only below 64 px (the word cannot
                                                be read there), drawing + BACKUP from 64 px
+  desktop/src/main/icons/TGBackup-window.ico   the cloud, 16,20,24,32,40,48,64,256: the window's own icons (taskbar
+                                               button, also pinned; title bar; Alt+Tab), as the tray's cloud
   desktop/src/main/resources/tray-16.png       the cloud, for the tray
   desktop/src/main/resources/tray-32.png
   desktop/src/main/resources/web/favicon.png   64 px, as the .ico's 64 frame
@@ -25,6 +27,7 @@ RES = REPO / 'desktop/src/main/resources'
 LOGO = ICONS / 'source/backup-logo.jpg'
 CLOUD = ICONS / 'source/cloud.jpg'
 SIZES = [16, 24, 32, 48, 64, 128, 256]
+WINDOW_SIZES = [16, 20, 24, 32, 40, 48, 64, 256]
 PAD = 8
 
 
@@ -71,11 +74,13 @@ def make():
     tray = round_icon(white_mask(CLOUD, grow(bbox_of(CLOUD))), fill=0.80)
     frames = [(small if s < 64 else big).resize((s, s), Image.LANCZOS) for s in SIZES]
     trays = {s: tray.resize((s, s), Image.LANCZOS) for s in (16, 32)}
-    return big, frames, trays
+    window = [tray.resize((s, s), Image.LANCZOS) for s in WINDOW_SIZES]
+    return big, frames, trays, window
 
 
-def write(frames, trays):
+def write(frames, trays, window):
     frames[-1].save(ICONS / 'TGBackup.ico', sizes=[(s, s) for s in SIZES], append_images=frames[:-1])
+    window[-1].save(ICONS / 'TGBackup-window.ico', sizes=[(s, s) for s in WINDOW_SIZES], append_images=window[:-1])
     for s, t in trays.items():
         t.save(RES / f'tray-{s}.png')
     frames[SIZES.index(64)].save(RES / 'web/favicon.png')
@@ -98,8 +103,8 @@ def preview(big, frames, trays, out):
 
 
 if __name__ == '__main__':
-    big, frames, trays = make()
-    write(frames, trays)
+    big, frames, trays, window = make()
+    write(frames, trays, window)
     if len(sys.argv) == 3 and sys.argv[1] == '--preview':
         preview(big, frames, trays, sys.argv[2])
     print('ok')

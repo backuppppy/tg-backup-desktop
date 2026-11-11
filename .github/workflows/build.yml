@@ -219,6 +219,8 @@ jobs:
           # 1) The installed program and the installer as files (what Explorer and the taskbar show).
           $dir = "${{ runner.temp }}\inst"
           if (-not (Test-Path "$dir\app\natives\TGBackup.ico")) { Write-Error "TGBackup.ico not installed in app\natives"; exit 1 }
+          # The window's own icon (taskbar button, title bar, Alt+Tab): the cloud, next to the program icon.
+          if (-not (Test-Path "$dir\app\natives\TGBackup-window.ico")) { Write-Error "TGBackup-window.ico not installed in app\natives"; exit 1 }
           Test-Icon 'exe' ([System.Drawing.Icon]::ExtractAssociatedIcon("$dir\TGBackup.exe"))
           $setup = (Get-Item "desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe").FullName
           Test-Icon 'setup' ([System.Drawing.Icon]::ExtractAssociatedIcon($setup))

@@ -1,7 +1,9 @@
 package org.tgbackup.desktop
 
 import com.sun.jna.Callback
+import com.sun.jna.Function
 import com.sun.jna.Library
+import com.sun.jna.Memory
 import com.sun.jna.Native
 import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
@@ -13,6 +15,7 @@ import com.sun.jna.platform.win32.WinDef.LPARAM
 import com.sun.jna.platform.win32.WinDef.RECT
 import com.sun.jna.platform.win32.WinDef.WPARAM
 import com.sun.jna.platform.win32.WinUser
+import com.sun.jna.ptr.PointerByReference
 import java.awt.Desktop
 import java.io.File
 import java.net.URI
@@ -87,8 +90,40 @@ private const val SM_CYICON = 12
 private const val SM_CXSMICON = 49
 private const val SM_CYSMICON = 50
 
-/** The program icon (tools/make-icons.py), shipped next to the DLLs in `<install>\app\natives`. */
-const val WINDOW_ICON_FILE = "TGBackup.ico"
+/**
+ * The window's own icon (tools/make-icons.py): the tray's white cloud, for the taskbar button (also pinned), the
+ * title bar and Alt+Tab. Shipped next to the DLLs in `<install>\app\natives`; the program's icon (exe, shortcuts,
+ * Add/Remove Programs) stays the BACKUP logo, TGBackup.ico.
+ */
+const val WINDOW_ICON_FILE = "TGBackup-window.ico"
+
+/** shell32's property store of a window (taskbar identity and what a pinned button relaunches). */
+private interface Shell32Window : Library {
+    fun SHGetPropertyStoreForWindow(hwnd: HWND, riid: Pointer, ppv: PointerByReference): Int
+}
+
+/**
+ * The window's AppUserModel properties. A pinned taskbar button takes its icon from RelaunchIconResource only while
+ * the window's AppUserModel.ID is set, so the ID comes first (all are written and committed together).
+ */
+object WindowAppProperties {
+    const val APP_ID = "TGBackup.Desktop"
+    const val PID_ID = 5
+    const val PID_RELAUNCH_COMMAND = 2
+    const val PID_RELAUNCH_ICON = 3
+    const val PID_RELAUNCH_DISPLAY_NAME = 4
+
+    /** (pid, value) in write order, or null without the installed exe ([exe] = jpackage.app-path). */
+    fun of(exe: String?, natives: File): List<Pair<Int, String>>? {
+        if (exe.isNullOrBlank()) return null
+        return listOf(
+            PID_ID to APP_ID,
+            PID_RELAUNCH_COMMAND to "\"$exe\"",
+            PID_RELAUNCH_DISPLAY_NAME to WINDOW_TITLE,
+            PID_RELAUNCH_ICON to "${File(natives, WINDOW_ICON_FILE).path},0",
+        )
+    }
+}
 
 /** The program's window: the screens from the internal server, inside WebView2. */
 object AppWindow {
@@ -180,6 +215,7 @@ object AppWindow {
         lib.webview_set_size(w, WINDOW_WIDTH, WINDOW_HEIGHT, WEBVIEW_HINT_NONE)
         hwnd?.let(::centreOnScreen) ?: println("WINDOW_FIT skipped (no HWND)")
         hwnd?.let { setIcon(it, File(natives, WINDOW_ICON_FILE)) }
+        hwnd?.let { setAppProperties(it, natives) }
         lib.webview_bind(w, ExternalLinks.BINDING, openExternal, null)
         lib.webview_bind(w, ExternalLinks.PAGE_BINDING, onPage, null)
         lib.webview_init(w, ExternalLinks.initScript(origin))
@@ -197,6 +233,7 @@ object AppWindow {
         } finally {
             current = null
             synchronized(alive) { alive.set(false) }
+            hwnd?.takeIf { runCatching { User32.INSTANCE.IsWindow(it) }.getOrDefault(false) }?.let(::clearAppProperties)
             lib.webview_destroy(w)
             keepAlive.removeAll(callbacks)
         }
@@ -303,7 +340,7 @@ object AppWindow {
     }
 
     /**
-     * The title bar and Alt+Tab icon. Without it the window shows the WebView host's default icon; a missing or
+     * The taskbar button, title bar and Alt+Tab icon (the cloud). Without it the window shows the WebView host's default icon; a missing or
      * broken file only prints WINDOW_ICON fail and never stops the window.
      */
     private fun setIcon(hwnd: HWND, ico: File) {
@@ -315,6 +352,84 @@ object AppWindow {
         }.onSuccess { println("WINDOW_ICON ok") }
             .onFailure { println("WINDOW_ICON fail ${it.message ?: it::class.java.simpleName}") }
     }
+
+    /**
+     * The window's taskbar identity and what its pinned button relaunches, with the cloud as that button's icon
+     * ([WindowAppProperties]). A failure only prints WINDOW_APPID fail and never stops the window.
+     */
+    private fun setAppProperties(hwnd: HWND, natives: File) {
+        val props = WindowAppProperties.of(System.getProperty("jpackage.app-path"), natives)
+            ?: return println("WINDOW_APPID skipped (no jpackage.app-path)")
+        runCatching { writeAppProperties(hwnd, props) }
+            .onSuccess { println("WINDOW_APPID ok") }
+            .onFailure { println("WINDOW_APPID fail ${it.message ?: it::class.java.simpleName}") }
+    }
+
+    /**
+     * Windows asks for the properties set on a window to be emptied before it is destroyed; done while the window
+     * still exists (it is reopened from the tray as a new window). Failures are only printed.
+     */
+    private fun clearAppProperties(hwnd: HWND) {
+        val props = WindowAppProperties.of(System.getProperty("jpackage.app-path"), File(".")) ?: return
+        runCatching { writeAppProperties(hwnd, props.reversed().map { (pid, _) -> pid to null }) }
+            .onFailure { println("WINDOW_APPID clear fail ${it.message ?: it::class.java.simpleName}") }
+    }
+
+    /**
+     * Writes [props] (pid → text, null = VT_EMPTY) to the window's IPropertyStore and commits them together. By hand,
+     * as jna-platform has no PROPVARIANT: vtable Release = 2, SetValue = 6, Commit = 7.
+     */
+    private fun writeAppProperties(hwnd: HWND, props: List<Pair<Int, String?>>) {
+        val shell32 = Native.load("shell32", Shell32Window::class.java)
+        val out = PointerByReference()
+        val hr = shell32.SHGetPropertyStoreForWindow(hwnd, guid(IID_IPROPERTY_STORE), out)
+        check(hr >= 0 && out.value != null) { "SHGetPropertyStoreForWindow 0x%08x".format(hr) }
+        val store = out.value
+        try {
+            for ((pid, value) in props) {
+                // PROPERTYKEY: fmtid (GUID) + pid (DWORD).
+                val key = Memory(20).apply { write(0, guid(FMTID_APP_USER_MODEL).getByteArray(0, 16), 0, 16) }
+                key.setInt(16, pid)
+                // PROPVARIANT (24 bytes on x64): vt, three reserved WORDs, then the value (here a PWSTR) at 8.
+                val pv = Memory(24).apply { clear() }
+                val text = value?.let { Memory((it.length + 1) * 2L).apply { setWideString(0, it) } }
+                if (text != null) {
+                    pv.setShort(0, VT_LPWSTR)
+                    pv.setPointer(8, text)
+                }
+                val r = comCall(store, VTBL_SET_VALUE, key, pv)
+                check(r >= 0) { "SetValue $pid 0x%08x".format(r) }
+            }
+            val r = comCall(store, VTBL_COMMIT)
+            check(r >= 0) { "Commit 0x%08x".format(r) }
+        } finally {
+            comCall(store, VTBL_RELEASE)
+        }
+    }
+
+    /** Calls method [index] of the COM object [obj]'s vtable with [args] after `this`; returns the HRESULT. */
+    private fun comCall(obj: Pointer, index: Int, vararg args: Any): Int {
+        val fn = obj.getPointer(0).getPointer(index.toLong() * Native.POINTER_SIZE)
+        return Function.getFunction(fn).invokeInt(arrayOf<Any>(obj, *args))
+    }
+
+    /** A GUID ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") in its in-memory layout: Data1..3 little-endian, Data4 as is. */
+    private fun guid(text: String): Memory {
+        val h = text.replace("-", "")
+        val m = Memory(16)
+        m.setInt(0, h.substring(0, 8).toLong(16).toInt())
+        m.setShort(4, h.substring(8, 12).toInt(16).toShort())
+        m.setShort(6, h.substring(12, 16).toInt(16).toShort())
+        for (i in 0 until 8) m.setByte(8L + i, h.substring(16 + 2 * i, 18 + 2 * i).toInt(16).toByte())
+        return m
+    }
+
+    private const val IID_IPROPERTY_STORE = "886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"
+    private const val FMTID_APP_USER_MODEL = "9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"
+    private const val VT_LPWSTR: Short = 31
+    private const val VTBL_RELEASE = 2
+    private const val VTBL_SET_VALUE = 6
+    private const val VTBL_COMMIT = 7
 
     /** Smoke evidence: where the window really is once the page has loaded. */
     private fun reportPlacement(hwnd: HWND) {
