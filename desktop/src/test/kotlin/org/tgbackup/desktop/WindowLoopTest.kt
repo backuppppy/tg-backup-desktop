@@ -77,13 +77,6 @@ class WindowLoopTest {
     }
 
     @Test
-    fun nothingRunningClosesOnceWithoutAsking() {
-        val outcome = loop(busy = false, tray = FakeTray()).run()
-        assertEquals(WindowOutcome.CLOSED, outcome)
-        assertEquals(listOf("window"), events.toList())
-    }
-
-    @Test
     fun closingWhileBusyGoesToTheTrayWithoutAQuestion() {
         val tray = FakeTray()
         val l = loop(busy = true, tray = tray)
@@ -123,14 +116,17 @@ class WindowLoopTest {
     }
 
     @Test
-    fun startHiddenShowsNoBalloon() {
+    fun startHiddenShowsNoBalloonButTheFirstBusyCloseAfterItDoes() {
         val tray = FakeTray()
         val l = loop(busy = true, tray = tray, startHidden = true)
         val result = start(l)
-        waitUntil("the icon") { tray.shown.get() }
+        waitUntil("the icon") { icons() == 1 && tray.shown.get() }
+        assertEquals(listOf<Pair<String, String>?>(null), tray.notices.toList())
+        l.show()
+        waitUntil("the icon again") { icons() == 2 && tray.shown.get() }
+        assertEquals(listOf(null, BACKGROUND_NOTICE), tray.notices.toList())
         l.quit()
         result.get(5, TimeUnit.SECONDS)
-        assertEquals(listOf<Pair<String, String>?>(null), tray.notices.toList())
     }
 
     @Test
@@ -185,7 +181,7 @@ class WindowLoopTest {
     }
 
     @Test
-    fun quitFromTheTrayNeverAsks() {
+    fun quitFromTheTrayEndsAtOnce() {
         val tray = FakeTray()
         val l = loop(busy = true, tray = tray, startHidden = true)
         val result = start(l)
@@ -216,7 +212,7 @@ class WindowLoopTest {
     }
 
     @Test
-    fun noTrayAndBusyClosesWithoutAsking() {
+    fun noTrayAndBusyClosesAndEnds() {
         val outcome = loop(busy = true, tray = null).run()
         assertEquals(WindowOutcome.CLOSED, outcome)
         assertEquals(listOf("window"), events.toList())

@@ -45,7 +45,8 @@ class Tray private constructor() : TrayControl {
         }
         tray.add(t)
         icon = t
-        notice?.let { (title, text) -> t.displayMessage(title, text, TrayIcon.MessageType.INFO) }
+        // A balloon that fails must not turn into "no icon" (the program would end while work runs).
+        notice?.let { (title, text) -> runCatching { t.displayMessage(title, text, TrayIcon.MessageType.INFO) } }
     }
 
     override fun hideIcon() = onEdt {

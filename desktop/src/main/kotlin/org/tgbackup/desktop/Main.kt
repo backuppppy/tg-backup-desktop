@@ -169,10 +169,11 @@ private fun wipeExceptLock(dataDir: Path) {
 /** A blocking Windows error box (the window could not be shown, so this is the only way to tell the user). */
 private fun showError(text: String) = showMessage(text, MB_ICONERROR)
 
-private fun showMessage(text: String, icon: Int, buttons: Int = MB_OK): Int =
+private fun showMessage(text: String, icon: Int) {
     // Hebrew text: right-to-left reading order, right-aligned.
     Native.load("user32", User32Box::class.java)
-        .MessageBoxW(null, WString(text), WString(WINDOW_TITLE), buttons or icon or MB_RTLREADING or MB_RIGHT)
+        .MessageBoxW(null, WString(text), WString(WINDOW_TITLE), MB_OK or icon or MB_RTLREADING or MB_RIGHT)
+}
 
 private interface User32Box : Library {
     fun MessageBoxW(hwnd: Pointer?, text: WString, caption: WString, type: Int): Int

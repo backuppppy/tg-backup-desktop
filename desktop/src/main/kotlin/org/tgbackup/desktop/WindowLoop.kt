@@ -13,8 +13,9 @@ interface TrayControl {
 /**
  * The window, closed and opened again while the program runs. After [window] closes: nothing [busy] → the end;
  * work running → the tray icon at once, without a question (until [show] opens the window again or [quit] ends
- * the program); the first time in a launch the icon comes with a balloon ([BACKGROUND_NOTICE]), never for `--minimized`. Without a [tray] (`--smoke`, no system tray) closing the window always ends it.
- * [startHidden] (`--minimized`) starts in the tray. [show] and [quit] may come from any thread (the tray's EDT,
+ *  * the program); the first time in a launch that the window is hidden by X the icon comes with a balloon
+ * ([BACKGROUND_NOTICE]). Without a [tray] (`--smoke`, no system tray) closing the window always ends it.
+ * [startHidden] (`--minimized`) starts in the tray, without a balloon. [show] and [quit] may come from any thread (the tray's EDT,
  * the server's `/internal/show`); a [show] while the window is open brings it to the front ([toFront], true when
  * a window was there to bring forward). [windowUp] tells the loop that the window it opened is on screen.
  *
@@ -39,8 +40,8 @@ class WindowLoop(
     private var state = State.STARTING
     private var request: Request? = null
 
-    /** The balloon still to be shown (once per launch; none when the launch starts hidden). */
-    private var notice: Pair<String, String>? = if (startHidden) null else BACKGROUND_NOTICE
+    /** The balloon still to be shown (once per launch). */
+    private var notice: Pair<String, String>? = BACKGROUND_NOTICE
 
     /** Blocks until the program should end; returns how the last window ended. */
     fun run(): WindowOutcome {
@@ -54,6 +55,7 @@ class WindowLoop(
 
     private fun loop(): WindowOutcome {
         var hidden = startHidden && tray != null
+        var startedHidden = hidden
         var first = true
         while (true) {
             if (!hidden) {
@@ -77,7 +79,10 @@ class WindowLoop(
                 }
             }
             hidden = false
-            if (waitInTray(tray!!, withNotice = true) == Request.QUIT) return WindowOutcome.CLOSED
+            // The first wait of a `--minimized` start is not a hide by X: no balloon.
+            val withNotice = !startedHidden
+            startedHidden = false
+            if (waitInTray(tray!!, withNotice = withNotice) == Request.QUIT) return WindowOutcome.CLOSED
         }
     }
 
