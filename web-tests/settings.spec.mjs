@@ -23,7 +23,7 @@ test.afterEach(async ({ page }) => { await page.request.put('/api/desktop-prefs'
 test('the background card explains closing the window and has both switches', async ({ page }) => {
   await open(page);
   await expect(page.getByRole('heading', { name: 'עבודה ברקע' })).toBeVisible();
-  await expect(page.getByText('כשמשימה או ייצוא רצים וסוגרים את החלון, התוכנה שואלת אם להמשיך ברקע (סמל ליד השעון) או להיסגר. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.')).toBeVisible();
+  await expect(page.getByText('כשמשימה או ייצוא רצים וסוגרים את החלון, התוכנה ממשיכה לפעול ברקע (ענן ליד השעון). כשאין משימות פעילות, סגירת החלון מסיימת אותה. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.')).toBeVisible();
   await expect(page.getByRole('switch', { name: AUTOSTART })).toBeVisible();
   await expect(page.getByRole('switch', { name: KEEP_AWAKE, exact: true })).toBeVisible();
 });

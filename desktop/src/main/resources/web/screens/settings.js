@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { h, toast } from '../lib/ui.js';
 
 const BACKGROUND_TEXT =
-  'כשמשימה או ייצוא רצים וסוגרים את החלון, התוכנה שואלת אם להמשיך ברקע (סמל ליד השעון) או להיסגר. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.';
+  'כשמשימה או ייצוא רצים וסוגרים את החלון, התוכנה ממשיכה לפעול ברקע (ענן ליד השעון). כשאין משימות פעילות, סגירת החלון מסיימת אותה. כדי שהמשימות יתקדמו, המחשב צריך להיות דלוק.';
 
 /** What a server without desktop prefs means: today's behavior. */
 const DEFAULT_PREFS = { autostart: false, keepAwake: true };
