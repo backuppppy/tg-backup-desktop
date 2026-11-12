@@ -514,6 +514,80 @@ jobs:
           if (Select-String -Path $out2 -Pattern '^PAGE_LOADED' -Quiet) { Write-Error "the second launch opened a window"; exit 1 }
           if ($p2.ExitCode -ne 0) { Write-Error "the second launch exited $($p2.ExitCode)"; exit 1 }
           if ($p1.ExitCode -ne 0) { Write-Error "the first launch exited $($p1.ExitCode) after the hand-off"; exit 1 }
+      - name: Restore power through the real powrprof (--restore-power)
+        shell: pwsh
+        run: |
+          # The real WindowsPowerSettings never runs in the tests: a power-restore.json with values that differ from
+          # the runner's goes into the real data dir, the installed exe's --restore-power must write them through
+          # powrprof to the saved scheme and delete the file; then the runner's own values are put back the same way.
+          $data = Join-Path $env:LOCALAPPDATA 'TGBackup'
+          $file = Join-Path $data 'power-restore.json'
+          $exe = "${{ runner.temp }}\inst\TGBackup.exe"
+          $shots = "${{ runner.temp }}\shots"
+          New-Item -ItemType Directory -Force -Path $data, $shots | Out-Null
+          function Read-Index([string]$setting) {
+            $q = (powercfg /q SCHEME_CURRENT SUB_SLEEP $setting | Out-String)
+            $ac = [regex]::Match($q, 'Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)')
+            $dc = [regex]::Match($q, 'Current DC Power Setting Index:\s*0x([0-9a-fA-F]+)')
+            [pscustomobject]@{
+              ac = if ($ac.Success) { [Convert]::ToInt32($ac.Groups[1].Value, 16) } else { -1 }
+              dc = if ($dc.Success) { [Convert]::ToInt32($dc.Groups[1].Value, 16) } else { -1 }
+              raw = $q
+            }
+          }
+          function Read-Timeouts {
+            $s = Read-Index STANDBYIDLE; $h = Read-Index HIBERNATEIDLE
+            [ordered]@{ acStandby = $s.ac; dcStandby = $s.dc; acHibernate = $h.ac; dcHibernate = $h.dc }
+          }
+          # The settings of $actual that differ from $expected, as text (empty: all equal).
+          function Compare-Timeouts($actual, $expected) {
+            ($expected.Keys | Where-Object { $actual[$_] -ne $expected[$_] } | ForEach-Object { "$_ is $($actual[$_]), expected $($expected[$_])" }) -join '; '
+          }
+          function Format-Timeouts($t) { "ac-standby=$($t.acStandby) dc-standby=$($t.dcStandby) ac-hibernate=$($t.acHibernate) dc-hibernate=$($t.dcHibernate)" }
+          # Writes $values (plus the scheme GUID when given) as power-restore.json, without a BOM, and runs --restore-power.
+          function Invoke-Restore($values, [string]$scheme, [string]$label) {
+            $obj = [ordered]@{}
+            foreach ($k in $values.Keys) { $obj[$k] = $values[$k] }
+            if ($scheme) { $obj.scheme = $scheme }
+            [IO.File]::WriteAllText($file, ($obj | ConvertTo-Json -Compress))
+            Write-Host "POWER_FILE_$label $(Get-Content -Raw $file)"
+            $out = "$shots\restore-power-$label-stdout.txt"; $err = "$shots\restore-power-$label-stderr.txt"
+            $p = Start-Process -FilePath $exe -ArgumentList '--restore-power' -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+            $null = $p.Handle
+            if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force; throw "--restore-power ($label) hung" }
+            Write-Host "--- $label stdout"; Get-Content $out
+            Write-Host "--- $label stderr"; Get-Content $err
+            if ($p.ExitCode -ne 0) { throw "--restore-power ($label) exited $($p.ExitCode)" }
+            if (-not (Select-String -Path $out -Pattern '^POWER_RESTORED yes' -Quiet)) { throw "--restore-power ($label) did not print POWER_RESTORED yes" }
+            if (Test-Path $file) { throw "--restore-power ($label) left power-restore.json" }
+            if (Test-Path "$file.bad") { throw "--restore-power ($label) set the file aside as .bad" }
+          }
+          $scheme = [regex]::Match((powercfg /getactivescheme | Out-String), '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}').Value.ToLower()
+          if (-not $scheme) { Write-Error "no active power scheme GUID in powercfg /getactivescheme"; exit 1 }
+          $original = Read-Timeouts
+          Write-Host "POWER_SCHEME $scheme"
+          Write-Host "POWER_ORIGINAL $(Format-Timeouts $original)"
+          if ($original.acStandby -lt 0) { Write-Host (Read-Index STANDBYIDLE).raw; Write-Error "the runner's scheme has no 'sleep after' (AC)"; exit 1 }
+          # +60 s for every setting that exists (-1: missing on this PC, the program never writes it).
+          $changed = [ordered]@{}
+          foreach ($k in $original.Keys) { $changed[$k] = if ($original[$k] -ge 0) { $original[$k] + 60 } else { -1 } }
+          try {
+            # With the scheme GUID (what hold saves): written to that scheme, which is the active one.
+            Invoke-Restore $changed $scheme 'changed'
+            $now = Read-Timeouts
+            Write-Host "POWER_AFTER_RESTORE $(Format-Timeouts $now)"
+            $diff = Compare-Timeouts $now $changed
+            if ($diff) { throw "--restore-power did not write the file's values: $diff" }
+          } finally {
+            # Always (also after a failure above): back to the runner's own values, as a file from an older version
+            # (no scheme: written to the active one).
+            if (Test-Path $file) { Remove-Item $file -Force }
+            Invoke-Restore $original $null 'original'
+            $back = Read-Timeouts
+            Write-Host "POWER_BACK $(Format-Timeouts $back)"
+            $diff = Compare-Timeouts $back $original
+            if ($diff) { throw "the runner's power settings were not put back: $diff" }
+          }
       - name: Uninstall keeps the user's data
         shell: pwsh
         run: |
