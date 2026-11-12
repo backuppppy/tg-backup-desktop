@@ -30,8 +30,13 @@ OutputDir={#OutDir}
 OutputBaseFilename=TGBackup-Setup
 Compression=lzma2
 SolidCompression=yes
+#if Ver >= EncodeVer(6, 3, 0)
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+#else
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
+#endif
 SetupIconFile={#IconFile}
 UninstallDisplayIcon={app}\TGBackup.exe
 
@@ -65,13 +70,27 @@ Filename: "{app}\TGBackup.exe"; Parameters: "--restore-power"; Flags: runhidden 
 const
   UninstallRoot = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall';
 
-{ Removes an older MSI install of TGBackup (jpackage/WiX, DisplayName 'TGBackup') found under RootKey. }
-procedure RemoveOldMsiUnder(RootKey: Integer);
+var
+  OldCopyClosed: Boolean;
+
+{ Closes a running TGBackup.exe (best effort; the engine resumes its work at the next launch). }
+procedure CloseRunningProgram;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM TGBackup.exe /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('taskkill /IM TGBackup.exe exited ' + IntToStr(ResultCode));
+end;
+
+{ Removes an older MSI install of TGBackup (jpackage/WiX, DisplayName 'TGBackup') found under RootKey.
+  Returns '' to go on, or the message that stops this install. }
+function RemoveOldMsiUnder(RootKey: Integer; var NeedsRestart: Boolean): String;
 var
   Keys: TArrayOfString;
   I, ResultCode: Integer;
   DisplayName, Uninst: String;
 begin
+  Result := '';
   if not RegGetSubkeyNames(RootKey, UninstallRoot, Keys) then Exit;
   for I := 0 to GetArrayLength(Keys) - 1 do
   begin
@@ -79,12 +98,35 @@ begin
       and RegQueryStringValue(RootKey, UninstallRoot + '\' + Keys[I], 'UninstallString', Uninst)
       and (Pos('MSIEXEC', Uppercase(Trim(Uninst))) = 1) then
     begin
+      if not OldCopyClosed then
+      begin
+        CloseRunningProgram;
+        Sleep(2000);
+        OldCopyClosed := True;
+      end;
       Log('Removing the older MSI install ' + Keys[I]);
-      if Exec(ExpandConstant('{sys}\msiexec.exe'), '/x ' + Keys[I] + ' /qn /norestart', '', SW_HIDE,
+      if not Exec(ExpandConstant('{sys}\msiexec.exe'), '/x ' + Keys[I] + ' /qn /norestart', '', SW_HIDE,
         ewWaitUntilTerminated, ResultCode) then
-        Log('msiexec /x ' + Keys[I] + ' exited ' + IntToStr(ResultCode))
-      else
+      begin
         Log('msiexec /x ' + Keys[I] + ' could not start: ' + SysErrorMessage(ResultCode));
+        Result := 'הסרת הגרסה הקודמת נכשלה (קוד ' + IntToStr(ResultCode) + '). הסר את TGBackup מ''אפליקציות מותקנות'' ונסה שוב.';
+        Exit;
+      end;
+      Log('msiexec /x ' + Keys[I] + ' exited ' + IntToStr(ResultCode));
+      case ResultCode of
+        0, 1605: ;
+        3010, 1641:
+          begin
+            NeedsRestart := True;
+            Result := 'כדי לסיים את הסרת הגרסה הקודמת צריך להפעיל מחדש את המחשב. אחרי ההפעלה מחדש הרץ שוב את ההתקנה.';
+            Exit;
+          end;
+      else
+        begin
+          Result := 'הסרת הגרסה הקודמת נכשלה (קוד ' + IntToStr(ResultCode) + '). הסר את TGBackup מ''אפליקציות מותקנות'' ונסה שוב.';
+          Exit;
+        end;
+      end;
     end;
   end;
 end;
@@ -92,7 +134,13 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
-  if IsWin64 then RemoveOldMsiUnder(HKLM64);
-  RemoveOldMsiUnder(HKLM32);
-  RemoveOldMsiUnder(HKCU);
+  if IsWin64 then Result := RemoveOldMsiUnder(HKLM64, NeedsRestart);
+  if Result = '' then Result := RemoveOldMsiUnder(HKLM32, NeedsRestart);
+  if Result = '' then Result := RemoveOldMsiUnder(HKCU, NeedsRestart);
+end;
+
+{ usUninstall comes before [UninstallRun] (--restore-power) and before any file is deleted. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then CloseRunningProgram;
 end;

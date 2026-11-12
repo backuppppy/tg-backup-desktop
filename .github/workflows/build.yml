@@ -137,7 +137,10 @@ jobs:
           }
           $iscc = if ($found) { @($found)[0] } else { $default }
           Write-Host "PROBE_INNO_VERSION $((Get-Item $iscc).VersionInfo.ProductVersion)"
-          Write-Host "PROBE_INNO_HEBREW $(Test-Path (Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'))"
+          $hebrew = Test-Path (Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl')
+          Write-Host "PROBE_INNO_HEBREW $hebrew"
+          # The installer's own messages must be Hebrew (Hebrew.isl ships with the official Inno Setup 6).
+          if (-not $hebrew) { Write-Error "compiler:Languages\Hebrew.isl is missing"; exit 1 }
           $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
           if (Test-Path $key) { Write-Host "WEBVIEW2_RUNTIME preinstalled=yes version=$((Get-ItemProperty $key).pv)" }
           else { Write-Host "WEBVIEW2_RUNTIME preinstalled=no" }
@@ -252,7 +255,7 @@ jobs:
           else {
             $path = ($arp.DisplayIcon -replace ',\s*-?\d+$', '').Trim('"')
             Write-Host "ICON arp DisplayName='$($arp.DisplayName)' DisplayIcon='$($arp.DisplayIcon)'"
-              try { Test-Icon 'arp' ([System.Drawing.Icon]::ExtractIcon($path, 0, 32)) }
+            try { Test-Icon 'arp' ([System.Drawing.Icon]::ExtractIcon($path, 0, 32)) }
             catch { Write-Host "ICON arp: cannot read $path ($_)"; $script:failed += 'arp' }
           }
           # 3) The Start-menu shortcut (Inno [Icons]): its icon, or its target's when it names none.
