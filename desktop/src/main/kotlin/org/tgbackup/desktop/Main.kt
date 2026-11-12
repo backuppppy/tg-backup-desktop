@@ -8,6 +8,7 @@ import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.WString
+import io.sentry.Sentry
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.desktop.server.ApiServer
 import org.tgbackup.desktop.server.HEALTH_PATH
@@ -48,11 +49,19 @@ fun main(args: Array<String>) {
         println("START_FAIL ${t::class.java.simpleName}")
         t.printStackTrace()
         smoke.fail("${t::class.java.simpleName}: ${t.message}")
+        if (Sentry.isEnabled()) Sentry.captureException(t)
         1
     }
     if (code == 0) smoke.finished() else smoke.fail("window exit code $code")
+    halt(code)
+}
+
+/** Ends the process at once: first sends what Sentry still holds (when it runs), so a report is not lost. */
+private fun halt(code: Int): Nothing {
     System.out.flush()
+    if (Sentry.isEnabled()) runCatching { Sentry.flush(2000) }
     Runtime.getRuntime().halt(code)
+    error("unreachable")
 }
 
 /** Returns the exit code ([WindowLifecycle.run]). */
@@ -73,6 +82,8 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     // `--smoke` never touches the real Run key (its throw-away prefs would switch "start with Windows" off).
     // `--smoke` never changes Windows' sleep settings (its seeded job could count as work).
     val app = DesktopApp(dataDir, autostart = Autostart.forLaunch(smoke.enabled), sleepOverride = !smoke.enabled)
+    // From here on, the configured phone numbers are masked in anything sent to Sentry.
+    Telemetry.phones = { app.store.config.value.accounts.map { it.phone } }
     var server: ApiServer? = null
     val shutdown = {
         val started = System.nanoTime()
@@ -154,9 +165,7 @@ private fun restorePowerAndExit(): Nothing {
 /** Ends this launch with 0 at once (before anything of ours started). */
 private fun exitQuietly(line: String?): Nothing {
     line?.let(::println)
-    System.out.flush()
-    Runtime.getRuntime().halt(0)
-    error("unreachable")
+    halt(0)
 }
 
 /** Everything in [dataDir] except the lock this process holds (Windows cannot delete a locked file). */
