@@ -8,13 +8,19 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SleepOverrideTest {
-    /** The power scheme in memory: what Windows would hold. */
-    private class FakeSettings(var current: SleepTimeouts) : PowerSettings {
+    /** The power schemes in memory: what Windows would hold; [current] is the active scheme's values. */
+    private class FakeSettings(start: SleepTimeouts) : PowerSettings {
+        val schemes = mutableMapOf(SCHEME_A to start)
+        var active = SCHEME_A
         val writes = mutableListOf<SleepTimeouts>()
+        var current: SleepTimeouts
+            get() = schemes.getValue(active)
+            set(v) { schemes[active] = v }
+        override fun activeScheme(): String = active
         override fun read(): SleepTimeouts = current
-        override fun write(t: SleepTimeouts) {
+        override fun write(t: SleepTimeouts, scheme: String?) {
             writes += t
-            current = t
+            schemes[scheme?.takeIf { it in schemes } ?: active] = t
         }
     }
 
@@ -120,5 +126,56 @@ class SleepOverrideTest {
         assertTrue(File(f.parentFile, "power-restore.json.bad").exists())
         assertEquals(1, warnings.size)
         assertTrue(s.writes.isEmpty())
+    }
+
+    @Test
+    fun holdSavesTheActiveScheme() {
+        val f = file()
+        SleepOverride(f, FakeSettings(user)).hold()
+        assertTrue(f.readText().contains("\"scheme\":\"$SCHEME_A\""), f.readText())
+    }
+
+    @Test
+    fun releaseWritesToTheSchemeThatWasActiveAtHold() {
+        val f = file()
+        val s = FakeSettings(user)
+        val o = SleepOverride(f, s)
+        o.hold()
+        // The user switched to another scheme while work ran.
+        val other = SleepTimeouts(60, 60, 60, 60)
+        s.schemes[SCHEME_B] = other
+        s.active = SCHEME_B
+        assertTrue(o.release())
+        assertEquals(user, s.schemes[SCHEME_A])
+        assertEquals(other, s.schemes[SCHEME_B])
+    }
+
+    @Test
+    fun releaseWritesToTheActiveSchemeWhenTheSavedOneIsGone() {
+        val f = file()
+        val s = FakeSettings(user)
+        val o = SleepOverride(f, s)
+        o.hold()
+        s.schemes.remove(SCHEME_A)
+        s.schemes[SCHEME_B] = SleepTimeouts(60, 60, 60, 60)
+        s.active = SCHEME_B
+        assertTrue(o.release())
+        assertEquals(user, s.schemes[SCHEME_B])
+        assertFalse(SCHEME_A in s.schemes)
+    }
+
+    @Test
+    fun anOldFileWithoutASchemeIsRestoredToTheActiveScheme() {
+        val f = file()
+        f.writeText("""{"acStandby":1800,"dcStandby":600,"acHibernate":7200,"dcHibernate":3600}""")
+        val s = FakeSettings(never)
+        assertTrue(SleepOverride(f, s).recover())
+        assertEquals(user, s.current)
+        assertFalse(f.exists())
+    }
+
+    private companion object {
+        const val SCHEME_A = "381b4222-f694-41f0-9685-ff5bb260df2e"
+        const val SCHEME_B = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
     }
 }
