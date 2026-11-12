@@ -180,8 +180,10 @@ fun onPath(exe: String): String? =
 
 /** The installer script; the package task passes AppVersion, ImageDir, OutDir and IconFile with /D. */
 val installerScript = layout.projectDirectory.file("installer/TGBackup.iss")
+/** The real Inno Setup 6 first: an ISCC.exe on PATH can be a Chocolatey shim with no Languages\Hebrew.isl beside it. */
 val innoCompiler: String by lazy {
-    onPath("ISCC.exe") ?: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
+    val default = "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
+    if (File(default).isFile) default else onPath("ISCC.exe") ?: default
 }
 
 for (c in spikeCandidates) {

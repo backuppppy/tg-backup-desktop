@@ -135,7 +135,8 @@ jobs:
             if (-not (Test-Path $default)) { Write-Error "Inno Setup 6 could not be installed"; exit 1 }
             Write-Host "PROBE_INNO_INSTALLED choco"
           }
-          $iscc = if ($found) { @($found)[0] } else { $default }
+          # The real install first: where.exe can find a Chocolatey shim with no Languages folder beside it.
+          $iscc = if (Test-Path $default) { $default } else { @($found)[0] }
           Write-Host "PROBE_INNO_VERSION $((Get-Item $iscc).VersionInfo.ProductVersion)"
           $hebrew = Test-Path (Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl')
           Write-Host "PROBE_INNO_HEBREW $hebrew"
@@ -148,8 +149,13 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          ./gradlew.bat ":desktop:package${{ matrix.task }}"
+          ./gradlew.bat ":desktop:package${{ matrix.task }}" | Tee-Object -FilePath "${{ runner.temp }}\package.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # TGBackup.iss prints INNO_LANGUAGE he|en: the installer's own messages must be Hebrew.
+          $lang = Select-String -Path "${{ runner.temp }}\package.log" -Pattern 'INNO_LANGUAGE (\w+)' | Select-Object -First 1
+          if (-not $lang) { Write-Error "INNO_LANGUAGE not printed by the installer build"; exit 1 }
+          Write-Host "INNO_LANGUAGE_SEEN $($lang.Matches[0].Groups[1].Value)"
+          if ($lang.Matches[0].Groups[1].Value -ne 'he') { Write-Error "the installer was built without Hebrew.isl ($($lang.Line))"; exit 1 }
       - name: Installer size
         shell: pwsh
         run: |
