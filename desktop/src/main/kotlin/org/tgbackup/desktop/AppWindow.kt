@@ -104,7 +104,9 @@ private interface Shell32Window : Library {
 
 /**
  * The window's AppUserModel properties. A pinned taskbar button takes its icon from RelaunchIconResource only while
- * the window's AppUserModel.ID is set, so the ID comes first (all are written and committed together).
+ * the window's AppUserModel.ID is set, so the ID comes first (all are written and committed together). Pinning from
+ * the open window shows the cloud; the shortcuts deliberately carry no ID, which would turn the window's button back
+ * into the logo.
  */
 object WindowAppProperties {
     const val APP_ID = "TGBackup.Desktop"
@@ -233,7 +235,6 @@ object AppWindow {
         } finally {
             current = null
             synchronized(alive) { alive.set(false) }
-            hwnd?.takeIf { runCatching { User32.INSTANCE.IsWindow(it) }.getOrDefault(false) }?.let(::clearAppProperties)
             lib.webview_destroy(w)
             keepAlive.removeAll(callbacks)
         }
@@ -366,21 +367,10 @@ object AppWindow {
     }
 
     /**
-     * Windows asks for the properties set on a window to be emptied before it is destroyed; done while the window
-     * still exists (it is reopened from the tray as a new window). Failures are only printed.
-     */
-    private fun clearAppProperties(hwnd: HWND) {
-        val props = WindowAppProperties.of(System.getProperty("jpackage.app-path"), File(".")) ?: return
-        runCatching { writeAppProperties(hwnd, props.reversed().map { (pid, _) -> pid to null }) }
-            .onFailure { println("WINDOW_APPID clear fail ${it.message ?: it::class.java.simpleName}") }
-    }
-
-    /**
-     * Writes [props] (pid → text, null = VT_EMPTY) to the window's IPropertyStore and commits them together. By hand,
+     * Writes [props] (pid → text) to the window's IPropertyStore and commits them together. By hand,
      * as jna-platform has no PROPVARIANT: vtable Release = 2, SetValue = 6, Commit = 7.
      */
-    private fun writeAppProperties(hwnd: HWND, props: List<Pair<Int, String?>>) {
-        val shell32 = Native.load("shell32", Shell32Window::class.java)
+    private fun writeAppProperties(hwnd: HWND, props: List<Pair<Int, String>>) {
         val out = PointerByReference()
         val hr = shell32.SHGetPropertyStoreForWindow(hwnd, guid(IID_IPROPERTY_STORE), out)
         check(hr >= 0 && out.value != null) { "SHGetPropertyStoreForWindow 0x%08x".format(hr) }
@@ -390,14 +380,12 @@ object AppWindow {
                 // PROPERTYKEY: fmtid (GUID) + pid (DWORD).
                 val key = Memory(20).apply { write(0, guid(FMTID_APP_USER_MODEL).getByteArray(0, 16), 0, 16) }
                 key.setInt(16, pid)
-                // PROPVARIANT (24 bytes on x64): vt, three reserved WORDs, then the value (here a PWSTR) at 8.
-                val pv = Memory(24).apply { clear() }
-                val text = value?.let { Memory((it.length + 1) * 2L).apply { setWideString(0, it) } }
-                if (text != null) {
-                    pv.setShort(0, VT_LPWSTR)
-                    pv.setPointer(8, text)
-                }
+                // PROPVARIANT (24 bytes on x64): vt = VT_LPWSTR, three reserved WORDs, then the PWSTR at 8.
+                val text = Memory((value.length + 1) * 2L).apply { setWideString(0, value) }
+                val pv = Memory(24).apply { clear(); setShort(0, VT_LPWSTR); setPointer(8, text) }
                 val r = comCall(store, VTBL_SET_VALUE, key, pv)
+                // Only pv points at text: keep it (and its native memory) alive until SetValue has copied it.
+                java.lang.ref.Reference.reachabilityFence(text)
                 check(r >= 0) { "SetValue $pid 0x%08x".format(r) }
             }
             val r = comCall(store, VTBL_COMMIT)
@@ -423,6 +411,8 @@ object AppWindow {
         for (i in 0 until 8) m.setByte(8L + i, h.substring(16 + 2 * i, 18 + 2 * i).toInt(16).toByte())
         return m
     }
+
+    private val shell32: Shell32Window by lazy { Native.load("shell32", Shell32Window::class.java) }
 
     private const val IID_IPROPERTY_STORE = "886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"
     private const val FMTID_APP_USER_MODEL = "9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"

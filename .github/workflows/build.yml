@@ -424,6 +424,7 @@ jobs:
           if (Select-String -Path $out -Pattern '^PAGE_FAIL' -Quiet) { Write-Error "PAGE_FAIL printed"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^API_OK' -Quiet)) { Write-Error "API_OK not printed"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^WINDOW_ICON ok' -Quiet)) { Write-Error "the window icon was not set"; exit 1 }
+          if (-not (Select-String -Path $out -Pattern '^WINDOW_APPID ok' -Quiet)) { Write-Error "the window's AppUserModel properties were not set"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
             Write-Error "window is not fully inside the screen work area"; exit 1
           }
