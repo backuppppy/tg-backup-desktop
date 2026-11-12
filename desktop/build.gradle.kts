@@ -60,7 +60,6 @@ dependencies {
     implementation("io.ktor:ktor-server-auto-head-response:3.6.1")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
-    // Embedded view (WebView2).
     implementation("io.sentry:sentry:8.61.0")
     implementation("net.java.dev.jna:jna:5.19.1")
     implementation("net.java.dev.jna:jna-platform:5.19.1")

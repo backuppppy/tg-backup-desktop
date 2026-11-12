@@ -13,9 +13,10 @@ interface TrayControl {
 /**
  * The window, closed and opened again while the program runs. After [window] closes: nothing [busy] → the end;
  * work running → the tray icon at once, without a question (until [show] opens the window again or [quit] ends
- *  * the program); the first time in a launch that the window is hidden by X the icon comes with a balloon
+ * the program); the first time in a launch that the window is hidden by X the icon comes with a balloon
  * ([BACKGROUND_NOTICE]). Without a [tray] (`--smoke`, no system tray) closing the window always ends it.
- * [startHidden] (`--minimized`) starts in the tray, without a balloon. [show] and [quit] may come from any thread (the tray's EDT,
+ * [startHidden] (`--minimized`) starts in the tray without a balloon; the balloon still comes the first time the
+ * window is then closed by X. [show] and [quit] may come from any thread (the tray's EDT,
  * the server's `/internal/show`); a [show] while the window is open brings it to the front ([toFront], true when
  * a window was there to bring forward). [windowUp] tells the loop that the window it opened is on screen.
  *

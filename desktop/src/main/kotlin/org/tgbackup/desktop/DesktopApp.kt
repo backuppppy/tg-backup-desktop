@@ -87,7 +87,7 @@ class DesktopApp(
         }
     }
 
-    /** A job or an export runs: the sleep guard's signal (without the Settings switch), and what closing the window asks about. */
+    /** A job or an export runs: the sleep guard's signal (without the Settings switch). */
     private val busy: StateFlow<Boolean> = busySignal(jobs.anyRunning, exportActive).stateIn(scope, SharingStarted.Eagerly, false)
 
     fun isBusy(): Boolean = busy.value
@@ -167,6 +167,8 @@ class DesktopApp(
             if (withTimeoutOrNull(10.seconds) { scope.coroutineContext.job.cancelAndJoin() } == null) {
                 log.warn("חלק מהמשימות לא נעצרו תוך 10 שניות")
             }
+            // The jobs are stopped: Windows' sleep setting comes back now, not after the slow export and account closes.
+            updateSleepGuard { sleepGuard.update(false) }
             exports.running.value?.job?.let { export ->
                 // join() would start a still-lazy export: cancel one that has not started, then wait.
                 if (!export.isActive && !export.isCompleted) export.cancel()
@@ -182,7 +184,6 @@ class DesktopApp(
             }
             if (done == null) log.warn("סגירת החשבונות לא הסתיימה תוך 15 שניות")
         }
-        updateSleepGuard { sleepGuard.update(false) }
     }
 
     /** Runs one guard call; logs the change it made, or the failure. */
