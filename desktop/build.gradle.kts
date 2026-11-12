@@ -133,8 +133,8 @@ tasks.register<JavaExec>("devServer") {
 
 // ---------------------------------------------------------------------------------------------
 // Windows packaging (TGBackup.exe = org.tgbackup.desktop.MainKt): app-image via jpackage, then the installer via
-// jpackage --type exe when WiX 3 (candle + light) is on PATH, otherwise via Inno Setup.
-// Output: build/spike/<candidate>/installer/TGBackup-Setup.exe (+ installer-kind.txt: wix|inno),
+// Inno Setup with desktop/installer/TGBackup.iss.
+// Output: build/spike/<candidate>/installer/TGBackup-Setup.exe (+ installer-kind.txt: inno),
 // installing TGBackup.exe. All native libraries are placed inside the app dir at build time.
 // ---------------------------------------------------------------------------------------------
 
@@ -177,7 +177,9 @@ val spikeCandidates = listOf(
 fun onPath(exe: String): String? =
     System.getenv("PATH").orEmpty().split(File.pathSeparator)
         .map { File(it, exe) }.firstOrNull { it.isFile }?.path
-val wixAvailable: Boolean by lazy { onPath("candle.exe") != null && onPath("light.exe") != null }
+
+/** The installer script; the package task passes AppVersion, ImageDir, OutDir and IconFile with /D. */
+val installerScript = layout.projectDirectory.file("installer/TGBackup.iss")
 val innoCompiler: String by lazy {
     onPath("ISCC.exe") ?: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
 }
@@ -252,68 +254,29 @@ for (c in spikeCandidates) {
 
     tasks.register<Exec>("package${c.task}") {
         group = "spike"
-        description = "Builds TGBackup-Setup.exe (jpackage+WiX, or Inno Setup) for the ${c.task} candidate."
+        description = "Builds TGBackup-Setup.exe (Inno Setup, desktop/installer/TGBackup.iss) for the ${c.task} candidate."
         dependsOn(appImage)
         onlyIf { isWindowsHost }
-        val iss = base.map { it.file("TGBackup.iss") }
         val out = base.map { it.dir("installer") }
         val image = base.map { it.dir("image/TGBackup") }
-        val useWix = isWindowsHost && wixAvailable
+        inputs.file(installerScript)
         doFirst {
             delete(out)
             out.get().asFile.mkdirs()
-            if (!useWix) {
-                iss.get().asFile.writeText(
-                    """
-                    [Setup]
-                    AppId=TGBackup-Spike-${c.id}
-                    AppName=TG Backup
-                    AppVersion=${project.version}
-                    AppPublisher=TG Backup
-                    DefaultDirName={autopf}\TGBackup
-                    DisableProgramGroupPage=yes
-                    OutputDir=${out.get().asFile.path}
-                    OutputBaseFilename=TGBackup-Setup
-                    Compression=lzma2
-                    SolidCompression=yes
-                    ArchitecturesAllowed=x64
-                    ArchitecturesInstallIn64BitMode=x64
-                    PrivilegesRequiredOverridesAllowed=dialog commandline
-                    UninstallDisplayIcon={app}\TGBackup.exe
-                    SetupIconFile=${programIcon.asFile.path}
-
-                    [Files]
-                    Source: "${image.get().asFile.path}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-                    [Icons]
-                    Name: "{autoprograms}\TG Backup"; Filename: "{app}\TGBackup.exe"
-                    """.trimIndent() + "\n",
-                )
-            }
         }
-        if (useWix) {
-            commandLine(
-                spikeLauncher.get().metadata.installationPath.file("bin/jpackage.exe").asFile.path,
-                "--type", "exe",
-                "--app-image", image.get().asFile.path,
-                "--name", "TGBackup",
-                "--app-version", project.version.toString(),
-                "--vendor", "TG Backup",
-                "--win-menu",
-                "--icon", programIcon.asFile.path,
-                "--dest", out.get().asFile.path,
-            )
-        } else {
-            commandLine(innoCompiler, "/Q", iss.get().asFile.path)
-        }
+        commandLine(
+            innoCompiler,
+            "/DAppVersion=${project.version}",
+            "/DImageDir=${image.get().asFile.path}",
+            "/DOutDir=${out.get().asFile.path}",
+            "/DIconFile=${programIcon.asFile.path}",
+            installerScript.asFile.path,
+        )
         doLast {
             val dir = out.get().asFile
-            if (useWix) {
-                File(dir, "TGBackup-${project.version}.exe").renameTo(File(dir, "TGBackup-Setup.exe"))
-            }
             check(File(dir, "TGBackup-Setup.exe").isFile) { "TGBackup-Setup.exe was not produced" }
-            File(dir, "installer-kind.txt").writeText(if (useWix) "wix" else "inno")
-            println("INSTALLER_KIND ${if (useWix) "wix" else "inno"}")
+            File(dir, "installer-kind.txt").writeText("inno")
+            println("INSTALLER_KIND inno")
         }
     }
 }

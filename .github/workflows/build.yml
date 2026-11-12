@@ -122,14 +122,22 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Probe runner (WiX, Inno Setup, WebView2 runtime)
+      - name: Probe runner (Inno Setup, WebView2 runtime)
         shell: pwsh
         run: |
-          foreach ($t in 'candle','light','wix','iscc') {
-            $found = where.exe $t 2>$null
-            if ($found) { Write-Host "PROBE_TOOL $t => $found" } else { Write-Host "PROBE_TOOL $t => (not found)" }
+          # The installer is built with Inno Setup 6 (desktop/installer/TGBackup.iss); installed here when missing.
+          $default = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          $found = where.exe iscc 2>$null
+          Write-Host "PROBE_TOOL iscc => $(if ($found) { $found } else { '(not found)' })"
+          Write-Host "PROBE_INNO_DEFAULT $(Test-Path $default)"
+          if (-not $found -and -not (Test-Path $default)) {
+            choco install innosetup -y --no-progress
+            if (-not (Test-Path $default)) { Write-Error "Inno Setup 6 could not be installed"; exit 1 }
+            Write-Host "PROBE_INNO_INSTALLED choco"
           }
-          Write-Host "PROBE_INNO_DEFAULT $(Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')"
+          $iscc = if ($found) { @($found)[0] } else { $default }
+          Write-Host "PROBE_INNO_VERSION $((Get-Item $iscc).VersionInfo.ProductVersion)"
+          Write-Host "PROBE_INNO_HEBREW $(Test-Path (Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'))"
           $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
           if (Test-Path $key) { Write-Host "WEBVIEW2_RUNTIME preinstalled=yes version=$((Get-ItemProperty $key).pv)" }
           else { Write-Host "WEBVIEW2_RUNTIME preinstalled=no" }
@@ -154,20 +162,30 @@ jobs:
           $inst = "desktop/build/spike/${{ matrix.candidate }}/installer"
           $kind = (Get-Content "$inst/installer-kind.txt").Trim()
           Write-Host "INSTALLER_KIND $kind"
-          if ($kind -eq 'wix') {
-            # jpackage's exe wrapper forwards its arguments to msiexec.
-            $instArgs = '/quiet','/norestart',"INSTALLDIR=`"$dir`"",'/l*v',"`"${{ runner.temp }}\msi-install.log`""
-          } else {
-            $instArgs = '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=`"$dir`""
-          }
+          if ($kind -ne 'inno') { Write-Error "the installer must be Inno Setup, got '$kind'"; exit 1 }
+          # The user's data (the runner's own data dir, which the smoke steps never use) must outlive install and
+          # uninstall: a marker is seeded here and checked after both.
+          $data = Join-Path $env:LOCALAPPDATA 'TGBackup'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          Set-Content -Path "$data\marker.txt" -Value 'kept' -Encoding ascii
+          $log = "${{ runner.temp }}\inno-install.log"
+          $instArgs = '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS="desktopicon"',"/DIR=`"$dir`"","/LOG=`"$log`""
           $p = Start-Process -FilePath "$inst/TGBackup-Setup.exe" -ArgumentList $instArgs -Wait -PassThru
           Write-Host "INSTALL_EXIT $($p.ExitCode)"
-          $msiLog = "${{ runner.temp }}\msi-install.log"
-          if (($p.ExitCode -ne 0 -or -not (Test-Path "$dir\TGBackup.exe")) -and (Test-Path $msiLog)) {
-            Get-Content $msiLog -Tail 60 | Where-Object { $_ -match 'error|fail|INSTALLDIR|Return value 3' } | Write-Host
-          }
+          if (($p.ExitCode -ne 0 -or -not (Test-Path "$dir\TGBackup.exe")) -and (Test-Path $log)) { Get-Content $log -Tail 60 | Write-Host }
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           if (-not (Test-Path "$dir\TGBackup.exe")) { Write-Error "TGBackup.exe not installed"; exit 1 }
+          if (-not (Test-Path "$data\marker.txt")) { Write-Error "the install removed the user's data"; exit 1 }
+          # Both shortcuts (Start menu, and the desktop one from the checked task), for all users or this one.
+          $menu = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\TG Backup.lnk", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\TG Backup.lnk"
+          $desk = "$env:PUBLIC\Desktop\TG Backup.lnk", "$([Environment]::GetFolderPath('Desktop'))\TG Backup.lnk"
+          foreach ($s in @(@{ label = 'start-menu'; paths = $menu }, @{ label = 'desktop'; paths = $desk })) {
+            $hit = $s.paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $hit) { Write-Error "no $($s.label) shortcut (looked in: $($s.paths -join '; '))"; exit 1 }
+            $target = (New-Object -ComObject WScript.Shell).CreateShortcut($hit).TargetPath
+            Write-Host "SHORTCUT $($s.label) $hit -> $target"
+            if ($target -ne "$dir\TGBackup.exe") { Write-Error "the $($s.label) shortcut points to '$target'"; exit 1 }
+          }
           Get-ChildItem "$dir\app" -Directory | ForEach-Object { Write-Host "APP_DIR $($_.FullName)" }
           Get-ChildItem -Recurse "$dir\app" -Filter *.dll | Select-Object -First 12 | ForEach-Object { Write-Host "NATIVE $($_.FullName)" }
       - name: Program icon (installed exe, installer, Add/Remove Programs, shortcut)
@@ -224,7 +242,7 @@ jobs:
           Test-Icon 'exe' ([System.Drawing.Icon]::ExtractAssociatedIcon("$dir\TGBackup.exe"))
           $setup = (Get-Item "desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe").FullName
           Test-Icon 'setup' ([System.Drawing.Icon]::ExtractAssociatedIcon($setup))
-          # 2) Add/Remove Programs: DisplayIcon of our uninstall entry (WiX: a file in the Installer cache; Inno: the exe).
+          # 2) Add/Remove Programs: DisplayIcon of our uninstall entry (Inno: the installed exe).
           $roots = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
             'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
           $arp = $roots | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { Get-ItemProperty $_.PSPath } |
@@ -234,11 +252,10 @@ jobs:
           else {
             $path = ($arp.DisplayIcon -replace ',\s*-?\d+$', '').Trim('"')
             Write-Host "ICON arp DisplayName='$($arp.DisplayName)' DisplayIcon='$($arp.DisplayIcon)'"
-            # ExtractIcon reads the icon resources by content (the WiX cache file has no extension).
-            try { Test-Icon 'arp' ([System.Drawing.Icon]::ExtractIcon($path, 0, 32)) }
+              try { Test-Icon 'arp' ([System.Drawing.Icon]::ExtractIcon($path, 0, 32)) }
             catch { Write-Host "ICON arp: cannot read $path ($_)"; $script:failed += 'arp' }
           }
-          # 3) The Start-menu shortcut (--win-menu / Inno [Icons]): its icon, or its target's when it names none.
+          # 3) The Start-menu shortcut (Inno [Icons]): its icon, or its target's when it names none.
           $menus = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
           $lnk = $menus | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem -Recurse $_ -Filter *.lnk } |
             Where-Object { $_.BaseName -match '^TG ?Backup' } | Select-Object -First 1
@@ -488,6 +505,26 @@ jobs:
           if (Select-String -Path $out2 -Pattern '^PAGE_LOADED' -Quiet) { Write-Error "the second launch opened a window"; exit 1 }
           if ($p2.ExitCode -ne 0) { Write-Error "the second launch exited $($p2.ExitCode)"; exit 1 }
           if ($p1.ExitCode -ne 0) { Write-Error "the first launch exited $($p1.ExitCode) after the hand-off"; exit 1 }
+      - name: Uninstall keeps the user's data
+        shell: pwsh
+        run: |
+          $dir = "${{ runner.temp }}\inst"
+          $data = Join-Path $env:LOCALAPPDATA 'TGBackup'
+          if (-not (Test-Path "$data\marker.txt")) { Write-Error "marker.txt was gone before the uninstall"; exit 1 }
+          $unins = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
+          if (-not $unins) { Write-Error "no Inno uninstaller in $dir"; exit 1 }
+          $p = Start-Process -FilePath $unins.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          Write-Host "UNINSTALL_EXIT $($p.ExitCode)"
+          # The uninstaller hands over to a copy of itself in TEMP: wait until the program is really gone.
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Test-Path "$dir\TGBackup.exe") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path "$dir\TGBackup.exe") { Write-Error "TGBackup.exe still installed after the uninstall"; exit 1 }
+          $links = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\TG Backup.lnk", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\TG Backup.lnk",
+            "$env:PUBLIC\Desktop\TG Backup.lnk", "$([Environment]::GetFolderPath('Desktop'))\TG Backup.lnk"
+          $left = $links | Where-Object { Test-Path $_ }
+          if ($left) { Write-Error "shortcuts left after the uninstall: $($left -join '; ')"; exit 1 }
+          if (-not (Test-Path "$data\marker.txt")) { Write-Error "the uninstall removed the user's data (marker.txt)"; exit 1 }
+          Write-Host "DATA_KEPT $data\marker.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
