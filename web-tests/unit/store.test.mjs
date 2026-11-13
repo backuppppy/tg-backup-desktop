@@ -98,3 +98,15 @@ test('reduce: a statuses offset within 1000 ms of the current keeps it', () => {
   s = reduce(s, 'snapshot', { ...snapshot(), serverNow: 400_300 }, 400_000);
   assert.equal(s.clockOffset, 300);
 });
+
+test('the snapshot keeps viewer and remote; a remote event replaces remote only', () => {
+  const remote = { enabled: false, state: 'Off', devices: 0, hasPassword: true };
+  let s = reduce({}, 'snapshot', { ...snapshot(), viewer: 'remote', remote });
+  assert.equal(s.viewer, 'remote');
+  assert.deepEqual(s.remote, remote);
+  const running = { enabled: true, state: 'Running', url: 'https://pc.tail1.ts.net', devices: 2, hasPassword: true };
+  s = reduce(s, 'remote', running);
+  assert.deepEqual(s.remote, running);
+  assert.equal(s.viewer, 'remote');
+  assert.equal(s.version, '0.1.0');
+});

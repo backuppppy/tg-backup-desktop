@@ -517,8 +517,10 @@ function panelContent(st) {
         h('p', {}, bdi(`Total files: ${st.filesCount}`)),
         h('p', {}, bdi(`Total size: ${formatSizeText(st.bytesCount)}`)),
         h('p', { class: 'small export-path', dir: 'auto' }, st.path),
+        // The phone cannot open the PC's folder: it says where the files are.
+        last?.viewer === 'remote' ? h('p', {}, 'הקבצים נשמרו במחשב, בתיקייה שלמעלה.') : null,
         h('div', { class: 'row' },
-          h('button', { type: 'button', onclick: () => post('/api/export/open') }, 'Show my data'),
+          last?.viewer === 'remote' ? null : h('button', { type: 'button', onclick: () => post('/api/export/open') }, 'Show my data'),
           closeButton()),
       ];
     case 'ApiError':

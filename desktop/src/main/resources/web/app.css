@@ -125,6 +125,13 @@ main {
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dim { color: var(--on-surface-dim); font-size: 13px; }
 
+/* Settings: the phone access (the address, its QR on white, the steps). */
+.remote-card .switch-row { margin-bottom: 8px; }
+.remote-url { direction: ltr; text-align: start; overflow-wrap: anywhere; font-family: monospace; }
+.remote-qr { display: block; width: 200px; max-width: 100%; height: auto; aspect-ratio: 1; background: #fff; border-radius: 8px; margin: 0 0 8px; }
+.remote-steps { margin: 4px 0 0; padding-inline-start: 22px; line-height: 1.5; }
+.remote-steps li { margin-bottom: 4px; }
+
 button, .button {
   font: inherit;
   font-size: 14px;

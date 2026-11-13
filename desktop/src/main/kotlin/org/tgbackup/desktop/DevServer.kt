@@ -8,6 +8,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.nullable
 import org.tgbackup.app.data.Account
 import org.tgbackup.app.data.Job
+import org.tgbackup.desktop.remote.RemoteStatusDto
 import org.tgbackup.desktop.remote.ServeConfig
 import org.tgbackup.desktop.remote.TailscaleCli
 import org.tgbackup.desktop.remote.TsStatus
@@ -75,6 +76,8 @@ private object NoTailscale : TailscaleCli {
  * The DevServer's test-only routes, only when [fixture] (TGB_DEV_FIXTURE) is set; [ApiServer] never has them.
  * - `POST /api/dev/export-state` with a `RunningExportDto` (or `null`) publishes it as the `export` event, as if
  *   ExportManager had, so the UI tests can show every progress panel state. The engine is not touched.
+ * - `POST /api/dev/remote-status` with a `RemoteStatusDto` publishes it as the `remote` event, as if the phone
+ *   access controller had, so the UI tests can show every state of the Settings card. The controller is not touched.
  */
 internal fun devExtraRoutes(fixture: String?): Route.(Events) -> Unit =
     if (fixture.isNullOrBlank()) {
@@ -96,6 +99,18 @@ private fun Route.devRoutes(events: Events) {
                 throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_REQUEST)
             }
             events.publish("export", TgbJson.encodeToJsonElement(RunningExportOrNull, value))
+        }
+    }
+    post("/api/dev/remote-status") {
+        command {
+            val value = try {
+                TgbJson.decodeFromString(RemoteStatusDto.serializer(), call.receiveText())
+            } catch (e: SerializationException) {
+                throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_REQUEST)
+            } catch (e: IllegalArgumentException) {
+                throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_REQUEST)
+            }
+            events.publish("remote", TgbJson.encodeToJsonElement(RemoteStatusDto.serializer(), value))
         }
     }
 }
