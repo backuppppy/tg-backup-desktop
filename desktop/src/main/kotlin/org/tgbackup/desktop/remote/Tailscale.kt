@@ -140,12 +140,12 @@ class ProcessTailscale(private val exe: File?, internal val timeoutMs: Long = TI
     }
 
     override fun serveOn(port: Int) {
-        val r = run("serve", "--bg", "--https=$HTTPS_PORT", "http://127.0.0.1:$port")
+        val r = run("serve", "--bg", "--yes", "--https=$HTTPS_PORT", "http://127.0.0.1:$port")
         if (r.code != 0) throw TsError(r.detail())
     }
 
     override fun serveOff() {
-        val r = run("serve", "--https=$HTTPS_PORT", "off")
+        val r = run("serve", "--yes", "--https=$HTTPS_PORT", "off")
         if (r.code != 0) throw TsError(r.detail())
     }
 

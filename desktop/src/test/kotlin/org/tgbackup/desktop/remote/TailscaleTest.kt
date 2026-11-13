@@ -184,7 +184,7 @@ class TailscaleTest {
         cli.serveOn(47800)
         cli.serveOff()
         assertEquals(
-            listOf("serve status --json", "serve --bg --https=443 http://127.0.0.1:47800", "serve --https=443 off"),
+            listOf("serve status --json", "serve --bg --yes --https=443 http://127.0.0.1:47800", "serve --yes --https=443 off"),
             args.readLines().map { it.trim() },
         )
         val (statusExe, statusArgs) = recordingExe(fixture("status-running-certs.json"))
