@@ -8,7 +8,9 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.nullable
 import org.tgbackup.app.data.Account
 import org.tgbackup.app.data.Job
-import org.tgbackup.desktop.remote.RemoteAuth
+import org.tgbackup.desktop.remote.ServeConfig
+import org.tgbackup.desktop.remote.TailscaleCli
+import org.tgbackup.desktop.remote.TsStatus
 import org.tgbackup.desktop.server.ApiServer
 import org.tgbackup.desktop.server.Events
 import org.tgbackup.desktop.server.MSG_BAD_REQUEST
@@ -35,17 +37,18 @@ fun main(args: Array<String>) {
     val port = System.getenv("TGB_DEV_PORT")?.toIntOrNull() ?: 8765
 
     val fixture = System.getenv("TGB_DEV_FIXTURE")
-    // Like the smoke: a dev server never changes Windows' sleep settings.
-    val app = DesktopApp(dataDir, sleepOverride = false)
+    // Like the smoke: a dev server never changes Windows' sleep settings. Tailscale is never there: the phone
+    // access shows NotInstalled when switched on.
+    val app = DesktopApp(dataDir, sleepOverride = false, tailscale = NoTailscale)
     if (fixture == "long-names") seedLongNames(app)
     app.start()
     val server = ApiServer(app, "127.0.0.1", port, devExtraRoutes(fixture))
     server.start()
     val remotePort = System.getenv("TGB_DEV_REMOTE_PORT")?.toIntOrNull()
     val remote = remotePort?.let { p ->
-        val auth = RemoteAuth(dataDir.toFile())
-        System.getenv("TGB_DEV_REMOTE_PASSWORD")?.takeIf { it.isNotEmpty() }?.let { auth.setPassword(it) }
-        RemoteServer(app, auth, p, allowedNames = { emptySet() }, handles = server.handles, locks = server.locks)
+        // Through the controller, so the status (hasPassword) sees it.
+        System.getenv("TGB_DEV_REMOTE_PASSWORD")?.takeIf { it.isNotEmpty() }?.let { app.remote.setPassword(it) }
+        RemoteServer(app, app.remoteAuth, p, allowedNames = { emptySet() }, handles = server.handles, locks = server.locks)
             .also { it.start() }
     }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -58,6 +61,14 @@ fun main(args: Array<String>) {
     println("DEV_URL ${server.entryUrl()}")
     System.out.flush()
     Thread.currentThread().join()
+}
+
+/** The DevServer's Tailscale: never installed (the phone's server, when wanted, is started by TGB_DEV_REMOTE_PORT). */
+private object NoTailscale : TailscaleCli {
+    override fun status(): TsStatus = TsStatus.NotInstalled
+    override fun serveStatus(): ServeConfig = ServeConfig.None
+    override fun serveOn(port: Int) = Unit
+    override fun serveOff() = Unit
 }
 
 /**

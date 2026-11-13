@@ -35,6 +35,11 @@ import io.sentry.SentryLevel
 import org.tgbackup.app.export.ExportManager
 import org.tgbackup.app.tg.AccountManager
 import org.tgbackup.app.tg.AuthUi
+import org.tgbackup.desktop.remote.ProcessTailscale
+import org.tgbackup.desktop.remote.RemoteAccessController
+import org.tgbackup.desktop.remote.RemoteAuth
+import org.tgbackup.desktop.remote.TailscaleCli
+import org.tgbackup.desktop.remote.findTailscale
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
@@ -53,6 +58,13 @@ class DesktopApp(
     private val autostart: Autostart = Autostart.forCurrentOs(),
     /** The temporary "sleep after: never" while work runs (off under `--smoke`). Used only when [power] is null. */
     sleepOverride: Boolean = true,
+    /** The phone access's Tailscale (a fake in tests and in the DevServer). */
+    tailscale: TailscaleCli = ProcessTailscale(findTailscale()),
+    /**
+     * Starts the phone's server ([org.tgbackup.desktop.server.RemoteServer]) for the given tailnet names; Main.kt
+     * builds it, as it needs the window server's locks. Called only while the phone access is on.
+     */
+    startRemoteServer: (names: () -> Set<String>) -> AutoCloseable = { error("the phone's server is not set up") },
 ) : AutoCloseable {
 
     private val dir = Files.createDirectories(dataDir).toFile()
@@ -72,8 +84,14 @@ class DesktopApp(
     val accounts = AccountManager(dir, log)
     val exports = ExportManager(dir, accounts, log)
     val jobs = JobManager(store, accounts, log, scope) { exports }
-    /** Start with Windows and keep awake (Settings). */
+    /** Start with Windows, keep awake and the phone access (Settings). */
     val prefs = DesktopPrefs(dir)
+
+    /** The phone's password and sessions. */
+    val remoteAuth = RemoteAuth(dir)
+
+    /** The phone access: follows the Settings switch from [start]. */
+    val remote = RemoteAccessController(prefs, remoteAuth, tailscale, startRemoteServer, log, scope)
 
     /**
      * An export is active until its job completes: `exports.running` keeps a finished export until it is dismissed, so this follows the
@@ -157,6 +175,9 @@ class DesktopApp(
 
         // What MainActivity and BackupService did on launch: bring interrupted jobs back.
         jobs.restore()
+
+        // The phone access follows its switch (Tailscale calls run on IO).
+        remote.start()
     }
 
     override fun close() {
@@ -167,6 +188,8 @@ class DesktopApp(
             if (withTimeoutOrNull(10.seconds) { scope.coroutineContext.job.cancelAndJoin() } == null) {
                 log.warn("חלק מהמשימות לא נעצרו תוך 10 שניות")
             }
+            // The phone access's loop is stopped with the scope: its server stops now; Tailscale's serve entry stays for the next launch.
+            remote.close()
             // The jobs are stopped: Windows' sleep setting comes back now, not after the slow export and account closes.
             updateSleepGuard { sleepGuard.update(false) }
             exports.running.value?.job?.let { export ->

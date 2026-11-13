@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.tgbackup.app.data.Account
 import org.tgbackup.desktop.DesktopApp
 import org.tgbackup.desktop.PowerRequests
+import org.tgbackup.desktop.remote.FakeTailscale
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
@@ -33,7 +34,9 @@ internal val RouteDefaultsForTests = createClientPlugin("RouteDefaults") {
 /** A [DesktopApp] under a Hebrew dir with a space, plus helpers for the command routes. */
 abstract class RouteTestBase {
     protected val dataDir: Path = Files.createTempDirectory("routes-test").resolve("תיקייה עם רווח")
-    protected val app = DesktopApp(dataDir, PowerRequests { })
+    /** Tailscale as the tests set it (never the real CLI); the phone's server is not started. */
+    protected val tailscale = FakeTailscale()
+    protected val app = DesktopApp(dataDir, PowerRequests { }, tailscale = tailscale, startRemoteServer = { AutoCloseable { } })
     /** The loaded chats of the export screen, shared by the export and the account routes. */
     protected val handles = ChatHandles()
     /** The server's command locks. */

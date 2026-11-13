@@ -63,6 +63,8 @@ dependencies {
     implementation("io.sentry:sentry:8.61.0")
     implementation("net.java.dev.jna:jna:5.19.1")
     implementation("net.java.dev.jna:jna-platform:5.19.1")
+    // The phone access's QR code (GET /api/remote/qr.svg).
+    implementation("io.nayuki:qrcodegen:1.8.0")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host:3.6.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

@@ -143,6 +143,7 @@ fun Route.appRoutes(
     jobRoutes(app, locks)
     accountRoutes(app, locks, handles)
     exportRoutes(app, events, handles)
+    remoteRoutes(app)
     extraRoutes(events)
     webRoutes()
 }

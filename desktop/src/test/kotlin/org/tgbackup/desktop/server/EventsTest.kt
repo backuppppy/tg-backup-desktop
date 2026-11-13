@@ -222,6 +222,19 @@ class EventsTest {
     }
 
     @Test
+    fun remoteChangeSendsItsEvent() = withServer { client ->
+        client.events { sse ->
+            val (name, snap) = sse.next()
+            assertEquals("snapshot", name)
+            assertEquals(false, snap.jsonObject["remote"]!!.jsonObject["hasPassword"]!!.jsonPrimitive.boolean)
+            app.remote.setPassword("secret1")
+            val remote = sse.nextNamed("remote").jsonObject
+            assertEquals(true, remote["hasPassword"]!!.jsonPrimitive.boolean)
+            assertEquals("Off", remote["state"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test
     fun logIsIncremental() = withServer { client ->
         client.events { sse ->
             assertEquals("snapshot", sse.next().first)

@@ -12,6 +12,7 @@ import io.sentry.Sentry
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.desktop.server.ApiServer
 import org.tgbackup.desktop.server.HEALTH_PATH
+import org.tgbackup.desktop.server.RemoteServer
 import org.tgbackup.desktop.server.SESSION_COOKIE
 import java.net.URI
 import java.net.http.HttpClient
@@ -81,10 +82,20 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     if (smoke.enabled) wipeExceptLock(dataDir)
     // `--smoke` never touches the real Run key (its throw-away prefs would switch "start with Windows" off).
     // `--smoke` never changes Windows' sleep settings (its seeded job could count as work).
-    val app = DesktopApp(dataDir, autostart = Autostart.forLaunch(smoke.enabled), sleepOverride = !smoke.enabled)
+    var server: ApiServer? = null
+    lateinit var app: DesktopApp
+    app = DesktopApp(
+        dataDir, autostart = Autostart.forLaunch(smoke.enabled), sleepOverride = !smoke.enabled,
+        // The phone's server shares the window server's command locks and loaded chats; it exists before app.start().
+        startRemoteServer = { names ->
+            val window = checkNotNull(server) { "the window's server is not created" }
+            val remote = RemoteServer(app, app.remoteAuth, allowedNames = names, handles = window.handles, locks = window.locks)
+            remote.start()
+            AutoCloseable { remote.stop() }
+        },
+    )
     // From here on, the configured phone numbers are masked in anything sent to Sentry.
     Telemetry.phones = { app.store.config.value.accounts.map { it.phone } }
-    var server: ApiServer? = null
     val shutdown = {
         val started = System.nanoTime()
         // First: a launch during shutdown keeps retrying (and then owns the dir) instead of knocking on a closing port.
@@ -111,9 +122,10 @@ private fun run(smoke: AppSmoke, startHidden: Boolean): Int {
     )
     val code = WindowLifecycle.run(
         open = {
-            app.start()
-            // A second launch: the window opens again (from the tray) or comes to the front.
+            // A second launch: the window opens again (from the tray) or comes to the front. Created before
+            // app.start(): the phone access may start the phone's server, which takes this one's locks.
             val s = ApiServer(app, onShow = loop::show).also { server = it }
+            app.start()
             instance.publish(s.start(), s.instanceToken)
             if (smoke.enabled) SmokeApi(s).checkAndSeed()
             loop.run()

@@ -8,9 +8,12 @@ import kotlinx.serialization.json.Json
 import org.tgbackup.io.AtomicFiles
 import java.io.File
 
-/** The desktop's own settings: start with Windows (default off) and keep the PC awake while work runs (default on). */
+/**
+ * The desktop's own settings: start with Windows (default off), keep the PC awake while work runs (default on) and
+ * the phone access through Tailscale (default off).
+ */
 @Serializable
-data class DesktopPrefsData(val autostart: Boolean = false, val keepAwake: Boolean = true)
+data class DesktopPrefsData(val autostart: Boolean = false, val keepAwake: Boolean = true, val remoteAccess: Boolean = false)
 
 /** [DesktopPrefsData] in `desktop.json` under [dir]. A missing or unreadable file gives the defaults. */
 class DesktopPrefs(private val dir: File) {

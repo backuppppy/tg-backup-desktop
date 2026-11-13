@@ -17,6 +17,7 @@ import org.tgbackup.app.export.RunningExport
 import org.tgbackup.app.tg.AccountClient
 import org.tgbackup.app.tg.AuthUi
 import org.tgbackup.desktop.DesktopApp
+import org.tgbackup.desktop.remote.RemoteStatusDto
 import org.tgbackup.export.ExportState
 import org.tgbackup.export.ProcessingState
 
@@ -233,6 +234,8 @@ data class SnapshotDto(
     val desktopPrefs: DesktopPrefsData = DesktopPrefsData(),
     /** Who reads this: `local` (the window) or `remote` (the phone, through [RemoteServer]). */
     val viewer: String = VIEWER_LOCAL,
+    /** Settings: the phone access (also `GET /api/remote`). */
+    val remote: RemoteStatusDto,
 )
 
 /** The `statuses` event: the jobs' statuses and the server's clock (epoch ms) when it was sent. */
