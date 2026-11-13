@@ -86,6 +86,21 @@ test('Settings on the phone: the card חיבור מהטלפון with התנתק,
   await expect(page).toHaveURL(/\/login\.html$/);
 });
 
+test('a logout the server did not answer stays logged in and says why', async ({ page }) => {
+  await login(page);
+  await openSettings(page);
+  await page.route('**/api/logout', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"השרת לא ענה"}' }));
+  await page.getByRole('button', { name: 'התנתק' }).click();
+  await expect(page.locator('#toast')).toHaveText('השרת לא ענה');
+  await expect(page).not.toHaveURL(/login/);
+  await page.unroute('**/api/logout');
+  await page.route('**/api/logout', (route) => route.abort());
+  await page.getByRole('button', { name: 'התנתק' }).click();
+  await expect(page.locator('#toast')).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(page).not.toHaveURL(/login/);
+});
+
 test('export Finished on the phone shows where the files are instead of Show my data', async ({ page }) => {
   await login(page);
   // The phone's own stream, with a finished export in its snapshot (the DevServer's test routes are the window's).

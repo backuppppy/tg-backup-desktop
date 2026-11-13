@@ -1,8 +1,10 @@
 package org.tgbackup.desktop.server
 
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
@@ -67,6 +69,8 @@ fun Route.remoteRoutes(app: DesktopApp) {
         val status = remote.status.value
         val url = status.url
         if (status.state != "Running" || url == null) return@get call.respondError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
+        // Never from the cache: a new address must show its own code.
+        call.response.header(HttpHeaders.CacheControl, "no-store")
         call.respondText(qrSvg(url), ContentType.Image.SVG)
     }
 }

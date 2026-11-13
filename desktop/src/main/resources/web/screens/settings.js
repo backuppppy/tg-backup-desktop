@@ -74,7 +74,8 @@ function renderRemote(st) {
 function runningPart(st) {
   return [
     h('p', { class: 'remote-url', dir: 'ltr' }, st.url ?? ''),
-    h('img', { class: 'remote-qr', src: '/api/remote/qr.svg', alt: '' }),
+    // The address in the src: a new address is a new image, never the cached one.
+    h('img', { class: 'remote-qr', src: `/api/remote/qr.svg?u=${encodeURIComponent(st.url ?? '')}`, alt: '' }),
     h('div', { class: 'row' }, h('button', { type: 'button', class: 'outlined', onclick: () => copy(st.url ?? '') }, 'העתק')),
     h('p', {}, `מכשירים מחוברים: ${st.devices}`),
     h('div', { class: 'row' },
@@ -84,18 +85,25 @@ function runningPart(st) {
   ];
 }
 
+/** Copies `text`; `הועתק` only when it was copied (a failure says nothing: the address is on the screen). */
 async function copy(text) {
+  let copied = false;
   try {
     await navigator.clipboard.writeText(text);
+    copied = true;
   } catch {
     // No clipboard API (or refused): the old way.
     const area = h('textarea', { readonly: true, style: 'position:fixed;opacity:0' }, text);
     document.body.append(area);
     area.select();
-    document.execCommand('copy');
+    try {
+      copied = document.execCommand('copy');
+    } catch {
+      copied = false;
+    }
     area.remove();
   }
-  toast('הועתק');
+  if (copied) toast('הועתק');
 }
 
 async function disconnectAll() {
@@ -163,11 +171,15 @@ async function remoteSwitched() {
 
 // ---------------------------------------------------------------- the phone's own card
 
+/** Logs this phone out; the login page once the server answered (or the session was already gone). */
 async function logout() {
   try {
     await api('POST', '/api/logout');
-  } catch {
-    // Already out: the login page either way.
+  } catch (e) {
+    if (e.status !== 401) {
+      toast(e.message);
+      return;
+    }
   }
   globalThis.location.replace('/login.html');
 }

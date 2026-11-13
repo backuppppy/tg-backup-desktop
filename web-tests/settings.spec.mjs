@@ -214,13 +214,33 @@ test.describe('the phone-access card', () => {
     await publishRemote(page, RUNNING);
     await expect(card.locator('.remote-state')).toHaveText('פועל. סורקים את הקוד בטלפון:');
     await expect(card.getByText('https://my-pc.tail1234.ts.net', { exact: true })).toBeVisible();
-    await expect(card.locator('img')).toHaveAttribute('src', '/api/remote/qr.svg');
+    await expect(card.locator('img')).toHaveAttribute('src', `/api/remote/qr.svg?u=${encodeURIComponent(RUNNING.url)}`);
     await expect(card.getByText('מכשירים מחוברים: 2')).toBeVisible();
     await expect(card.getByText(STAYS_ON)).toHaveCount(0);
     await expect(card.locator('ol')).toHaveCount(0);
     await expect(card.getByRole('button', { name: 'החלף סיסמה' })).toBeVisible();
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await card.getByRole('button', { name: 'העתק' }).click();
     await expect(page.locator('#toast')).toHaveText('הועתק');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(RUNNING.url);
+    // A new name on the tailnet: a new address and a new code (never the cached image of the old one).
+    const moved = { ...RUNNING, url: 'https://new-name.tail1234.ts.net' };
+    await publishRemote(page, moved);
+    await expect(card.getByText(moved.url, { exact: true })).toBeVisible();
+    await expect(card.locator('img')).toHaveAttribute('src', `/api/remote/qr.svg?u=${encodeURIComponent(moved.url)}`);
+  });
+
+  test('a copy that fails says nothing', async ({ page }) => {
+    await open(page);
+    const card = remoteCard(page);
+    await publishRemote(page, RUNNING);
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = () => Promise.reject(new Error('denied'));
+      document.execCommand = () => false;
+    });
+    await card.getByRole('button', { name: 'העתק' }).click();
+    await page.waitForTimeout(500);
+    await expect(page.locator('#toast')).toBeHidden();
   });
 
   test('switching on without a password asks for one (6 characters, the same twice), saves it, then switches on', async ({ page }) => {
@@ -264,6 +284,8 @@ test.describe('the phone-access card', () => {
   });
 
   test('with a password the switch saves at once, both ways', async ({ page }) => {
+    // Its own password (the one remote.spec logs in with), whatever ran before.
+    expect((await page.request.put('/api/remote/password', { data: { password: 'secret1' } })).ok()).toBeTruthy();
     await open(page);
     const card = remoteCard(page);
     const sw = card.getByRole('switch', { name: REMOTE_SWITCH });

@@ -108,6 +108,33 @@ class RemoteRoutesTest : RouteTestBase() {
     }
 
     @Test
+    fun desktopPrefsNeverSwitchTheRemoteAccess() = testApplication {
+        app.remoteAuth.setPassword("secret1")
+        application {
+            remoteModule(app = app, auth = app.remoteAuth, allowedNames = { setOf(NAME) }, handles = handles, locks = locks)
+        }
+        val phone = createClient { install(PhoneHost) }
+        val login = phone.post("/api/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"password":"secret1"}""")
+        }
+        val session = login.headers.getAll(HttpHeaders.SetCookie)!!.first { it.startsWith("$REMOTE_COOKIE=") }
+            .substringAfter("=").substringBefore(';')
+        phone.put("/api/desktop-prefs") {
+            header(HttpHeaders.Cookie, "$REMOTE_COOKIE=$session")
+            contentType(ContentType.Application.Json)
+            setBody("""{"remoteAccess":true}""")
+        }.assertOk()
+        assertFalse(app.prefs.value.value.remoteAccess)
+    }
+
+    @Test
+    fun desktopPrefsFromTheWindowNeverSwitchTheRemoteAccess() = withServer { client ->
+        client.putJson("/api/desktop-prefs", """{"remoteAccess":true}""").assertOk()
+        assertFalse(app.prefs.value.value.remoteAccess)
+    }
+
+    @Test
     fun theQrIsAnSvgOfTheUrlWhileRunning() = withServer { client ->
         client.get("/api/remote/qr.svg").assertError(HttpStatusCode.NotFound, MSG_NOT_FOUND)
         app.remoteAuth.setPassword("secret1")
@@ -119,6 +146,8 @@ class RemoteRoutesTest : RouteTestBase() {
         assertEquals(HttpStatusCode.OK, r.status)
         assertEquals(ContentType.Image.SVG, r.contentType()?.withoutParameters())
         assertTrue("<svg" in r.bodyAsText())
+        // A new address must never show the old code from the browser's cache.
+        assertEquals("no-store", r.headers[HttpHeaders.CacheControl])
         assertEquals("https://$NAME", client.get("/api/remote").json()["url"]!!.jsonPrimitive.content)
     }
 }
