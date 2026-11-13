@@ -69,6 +69,8 @@ class JobManager(
     private val runTick: Long = 10_000,
     /** How often a running job reads its source's latest id again (refreshLatest). */
     private val latestTick: Long = 3_600_000,
+    /** The wall clock of the run time; a test moves it by hand. */
+    private val wallClock: () -> Long = System::currentTimeMillis,
     private val exports: () -> ExportManager,
 ) {
     private val _statuses = MutableStateFlow<Map<String, JobStatus>>(emptyMap())
@@ -124,8 +126,11 @@ class JobManager(
     private fun flushRunTime(jobId: String, goOn: Boolean, run: CoJob? = null) = synchronized(clockLock) {
         val seg = runSegments[jobId] ?: return@synchronized
         if (run != null && seg.run !== run) return@synchronized
-        val now = System.currentTimeMillis()
-        store.saveProgress(jobId) { it.copy(runMillis = it.runMillis + (now - seg.since).coerceAtLeast(0)) }
+        val now = wallClock()
+        // The clock writes every runTick, so a longer segment means the PC slept (or the program was frozen)
+        // in between: that time is not run time. At most two ticks of it count (the part before the sleep is unknown).
+        val counted = (now - seg.since).coerceIn(0, MAX_TICKS_PER_SEGMENT * runTick)
+        store.saveProgress(jobId) { it.copy(runMillis = it.runMillis + counted) }
         if (goOn) runSegments[jobId] = Segment(seg.run, now) else runSegments.remove(jobId)
         val total = store.progress(jobId).runMillis
         setStatus(jobId) { it.copy(runMillis = total, runningSince = if (goOn) now else 0) }
@@ -134,7 +139,7 @@ class JobManager(
     private fun startClock(jobId: String, run: CoJob) = synchronized(clockLock) {
         // A segment left by an older run is added first, so its time is not lost.
         flushRunTime(jobId, goOn = false)
-        val now = System.currentTimeMillis()
+        val now = wallClock()
         runSegments[jobId] = Segment(run, now)
         setStatus(jobId) { it.copy(runningSince = now) }
     }
@@ -351,7 +356,7 @@ class JobManager(
     fun resetProgress(jobId: String) = synchronized(clockLock) {
         store.clearProgress(jobId)
         // A running clock starts over from now.
-        runSegments[jobId]?.let { runSegments[jobId] = Segment(it.run, System.currentTimeMillis()) }
+        runSegments[jobId]?.let { runSegments[jobId] = Segment(it.run, wallClock()) }
         showSavedProgress(jobId)
     }
 
@@ -420,3 +425,6 @@ class JobManager(
         }
     }
 }
+
+/** The most of one clock segment that counts as run time, in run ticks: anything longer is the PC asleep. */
+private const val MAX_TICKS_PER_SEGMENT = 2

@@ -13,15 +13,21 @@ export function formatRunTime(ms) {
   return `${Math.floor(secs / 3600)}:${two(Math.floor(secs / 60) % 60)}:${two(secs % 60)}`;
 }
 
+/** The most of the live segment shown: JobManager's MAX_TICKS_PER_SEGMENT × its 10 s runTick. */
+const MAX_LIVE_MILLIS = 20_000;
+
 /**
  * The job's run time at the page's `now` (ms): the saved time, and while `runningSince` is set the time since then.
  * `runningSince` is the server's clock: `offset` (serverNow - Date.now() at the last receipt, 0 when unknown) turns
  * the page's now into the server's. A clock still behind the server's adds nothing rather than taking time off.
+ * A segment longer than 20 s (the PC slept since the last write) shows 20 s of it, as the engine counts it.
  */
 export function runMillisAt(status, now, offset = 0) {
   const saved = Number(status.runMillis) || 0;
   const since = Number(status.runningSince) || 0;
-  return saved + (since > 0 ? Math.max(0, now + (Number(offset) || 0) - since) : 0);
+  const live = since > 0 ? Math.max(0, now + (Number(offset) || 0) - since) : 0;
+  // The engine writes the time every 10 s and counts at most two of those per segment (the rest is the PC asleep).
+  return saved + Math.min(live, MAX_LIVE_MILLIS);
 }
 
 /** The phase as shown: the message a copy or upload phase names is in the target (`מעתיק הודעה ביעד 9384`). */

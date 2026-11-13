@@ -295,6 +295,25 @@ class JobManagerTest {
     }
 
     @Test
+    fun aSleepingComputerDoesNotCountTheSleep() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val log = LogBus(dir)
+        // A slow tick (none in this test) and a hand-moved wall clock: the PC sleeps between two reads.
+        var now = 1_000_000L
+        val jobs = JobManager(store, AccountManager(dir, log), log, scope, runTick = 60_000, wallClock = { now }) { error("unused") }
+        assertNull(jobs.start("j1"))
+        now += 30_000 // half a tick: counted as is
+        jobs.pause("j1")
+        assertEquals(30_000L, store.progress("j1").runMillis)
+        jobs.resume("j1")
+        now += 3_600_000 // an hour asleep: at most two ticks of it are counted
+        jobs.stop("j1")
+        waitUntil("job stopped") { !jobs.status().running }
+        assertEquals(30_000L + 120_000L, store.progress("j1").runMillis)
+    }
+
+    @Test
     fun aFailingCompletionStillShowsStopped() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir)

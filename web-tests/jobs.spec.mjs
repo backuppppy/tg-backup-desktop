@@ -479,19 +479,20 @@ test('run time: back on the screen the clock shows the time of now at once, not 
   await page.clock.install({ time: t0 });
   await fakeStream(page, {
     jobs: [job({ id: 'b1', name: 'חוזרת' })],
-    statuses: { b1: status({ running: true, phase: 'מעתיק', runMillis: 60000, runningSince: t0 - 5000, lastId: 3, latestId: 9 }) },
+    statuses: { b1: status({ running: true, phase: 'מעתיק', runMillis: 60000, runningSince: t0 - 2000, lastId: 3, latestId: 9 }) },
   });
   await page.goto('/#jobs');
   const clock = card(page, 'חוזרת').locator('.run-time');
   await expect(clock).toBeVisible();
-  await page.clock.pauseAt(t0 + 20_000);
-  await expect(clock).toHaveText('⏱ רץ: 0:01:25');
+  await page.clock.pauseAt(t0 + 5_000);
+  await expect(clock).toHaveText('⏱ רץ: 0:01:07');
   await page.goto('/#accounts');
   await expect(page.locator('[data-screen="accounts"]')).toBeVisible();
-  await page.clock.fastForward(30_000);
+  // Under 20 s since runningSince: more would be read as the PC asleep (shown at most 20 s).
+  await page.clock.fastForward(8_000);
   await page.goto('/#jobs');
-  // The time stands still now: only a clock drawn on the way back shows 0:01:55.
-  await expect(clock).toHaveText('⏱ רץ: 0:01:55');
+  // The time stands still now: only a clock drawn on the way back shows 0:01:15.
+  await expect(clock).toHaveText('⏱ רץ: 0:01:15');
 });
 
 /** Counts the page's one second intervals (only the jobs screen's run clock uses one): created and still active. */
