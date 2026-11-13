@@ -4,6 +4,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -14,6 +16,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -168,6 +171,33 @@ class RemoteAccessControllerTest {
         assertTrue(prefs.value.value.remoteAccess)
         controller.disconnectAll()
         assertTrue("כל המכשירים נותקו" in logged())
+    }
+
+    @Test
+    fun aHangingCliDoesNotHoldTheSwitch() {
+        auth.setPassword("secret1")
+        cli.status = TsStatus.Up(NAME, httpsOn = true)
+        controller.setEnabled(true)
+        awaitState("Running")
+        cli.hang = true
+        assertTrue(cli.hanging.await(5, TimeUnit.SECONDS))
+        val t0 = System.nanoTime()
+        controller.setEnabled(false)
+        // Off at once; removing our serve entry (which hangs too) comes after.
+        runBlocking { withTimeout(1.seconds) { controller.status.first { it.state == "Off" } } }
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 1_000)
+        assertEquals(1, stopped.get())
+    }
+
+    @Test
+    fun aHangingCliDoesNotHoldTheScope() {
+        auth.setPassword("secret1")
+        cli.hang = true
+        controller.setEnabled(true)
+        assertTrue(cli.hanging.await(5, TimeUnit.SECONDS))
+        val t0 = System.nanoTime()
+        runBlocking { withTimeout(1.seconds) { scope.coroutineContext.job.cancelAndJoin() } }
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 1_000)
     }
 
     @Test

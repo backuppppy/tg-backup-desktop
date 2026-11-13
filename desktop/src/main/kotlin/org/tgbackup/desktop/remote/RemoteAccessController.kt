@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.Serializable
 import org.tgbackup.app.engine.LogBus
 import org.tgbackup.desktop.DesktopPrefs
@@ -57,7 +57,8 @@ private fun stateText(c: Core): String = when (c.state) {
  * starts the phone's server ([startServer], given the tailnet names it may answer to) and adds our serve entry when
  * it is missing. Switching off stops the server and removes our serve entry only (never another's). Closing the
  * program ([close]) stops the server and leaves serve as is: it is ours again on the next launch.
- * CLI calls run on `Dispatchers.IO`, never on the caller's thread.
+ * CLI calls and the server's start and stop run on `Dispatchers.IO`, never on the caller's thread, and a cancellation
+ * (switching off, closing) interrupts them.
  */
 class RemoteAccessController(
     private val prefs: DesktopPrefs,
@@ -142,7 +143,7 @@ class RemoteAccessController(
         } catch (e: Exception) {
             Core("Error", detail = e.message ?: e::class.java.simpleName)
         }
-        if (next.state != "Running") stopServer()
+        if (next.state != "Running") io { stopServer() }
         publish(next)
         return next
     }
@@ -155,7 +156,7 @@ class RemoteAccessController(
             is TsStatus.Up -> st
         }
         if (!up.httpsOn) return Core("HttpsOff")
-        val serve = io { cli.serveStatus() }
+        val serve = io { cli.serveStatus(up.dnsName) }
         if (serve == ServeConfig.Busy) return Core("ServeBusy")
         dnsName = up.dnsName
         if (!serverRunning()) {
@@ -169,18 +170,21 @@ class RemoteAccessController(
         return Core("Running", url = "https://${up.dnsName}")
     }
 
-    /** Switched off: the server stops, and our serve entry goes (only ours). */
+    /**
+     * Switched off: the server stops and the state is Off at once; then our serve entry goes (only ours, under any
+     * name), however long Tailscale takes.
+     */
     private suspend fun turnOff() {
-        stopServer()
+        io { stopServer() }
+        publish(OFF)
         try {
-            if (io { cli.serveStatus() } == ServeConfig.Ours) io { cli.serveOff() }
+            if (io { cli.serveStatus(null) } == ServeConfig.Ours) io { cli.serveOff() }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             val detail = (e as? TsError)?.detail ?: e.message ?: e::class.java.simpleName
             log.warn("גישה מהטלפון: ${stateText(Core("Error", detail = detail))}")
         }
-        publish(OFF)
     }
 
     /** Sets [next]; a change of state, url or detail goes to the log. */
@@ -204,5 +208,6 @@ class RemoteAccessController(
         dnsName = null
     }
 
-    private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
+    /** On IO; a cancellation interrupts the blocking call (ProcessTailscale kills the CLI then). */
+    private suspend fun <T> io(block: () -> T): T = runInterruptible(Dispatchers.IO) { block() }
 }

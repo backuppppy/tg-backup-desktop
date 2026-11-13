@@ -66,7 +66,7 @@ fun main(args: Array<String>) {
 /** The DevServer's Tailscale: never installed (the phone's server, when wanted, is started by TGB_DEV_REMOTE_PORT). */
 private object NoTailscale : TailscaleCli {
     override fun status(): TsStatus = TsStatus.NotInstalled
-    override fun serveStatus(): ServeConfig = ServeConfig.None
+    override fun serveStatus(dnsName: String?): ServeConfig = ServeConfig.None
     override fun serveOn(port: Int) = Unit
     override fun serveOff() = Unit
 }

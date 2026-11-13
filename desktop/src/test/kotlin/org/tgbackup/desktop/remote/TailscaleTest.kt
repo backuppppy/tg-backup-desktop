@@ -5,6 +5,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -91,11 +92,11 @@ class TailscaleTest {
         assertEquals(TsStatus.NotInstalled, missing.status())
     }
 
-    @Test
-    fun aHangingCliIsKilledAfterTwentySeconds() {
+    /** A fake `tailscale` that hangs for a minute. */
+    private fun hangingExe(): File {
         val dir = Files.createTempDirectory("ts-hang").toFile()
         val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
-        val exe = if (windows) {
+        return if (windows) {
             File(dir, "tailscale.cmd").apply { writeText("@echo off\r\nping -n 60 127.0.0.1 >nul\r\n") }
         } else {
             File(dir, "tailscale").apply {
@@ -103,11 +104,56 @@ class TailscaleTest {
                 setExecutable(true)
             }
         }
+    }
+
+    @Test
+    fun aHangingCliIsKilledAtTheTimeout() {
         val started = System.nanoTime()
-        val status = ProcessTailscale(exe).status()
+        val status = ProcessTailscale(hangingExe(), timeoutMs = 500).status()
         val tookMs = (System.nanoTime() - started) / 1_000_000
         assertEquals(TsStatus.Failed("timeout"), status)
-        assertTrue(tookMs < 21_000, "took $tookMs ms")
+        assertTrue(tookMs < 2_000, "took $tookMs ms")
+    }
+
+    @Test
+    fun theTimeoutIsTwentySeconds() {
+        assertEquals(20_000L, ProcessTailscale(null).timeoutMs)
+    }
+
+    @Test
+    fun anInterruptedCallKillsTheCliAndEnds() {
+        val cli = ProcessTailscale(hangingExe())
+        var thrown: Throwable? = null
+        val t = Thread { thrown = runCatching { cli.status() }.exceptionOrNull() }
+        t.start()
+        Thread.sleep(500)
+        val started = System.nanoTime()
+        t.interrupt()
+        t.join(2_000)
+        assertFalse(t.isAlive, "still running after ${(System.nanoTime() - started) / 1_000_000} ms")
+        assertTrue(thrown is InterruptedException, "$thrown")
+    }
+
+    @Test
+    fun anEntryForAnotherNameIsNotOurs() {
+        val old = fixture("serve-old-name.json")
+        // The PC's tailnet name changed: our entry under the old name serves nothing at the new url.
+        assertEquals(ServeConfig.None, parseServeStatus(old, "pc.tail1234.ts.net"))
+        assertEquals(ServeConfig.Ours, parseServeStatus(old, "old-pc.tail1234.ts.net"))
+        // No name (switching off): any name of ours is ours.
+        assertEquals(ServeConfig.Ours, parseServeStatus(old, null))
+        assertEquals(ServeConfig.Ours, parseServeStatus(fixture("serve-ours.json"), "pc.tail1234.ts.net"))
+        // Both names, ours: ours.
+        assertEquals(
+            ServeConfig.Ours,
+            parseServeStatus(
+                """{"TCP":{"443":{"HTTPS":true}},"Web":{"old-pc.tail1234.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:47800"}}},""" +
+                    """"pc.tail1234.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:47800"}}}}}""",
+                "pc.tail1234.ts.net",
+            ),
+        )
+        // Someone else's under the new name stays Busy.
+        assertEquals(ServeConfig.Busy, parseServeStatus(fixture("serve-busy.json"), "pc.tail1234.ts.net"))
     }
 
     private val windows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
@@ -134,7 +180,7 @@ class TailscaleTest {
     fun theCliGetsTheDocumentedArguments() {
         val (exe, args) = recordingExe(fixture("serve-ours.json"))
         val cli = ProcessTailscale(exe)
-        assertEquals(ServeConfig.Ours, cli.serveStatus())
+        assertEquals(ServeConfig.Ours, cli.serveStatus("pc.tail1234.ts.net"))
         cli.serveOn(47800)
         cli.serveOff()
         assertEquals(

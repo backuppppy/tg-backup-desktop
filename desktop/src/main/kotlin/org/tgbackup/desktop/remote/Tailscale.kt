@@ -31,8 +31,8 @@ class TsError(val detail: String) : Exception(detail)
 interface TailscaleCli {
     fun status(): TsStatus
 
-    /** Throws [TsError]. */
-    fun serveStatus(): ServeConfig
+    /** Port 443 for the tailnet name [dnsName] (null: any name, see [parseServeStatus]). Throws [TsError]. */
+    fun serveStatus(dnsName: String?): ServeConfig
 
     /** https 443 of the tailnet name → `http://127.0.0.1:<port>`, kept by Tailscale (`--bg`). Throws [TsError]. */
     fun serveOn(port: Int)
@@ -63,8 +63,10 @@ fun parseStatus(text: String): TsStatus {
  * `tailscale serve status --json` for port 443. Ours only when 443 is exactly our entry: TCP 443 `{"HTTPS":true}`
  * and every `<name>:443` web entry is the one handler `/` → [OUR_PROXY]. Anything else there (another handler or path, a
  * TCP forward, Funnel, a foreground `serve` session) is Busy. Other ports are not ours to look at.
+ * With [dnsName], our entries must include `<dnsName>:443`: entries of ours only under an older name are None (the
+ * new name needs its entry). Without it (switching off), our entries under any name are Ours.
  */
-fun parseServeStatus(text: String): ServeConfig {
+fun parseServeStatus(text: String, dnsName: String? = null): ServeConfig {
     if (text.isBlank()) return ServeConfig.None
     val root = runCatching { json.parseToJsonElement(text) }.getOrElse { throw TsError("unreadable serve status") }
     if (root is JsonNull) return ServeConfig.None
@@ -80,20 +82,21 @@ fun parseServeStatus(text: String): ServeConfig {
     if (foregroundOn443 || funnelOn443) return ServeConfig.Busy
 
     val ourTcp = tcp is JsonObject && tcp.keys == setOf("HTTPS") && (tcp["HTTPS"] as? JsonPrimitive)?.booleanOrNull == true
-    val ourWeb = web.isNotEmpty() && web.all { entry ->
+    val ourWeb = web.isNotEmpty() && web.values.all { entry ->
         val handlers = (entry as? JsonObject)?.get("Handlers") as? JsonObject
         val slash = handlers?.get("/") as? JsonObject
         handlers?.keys == setOf("/") && slash?.keys == setOf("Proxy") && slash.str("Proxy") == OUR_PROXY
     }
-    return if (ourTcp && ourWeb) ServeConfig.Ours else ServeConfig.Busy
+    if (!ourTcp || !ourWeb) return ServeConfig.Busy
+    return if (dnsName == null || "${dnsName.lowercase()}:$HTTPS_PORT" in web.keys.map { it.lowercase() }) ServeConfig.Ours else ServeConfig.None
 }
 
 private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
 private fun JsonObject.tcp443(): JsonElement? = (this["TCP"] as? JsonObject)?.get(HTTPS_PORT)?.takeIf { it !is JsonNull }
 
-private fun JsonObject.web443(): List<JsonElement> =
-    (this["Web"] as? JsonObject).orEmpty().filterKeys { it.endsWith(":$HTTPS_PORT") }.values.toList()
+private fun JsonObject.web443(): Map<String, JsonElement> =
+    (this["Web"] as? JsonObject).orEmpty().filterKeys { it.endsWith(":$HTTPS_PORT") }
 
 private fun JsonObject?.orEmpty(): Map<String, JsonElement> = this ?: emptyMap()
 
@@ -114,7 +117,7 @@ fun findTailscale(
  * The real `tailscale` CLI at [exe] (null: not installed). Every call ends within [timeoutMs]: a call still running
  * then is killed (with its child processes) and fails with `timeout`. Blocking: callers run it on `Dispatchers.IO`.
  */
-class ProcessTailscale(private val exe: File?, private val timeoutMs: Long = TIMEOUT_MS) : TailscaleCli {
+class ProcessTailscale(private val exe: File?, internal val timeoutMs: Long = TIMEOUT_MS) : TailscaleCli {
 
     override fun status(): TsStatus {
         if (exe == null || !exe.isFile) return TsStatus.NotInstalled
@@ -130,10 +133,10 @@ class ProcessTailscale(private val exe: File?, private val timeoutMs: Long = TIM
         return TsStatus.Failed(r.detail())
     }
 
-    override fun serveStatus(): ServeConfig {
+    override fun serveStatus(dnsName: String?): ServeConfig {
         val r = run("serve", "status", "--json")
         if (r.code != 0) throw TsError(r.detail())
-        return parseServeStatus(r.out)
+        return parseServeStatus(r.out, dnsName)
     }
 
     override fun serveOn(port: Int) {
@@ -151,7 +154,10 @@ class ProcessTailscale(private val exe: File?, private val timeoutMs: Long = TIM
             ?: "exit code $code"
     }
 
-    /** Throws [TsError] when the CLI cannot start or does not end in time. */
+    /**
+     * Throws [TsError] when the CLI cannot start or does not end in time. An interrupt (a cancelled
+     * `runInterruptible`) kills it too and is thrown on.
+     */
     private fun run(vararg args: String): Result {
         val exe = exe ?: throw TsError("not installed")
         val process = try {
@@ -166,14 +172,25 @@ class ProcessTailscale(private val exe: File?, private val timeoutMs: Long = TIM
         val reader = Thread {
             runCatching { process.inputStream.bufferedReader(Charsets.UTF_8).use { r -> r.forEachLine { synchronized(out) { out.appendLine(it) } } } }
         }.apply { isDaemon = true; start() }
-        if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
-            process.descendants().forEach { it.destroyForcibly() }
-            process.destroyForcibly()
+        val ended = try {
+            process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            kill(process)
+            throw e
+        }
+        if (!ended) {
+            kill(process)
             throw TsError("timeout")
         }
         // The output ends with the process (a child left holding the pipe gets a moment, not more).
         reader.join(READ_AFTER_EXIT_MS)
         return Result(process.exitValue(), synchronized(out) { out.toString() })
+    }
+
+    /** The CLI and whatever it started. */
+    private fun kill(process: Process) {
+        process.descendants().forEach { it.destroyForcibly() }
+        process.destroyForcibly()
     }
 
     private companion object {
