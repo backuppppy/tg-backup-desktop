@@ -40,3 +40,6 @@ form.addEventListener('submit', async (e) => {
 });
 
 field.focus();
+
+// The phone's offline page (sw.js): only on the phone's server, which is the only one with this page.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

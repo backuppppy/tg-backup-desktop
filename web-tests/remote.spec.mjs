@@ -160,3 +160,88 @@ test('two phones: a logout on one leaves the other in', async ({ browser }) => {
     await two.close();
   }
 });
+
+// ---------------------------------------------------------------- Installable on the phone (Task 5)
+const OFFLINE_TEXT = 'אין חיבור למחשב. בודקים ש-Tailscale מחובר בטלפון ושהמחשב דלוק.';
+
+test('the manifest is served without a session, as application/manifest+json, with the install fields', async ({ request }) => {
+  const res = await request.get('/manifest.webmanifest');
+  expect(res.status()).toBe(200);
+  expect(res.headers()['content-type']).toMatch(/^application\/manifest\+json/);
+  const m = await res.json();
+  expect(m).toMatchObject({
+    name: 'TG Backup', short_name: 'TG Backup', start_url: '/', scope: '/', display: 'standalone',
+    dir: 'rtl', lang: 'he', background_color: '#0F1720', theme_color: '#0F1720',
+  });
+  expect(m.icons).toEqual([
+    { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+  ]);
+  for (const path of ['/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/sw.js', '/offline.html']) {
+    expect((await request.get(path)).status(), path).toBe(200);
+  }
+});
+
+test('the login page links the manifest and registers the service worker', async ({ page }) => {
+  await page.goto('/login.html');
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', 'manifest.webmanifest');
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href', 'apple-touch-icon.png');
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#0F1720');
+  const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
+  expect(new URL(scope).pathname).toBe('/');
+});
+
+test('the app on the phone registers the service worker', async ({ page }) => {
+  await login(page);
+  const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
+  expect(new URL(scope).pathname).toBe('/');
+});
+
+/** Logs in and waits until the service worker controls the page (a reload after the first install). */
+async function loginControlled(page) {
+  await login(page);
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  await expect(page.locator('#title')).toContainText('TG Backup  v');
+}
+
+test('offline, a page load shows the offline page with נסה שוב, which reloads once back online', async ({ page, context }) => {
+  await loginControlled(page);
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.getByText(OFFLINE_TEXT)).toBeVisible();
+  const retry = page.getByRole('button', { name: 'נסה שוב' });
+  await expect(retry).toBeVisible();
+  await context.setOffline(false);
+  await retry.click();
+  await expect(page.locator('#title')).toContainText('TG Backup  v');
+  await expect(page.getByText(OFFLINE_TEXT)).toHaveCount(0);
+});
+
+test('only offline.html is cached; /api/events and the app files are never answered from the cache', async ({ page, context }) => {
+  await loginControlled(page);
+  const cached = await page.evaluate(async () => {
+    const urls = [];
+    for (const name of await caches.keys()) {
+      for (const req of await (await caches.open(name)).keys()) urls.push(new URL(req.url).pathname);
+    }
+    return urls;
+  });
+  expect(cached).toEqual(['/offline.html']);
+  await context.setOffline(true);
+  const results = await page.evaluate(async () => {
+    const out = {};
+    for (const path of ['/api/events', '/api/state', '/app.js', '/app.css']) {
+      try {
+        const r = await fetch(path);
+        out[path] = `answered ${r.status}`;
+      } catch {
+        out[path] = 'failed';
+      }
+    }
+    return out;
+  });
+  await context.setOffline(false);
+  expect(results).toEqual({ '/api/events': 'failed', '/api/state': 'failed', '/app.js': 'failed', '/app.css': 'failed' });
+});

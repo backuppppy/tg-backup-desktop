@@ -53,8 +53,14 @@ private const val MAX_WHO = 100
 /** The login cookie lives 10 years: in practice until the phone logs out. */
 private const val REMOTE_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60
 
-/** Paths the phone may load without a session: the login page and what it needs. */
-private val PublicGets = setOf("/login.html", "/login.js", "/app.css", "/favicon.png", HEALTH_PATH)
+/**
+ * Paths the phone may load without a session: the login page and what it needs, and what makes the screens
+ * installable (the manifest, its icons, the service worker and its offline page, which hold no data).
+ */
+private val PublicGets = setOf(
+    "/login.html", "/login.js", "/app.css", "/favicon.png", HEALTH_PATH,
+    "/manifest.webmanifest", "/sw.js", "/offline.html", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
+)
 private const val LOGIN_PATH = "/api/login"
 private const val LOGOUT_PATH = "/api/logout"
 
@@ -82,8 +88,8 @@ suspend fun ApplicationCall.requireLocal() {
  * 2. A non-GET/HEAD request with an `Origin` header must come from `https://<allowed name>` or
  *    `http://127.0.0.1:<port>`; else 403.
  * 3. `/internal/show` is not there (404): the window's calls stay on the window's server.
- * 4. Public without a cookie (GET or HEAD): the login page, its script, the stylesheet, the icon and
- *    `/api/health`; and `POST /api/login`. Everything else needs a [REMOTE_COOKIE] that [RemoteAuth.validate]s; else 401
+ * 4. Public without a cookie (GET or HEAD): the login page, its script, the stylesheet, the icon,
+ *    `/api/health` and the install files (manifest, icons, `sw.js`, `offline.html`); and `POST /api/login`. Everything else needs a [REMOTE_COOKIE] that [RemoteAuth.validate]s; else 401
  *    `{"error": ..., "login": true}` (the page goes to `/login.html`), and an HTML page load of `/` is redirected there.
  * Errors and bare statuses are answered as on the window's server.
  */

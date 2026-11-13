@@ -255,8 +255,20 @@ divider.addEventListener('keydown', (e) => {
 
 window.addEventListener('resize', apply);
 
+/**
+ * On the phone (the snapshot says viewer "remote") the service worker adds the offline page. The window does not
+ * register it: its server's port changes every launch, and the offline page speaks of Tailscale.
+ */
+let workerRegistered = false;
+function registerWorker() {
+  if (workerRegistered || !('serviceWorker' in navigator)) return;
+  workerRegistered = true;
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
 function onState(next) {
   state = next;
+  if (state.viewer === 'remote') registerWorker();
   if (state.connected) seenSnapshot = true;
   title.textContent = state.version ? `TG Backup  v${state.version}` : 'TG Backup';
   banner.hidden = !seenSnapshot || state.connected;

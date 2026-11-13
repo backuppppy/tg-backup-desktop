@@ -320,6 +320,25 @@ class RemoteServerTest : RouteTestBase() {
     }
 
     @Test
+    fun theInstallFilesArePublicAndTheAppIsNot() = withRemote { client ->
+        val public = listOf(
+            "/manifest.webmanifest", "/sw.js", "/offline.html", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
+        )
+        for (path in public) {
+            assertEquals(HttpStatusCode.OK, client.get(path).status, path)
+            assertEquals(HttpStatusCode.OK, client.head(path).status, path)
+        }
+        assertEquals(
+            "application/manifest+json",
+            client.get("/manifest.webmanifest").headers[HttpHeaders.ContentType]?.substringBefore(';'),
+        )
+        assertEquals("no-cache", client.get("/sw.js").headers[HttpHeaders.CacheControl])
+        for (path in listOf("/app.js", "/lib/api.js", "/screens/jobs.js")) {
+            assertEquals(HttpStatusCode.Unauthorized, client.get(path).status, path)
+        }
+    }
+
+    @Test
     fun aLongWhoIsCutTo100() = withRemote { client ->
         val long = "x".repeat(300)
         client.login("bad-pass", who = long).assertError(HttpStatusCode.Unauthorized, "סיסמה שגויה")

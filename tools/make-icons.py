@@ -12,6 +12,9 @@ Outputs, committed so the build needs no Python:
   desktop/src/main/resources/tray-16.png       the cloud, for the tray
   desktop/src/main/resources/tray-32.png
   desktop/src/main/resources/web/favicon.png   64 px, as the .ico's 64 frame
+  desktop/src/main/resources/web/icon-192.png  the phone's install icons (manifest.webmanifest): drawing + BACKUP
+  desktop/src/main/resources/web/icon-512.png
+  desktop/src/main/resources/web/apple-touch-icon.png   180 px, for the iPhone's home screen
 Every icon is white inside a black circle with transparent corners.
 
 Usage: python tools/make-icons.py [--preview out.png]
@@ -28,6 +31,7 @@ LOGO = ICONS / 'source/backup-logo.jpg'
 CLOUD = ICONS / 'source/cloud.jpg'
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 WINDOW_SIZES = [16, 20, 24, 32, 40, 48, 64, 256]
+INSTALL = {'icon-192.png': 192, 'icon-512.png': 512, 'apple-touch-icon.png': 180}
 PAD = 8
 
 
@@ -75,15 +79,18 @@ def make():
     frames = [(small if s < 64 else big).resize((s, s), Image.LANCZOS) for s in SIZES]
     trays = {s: tray.resize((s, s), Image.LANCZOS) for s in (16, 32)}
     window = [tray.resize((s, s), Image.LANCZOS) for s in WINDOW_SIZES]
-    return big, frames, trays, window
+    install = {name: big.resize((s, s), Image.LANCZOS) for name, s in INSTALL.items()}
+    return big, frames, trays, window, install
 
 
-def write(frames, trays, window):
+def write(frames, trays, window, install):
     frames[-1].save(ICONS / 'TGBackup.ico', sizes=[(s, s) for s in SIZES], append_images=frames[:-1])
     window[-1].save(ICONS / 'TGBackup-window.ico', sizes=[(s, s) for s in WINDOW_SIZES], append_images=window[:-1])
     for s, t in trays.items():
         t.save(RES / f'tray-{s}.png')
     frames[SIZES.index(64)].save(RES / 'web/favicon.png')
+    for name, im in install.items():
+        im.save(RES / 'web' / name)
 
 
 def preview(big, frames, trays, out):
@@ -103,8 +110,8 @@ def preview(big, frames, trays, out):
 
 
 if __name__ == '__main__':
-    big, frames, trays, window = make()
-    write(frames, trays, window)
+    big, frames, trays, window, install = make()
+    write(frames, trays, window, install)
     if len(sys.argv) == 3 and sys.argv[1] == '--preview':
         preview(big, frames, trays, sys.argv[2])
     print('ok')

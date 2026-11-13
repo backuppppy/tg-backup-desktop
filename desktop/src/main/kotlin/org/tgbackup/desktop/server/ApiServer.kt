@@ -171,7 +171,10 @@ internal fun isLoopback(address: String): Boolean {
         (a.startsWith("127.") && a.split('.').let { p -> p.size == 4 && p.all { it.toIntOrNull() in 0..255 } })
 }
 
-/** The screens, from classpath `web/`. HTML, JS and CSS are never cached, so a new version shows at once. */
+/**
+ * The screens, from classpath `web/`. HTML, JS (also the service worker `sw.js`), CSS and the manifest are never
+ * cached, so a new version shows at once.
+ */
 private fun Route.webRoutes() {
     staticResources("/", "web", index = "index.html") {
         contentType { url ->
@@ -180,12 +183,14 @@ private fun Route.webRoutes() {
                 "js", "mjs" -> ContentType("text", "javascript").withCharset(Charsets.UTF_8)
                 "css" -> ContentType.Text.CSS.withCharset(Charsets.UTF_8)
                 "json" -> ContentType.Application.Json.withCharset(Charsets.UTF_8)
+                "webmanifest" -> ContentType("application", "manifest+json").withCharset(Charsets.UTF_8)
+                "png" -> ContentType.Image.PNG
                 "svg" -> ContentType.Image.SVG
                 else -> null
             }
         }
         modify { url, call ->
-            if (url.path.substringAfterLast('.', "").lowercase() in setOf("html", "js", "mjs", "css")) {
+            if (url.path.substringAfterLast('.', "").lowercase() in setOf("html", "js", "mjs", "css", "webmanifest")) {
                 call.response.header(HttpHeaders.CacheControl, "no-cache")
             }
         }

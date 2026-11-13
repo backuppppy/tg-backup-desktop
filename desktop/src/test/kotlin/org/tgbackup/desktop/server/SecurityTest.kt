@@ -170,6 +170,20 @@ class SecurityTest {
     }
 
     @Test
+    fun theManifestIsManifestJsonAndTheWorkerIsNoCache() = withServer { client ->
+        val m = client.get("/manifest.webmanifest") { header(HttpHeaders.Cookie, "tgb_session=t1") }
+        assertEquals(HttpStatusCode.OK, m.status)
+        assertEquals("application/manifest+json", m.headers[HttpHeaders.ContentType]?.substringBefore(';'))
+        assertTrue(m.bodyAsText().contains("\"start_url\""), m.bodyAsText())
+        val sw = client.get("/sw.js") { header(HttpHeaders.Cookie, "tgb_session=t1") }
+        assertEquals(HttpStatusCode.OK, sw.status)
+        assertEquals("text/javascript; charset=UTF-8", sw.headers[HttpHeaders.ContentType])
+        assertEquals("no-cache", sw.headers[HttpHeaders.CacheControl])
+        val icon = client.get("/icon-192.png") { header(HttpHeaders.Cookie, "tgb_session=t1") }
+        assertEquals("image/png", icon.headers[HttpHeaders.ContentType])
+    }
+
+    @Test
     fun staticFileNeedsTheCookie() = withServer { client ->
         assertEquals(HttpStatusCode.Unauthorized, client.get("/probe.js").status)
     }
