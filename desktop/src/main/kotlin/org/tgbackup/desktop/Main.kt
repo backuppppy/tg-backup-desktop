@@ -228,7 +228,8 @@ private fun cleanSmokeDir(dataDir: Path, profileDir: Path) {
 
 /**
  * `--smoke` only, against the throw-away data dir: `GET /api/health` (prints `API_OK`), then one dummy account
- * (apiId 1, it never logs in) and one job through the real API, so the Jobs screen shows a card with its buttons.
+ * (apiId 1, it never logs in) and one job through the real API, so the Jobs screen shows a card with its buttons;
+ * then the phone access is switched on ([SmokeRemote]: `REMOTE_STATE <state>`, `SMOKE_PID <pid>`).
  */
 private class SmokeApi(private val server: ApiServer) {
     private val base: String = URI(server.entryUrl()).let { "${it.scheme}://${it.authority}" }
@@ -252,15 +253,30 @@ private class SmokeApi(private val server: ApiServer) {
                 """"accountIds":["$accountId"]}""",
         )
         println("SMOKE_SEEDED account+job")
+        // The phone access on, through the real API: a password, the switch, then the first state other than Off.
+        put("/api/remote/password", """{"password":"smoke-password"}""")
+        put("/api/remote/enabled", """{"enabled":true}""")
+        val remote = SmokeRemote.awaitState({
+            val r = send(HttpRequest.newBuilder(URI("$base/api/remote")).GET(), auth = true)
+            check(r.statusCode() == 200) { "GET /api/remote answered ${r.statusCode()}" }
+            Json.parseToJsonElement(r.body()).jsonObject["state"]!!.jsonPrimitive.content
+        })
+        println(SmokeRemote.line(remote))
+        // The process that serves (after the NativeTmp restart): CI lists its listening sockets.
+        println("SMOKE_PID ${ProcessHandle.current().pid()}")
     }
 
-    private fun post(path: String, json: String) {
+    private fun post(path: String, json: String) = write("POST", path, json)
+
+    private fun put(path: String, json: String) = write("PUT", path, json)
+
+    private fun write(method: String, path: String, json: String) {
         val r = send(
             HttpRequest.newBuilder(URI("$base$path")).header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(json)),
+                .method(method, HttpRequest.BodyPublishers.ofString(json)),
             auth = true,
         )
-        check(r.statusCode() == 200) { "POST $path answered ${r.statusCode()}" }
+        check(r.statusCode() == 200) { "$method $path answered ${r.statusCode()}" }
     }
 
     private fun send(b: HttpRequest.Builder, auth: Boolean): HttpResponse<String> {

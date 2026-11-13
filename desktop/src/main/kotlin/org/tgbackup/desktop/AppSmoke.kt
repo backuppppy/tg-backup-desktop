@@ -133,3 +133,29 @@ class AppSmoke(val enabled: Boolean) {
         const val SHUTDOWN_GRACE_MS = 20_000L
     }
 }
+
+/**
+ * `--smoke`, after the seed: the phone access is switched on (with a password) and the smoke waits for the first
+ * state other than Off. CI has no Tailscale on that runner, so it expects `REMOTE_STATE NotInstalled`, and checks
+ * that the process (`SMOKE_PID`) still listens on loopback only.
+ */
+object SmokeRemote {
+    const val WAIT_MS = 15_000L
+    const val STEP_MS = 250L
+
+    /** Reads the state until it is not `Off`, at most [WAIT_MS]; `Off` when it never changed. */
+    fun awaitState(
+        read: () -> String,
+        now: () -> Long = System::currentTimeMillis,
+        sleep: (Long) -> Unit = Thread::sleep,
+    ): String {
+        val until = now() + WAIT_MS
+        while (true) {
+            val state = read()
+            if (state != "Off" || now() >= until) return state
+            sleep(STEP_MS)
+        }
+    }
+
+    fun line(state: String): String = "REMOTE_STATE $state"
+}

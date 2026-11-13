@@ -418,6 +418,17 @@ jobs:
             if ((Test-Path $out) -and (Select-String -Path $out -Pattern 'PAGE_LOADED' -Quiet)) { $loaded = $true; break }
             Start-Sleep -Milliseconds 250
           }
+          # While the window is held (the phone access already switched on by the smoke): every socket the serving
+          # process (SMOKE_PID, the one after the NativeTmp restart) listens on, read before the screenshots.
+          $listen = @()
+          $smokePid = 0
+          if ($loaded) {
+            $pidLine = Select-String -Path $out -Pattern '^SMOKE_PID (\d+)' | Select-Object -First 1
+            if ($pidLine) {
+              $smokePid = [int]$pidLine.Matches[0].Groups[1].Value
+              $listen = @(Get-NetTCPConnection -State Listen -OwningProcess $smokePid -ErrorAction SilentlyContinue)
+            }
+          }
           if ($loaded -and $winApi) {
             Start-Sleep -Milliseconds 1500
             try {
@@ -449,6 +460,20 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
           if (Select-String -Path $out -Pattern '^PAGE_FAIL' -Quiet) { Write-Error "PAGE_FAIL printed"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^API_OK' -Quiet)) { Write-Error "API_OK not printed"; exit 1 }
+          # The phone access was switched on; this runner has no Tailscale (it is installed only in the
+          # tailscale-cli job), so the state is NotInstalled and the program still listens on loopback only.
+          $remoteLine = Select-String -Path $out -Pattern '^REMOTE_STATE (\S+)' | Select-Object -First 1
+          if (-not $remoteLine) { Write-Error "REMOTE_STATE not printed"; exit 1 }
+          Write-Host "REMOTE_STATE_SEEN $($remoteLine.Matches[0].Groups[1].Value)"
+          if ($remoteLine.Matches[0].Groups[1].Value -ne 'NotInstalled') { Write-Error "expected REMOTE_STATE NotInstalled, got '$($remoteLine.Line)'"; exit 1 }
+          if ($smokePid -eq 0) { Write-Error "SMOKE_PID not printed"; exit 1 }
+          foreach ($c in $listen) { Write-Host "LISTEN pid=$smokePid $($c.LocalAddress):$($c.LocalPort)" }
+          if ($listen.Count -eq 0) { Write-Error "process $smokePid listens on nothing (the window's server must be there)"; exit 1 }
+          $outside = @($listen | Where-Object { $_.LocalAddress -ne '127.0.0.1' -and $_.LocalAddress -ne '::1' })
+          if ($outside.Count -gt 0) {
+            Write-Error "listening outside loopback: $(($outside | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')"; exit 1
+          }
+          Write-Host "LISTEN_LOOPBACK_ONLY yes ($($listen.Count) socket(s))"
           if (-not (Select-String -Path $out -Pattern '^WINDOW_ICON ok' -Quiet)) { Write-Error "the window icon was not set"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^WINDOW_APPID ok' -Quiet)) { Write-Error "the window's AppUserModel properties were not set"; exit 1 }
           if (-not (Select-String -Path $out -Pattern '^WINDOW_INSIDE yes' -Quiet)) {
@@ -621,3 +646,72 @@ jobs:
           path: desktop/build/spike/${{ matrix.candidate }}/installer/TGBackup-Setup.exe
           if-no-files-found: warn
           compression-level: 0
+  tailscale-cli:
+    # The flags RemoteAccessController's CLI calls use (Tailscale.kt: `status --json`, `serve status --json`,
+    # `serve --bg --https=443 http://127.0.0.1:47800`, `serve --https=443 off`) checked against a real tailscale.exe.
+    # A job of its own: the smoke in windows-package must run on a runner WITHOUT Tailscale (REMOTE_STATE NotInstalled).
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install Tailscale
+        id: install
+        # Only the install may fail without failing the job (a package source down): then the check is skipped
+        # with a warning. A missing flag always fails.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+          if (-not (Test-Path $ts) -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+            winget install --id tailscale.tailscale -e --silent --accept-source-agreements --accept-package-agreements
+            Write-Host "TAILSCALE_INSTALL winget exit=$LASTEXITCODE"
+          }
+          if (-not (Test-Path $ts)) {
+            choco install tailscale -y --no-progress
+            Write-Host "TAILSCALE_INSTALL choco exit=$LASTEXITCODE"
+          }
+          if (-not (Test-Path $ts)) { Write-Error "tailscale.exe not found at $ts after winget and choco"; exit 1 }
+          Write-Host "TAILSCALE_EXE $ts"
+          exit 0
+      - name: Tailscale CLI has the flags the program uses
+        if: steps.install.outcome == 'success'
+        shell: pwsh
+        run: |
+          $ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+          # Runs tailscale with $a (30 s at most) and returns stdout+stderr: help text may go to either.
+          function Invoke-Ts([string]$label, [string[]]$a) {
+            $o = Join-Path $env:RUNNER_TEMP "ts-$label.out"; $e = Join-Path $env:RUNNER_TEMP "ts-$label.err"
+            $p = Start-Process -FilePath $ts -ArgumentList $a -RedirectStandardOutput $o -RedirectStandardError $e -NoNewWindow -PassThru
+            $null = $p.Handle
+            if (-not $p.WaitForExit(30000)) { Stop-Process -Id $p.Id -Force; throw "tailscale $($a -join ' ') hung" }
+            $text = ((Get-Content -Raw $o) + "`n" + (Get-Content -Raw $e))
+            Write-Host "--- tailscale $($a -join ' ') (exit $($p.ExitCode))"
+            Write-Host $text
+            return $text
+          }
+          $version = Invoke-Ts 'version' @('version')
+          Write-Host "TAILSCALE_VERSION $(($version -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1).Trim())"
+          $serve = Invoke-Ts 'serve-help' @('serve', '--help')
+          $serveStatus = Invoke-Ts 'serve-status-help' @('serve', 'status', '--help')
+          $status = Invoke-Ts 'status-help' @('status', '--help')
+          # Each flag as the help lists it (`--bg` or `-bg`), not merely the word.
+          $checks = @(
+            @{ where = 'serve --help'; text = $serve; flag = 'bg' },
+            @{ where = 'serve --help'; text = $serve; flag = 'https' },
+            @{ where = 'serve status --help'; text = $serveStatus; flag = 'json' },
+            @{ where = 'status --help'; text = $status; flag = 'json' }
+          )
+          $missing = @()
+          foreach ($c in $checks) {
+            $found = $c.text -match "(^|\s)--?$($c.flag)(\b|=)"
+            Write-Host "TAILSCALE_FLAG $($c.where) --$($c.flag) $(if ($found) { 'yes' } else { 'NO' })"
+            if (-not $found) { $missing += "--$($c.flag) in $($c.where)" }
+          }
+          # Evidence only (not used by the program today): a confirmation flag, and `off` named in the serve help.
+          Write-Host "TAILSCALE_INFO serve --yes $(if ($serve -match '(^|\s)--?yes(\b|=)') { 'listed' } else { 'not listed' })"
+          Write-Host "TAILSCALE_INFO serve off $(if ($serve -match '\boff\b') { 'mentioned' } else { 'not mentioned' })"
+          if ($missing.Count -gt 0) { Write-Error "tailscale CLI lacks: $($missing -join '; ')"; exit 1 }
+          Write-Host "TAILSCALE_FLAGS_OK"
+      - name: Tailscale could not be installed
+        if: steps.install.outcome != 'success'
+        shell: pwsh
+        run: Write-Host "::warning::Tailscale could not be installed on the runner; the CLI flag check did not run"
