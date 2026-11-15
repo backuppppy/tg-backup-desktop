@@ -3,6 +3,7 @@ package org.tgbackup.desktop
 import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Structure
+import com.sun.jna.ptr.IntByReference
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinUser
@@ -67,6 +68,14 @@ internal class WindowsIdleClock(private val settings: WindowsPowerSettings) : Id
         val onAc = !power.GetSystemPowerStatus(status) || status.ACLineStatus.toInt() != 0
         return settings.readVideoIdle(onAc).coerceAtLeast(0) * 1000L
     }
+
+    /** QUNS_BUSY (3, a full-screen app), QUNS_RUNNING_D3D_FULL_SCREEN (4) or QUNS_PRESENTATION_MODE (5). */
+    override fun presenting(): Boolean = runCatching {
+        val state = IntByReference()
+        shell.SHQueryUserNotificationState(state) == 0 && state.value in 3..5
+    }.getOrDefault(false)
+
+    private val shell: Shell32Quns by lazy { Native.load("shell32", Shell32Quns::class.java) }
 }
 
 /** `SYSTEM_POWER_STATUS` (not in this jna-platform). */
@@ -85,4 +94,31 @@ internal class PowerStatus : Structure() {
 @Suppress("FunctionName")
 private interface PowerStatusKernel32 : Library {
     fun GetSystemPowerStatus(status: PowerStatus): Boolean
+}
+
+@Suppress("FunctionName")
+private interface Shell32Quns : Library {
+    fun SHQueryUserNotificationState(state: IntByReference): Int
+}
+
+/**
+ * Whether this PC uses Modern Standby (S0 low power idle), from `SYSTEM_POWER_CAPABILITIES`: `AoAc` (byte 20) is set,
+ * or S3 (byte 5) is missing. Unknown counts as yes (keeping the display on is the safe side).
+ */
+internal fun isModernStandby(): Boolean {
+    val buf = com.sun.jna.Memory(SYSTEM_POWER_CAPABILITIES_SIZE.toLong()).apply { clear() }
+    val rc = Native.load("powrprof", PowrProfCaps::class.java)
+        .CallNtPowerInformation(SYSTEM_POWER_CAPABILITIES, null, 0, buf, SYSTEM_POWER_CAPABILITIES_SIZE)
+    if (rc != 0) return true
+    return buf.getByte(AOAC_OFFSET).toInt() != 0 || buf.getByte(S3_OFFSET).toInt() == 0
+}
+
+private const val SYSTEM_POWER_CAPABILITIES = 4
+private const val SYSTEM_POWER_CAPABILITIES_SIZE = 76
+private const val S3_OFFSET = 5L
+private const val AOAC_OFFSET = 20L
+
+@Suppress("FunctionName")
+private interface PowrProfCaps : Library {
+    fun CallNtPowerInformation(level: Int, input: com.sun.jna.Pointer?, inputLength: Int, output: com.sun.jna.Pointer, outputLength: Int): Int
 }

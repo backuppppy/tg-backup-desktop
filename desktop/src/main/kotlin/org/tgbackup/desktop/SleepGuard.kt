@@ -26,6 +26,9 @@ fun interface PowerRequests {
     /** Every couple of seconds: dims the panel after the user's display timeout while [active], restores on input. */
     fun idleTick(active: Boolean) {}
 
+    /** The panel is dimmed now (the caller then checks for input more often). */
+    val isDimmed: Boolean get() = false
+
     companion object {
         /**
          * Windows: power requests plus, when [sleepOverride], the temporary "sleep after: never" saved in [dataDir]
@@ -39,9 +42,11 @@ fun interface PowerRequests {
         ): PowerRequests =
             if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) {
                 WindowsPowerSettings().let { settings ->
+                    // Only a Modern Standby PC sleeps when its screen turns off: an S3 PC keeps its screen's own timeout.
+                    val modernStandby = runCatching { isModernStandby() }.getOrDefault(true)
                     WindowsPowerRequests(
                         if (sleepOverride) SleepOverride(File(dataDir, SleepOverride.FILE_NAME), settings, log, warn) else null,
-                        if (sleepOverride) {
+                        if (sleepOverride && modernStandby) {
                             ScreenDimmer(File(dataDir, ScreenDimmer.FILE_NAME), WmiBrightness(), WindowsIdleClock(settings), log)
                         } else {
                             null
@@ -101,8 +106,12 @@ class SleepGuard(private val power: PowerRequests) {
  */
 internal class WindowsPowerRequests(
     private val override: SleepOverride?,
+    /** Present on a Modern Standby PC: then the display is kept on too, and this dims it. */
     private val dimmer: ScreenDimmer? = null,
 ) : PowerRequests {
+    private val requests = if (dimmer != null) REQUESTS else REQUESTS - POWER_REQUEST_DISPLAY_REQUIRED
+    private val awakeState = ES_CONTINUOUS or ES_SYSTEM_REQUIRED or (if (dimmer != null) ES_DISPLAY_REQUIRED else 0)
+
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "tgb-power").apply { isDaemon = true }
     }
@@ -117,13 +126,14 @@ internal class WindowsPowerRequests(
 
     override fun keepAwake(on: Boolean) {
         // The brightness comes back before the display request goes (PowerShell: off the power thread's 5 s bound).
-        if (!on) dimmer?.restore()
+        // A failed restore never keeps the requests or "sleep after: never": they are cleared, then it is thrown.
+        val restored = if (on) Result.success(Unit) else runCatching { dimmer?.restore(); Unit }
         onPowerThread {
             if (on) {
                 val h = request()
                 if (!requestsSet) {
                     val done = mutableListOf<Int>()
-                    for (type in REQUESTS) {
+                    for (type in requests) {
                         if (!kernel32.PowerSetRequest(h, type)) {
                             val error = Native.getLastError()
                             done.forEach { kernel32.PowerClearRequest(h, it) }
@@ -133,11 +143,11 @@ internal class WindowsPowerRequests(
                     }
                     requestsSet = true
                 }
-                executionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED or ES_DISPLAY_REQUIRED)
+                executionState(awakeState)
                 override?.hold()
             } else {
                 request?.takeIf { requestsSet }?.let { h ->
-                    val failed = REQUESTS.mapNotNull { type ->
+                    val failed = requests.mapNotNull { type ->
                         if (kernel32.PowerClearRequest(h, type)) null else "${REQUEST_NAMES.getValue(type)}: error ${Native.getLastError()}"
                     }
                     requestsSet = false
@@ -147,6 +157,7 @@ internal class WindowsPowerRequests(
                 override?.release()
             }
         }
+        restored.getOrThrow()
     }
 
     /** The sleep settings and the brightness are both put back; neither stops the other. */
@@ -159,6 +170,8 @@ internal class WindowsPowerRequests(
     override fun idleTick(active: Boolean) {
         dimmer?.tick(active)
     }
+
+    override val isDimmed: Boolean get() = dimmer?.isDimmed == true
 
     /** The one power request of this run, created on first use. */
     private fun request(): HANDLE {

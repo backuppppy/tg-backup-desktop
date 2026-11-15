@@ -147,8 +147,9 @@ class DesktopApp(
         // Dims the panel when nobody uses the PC while it is kept awake (the display stays on: see WindowsPowerRequests).
         scope.launch(Dispatchers.IO) {
             while (true) {
-                delay(2_000)
-                runCatching { power.idleTick(sleepGuard.state == true) }.onFailure { powerFailed(it) }
+                // Dimmed: input is checked 8 times a second, so a touch brings the screen back at once.
+                delay(if (power.isDimmed) 250 else 2_000)
+                runCatching { power.idleTick(sleepGuard.state == true) }.onFailure { brightnessFailed(it) }
             }
         }
 
@@ -226,6 +227,16 @@ class DesktopApp(
                 if (on != null) log.info(if (on) "מניעת שינה פעילה" else "מניעת שינה שוחררה")
             }
             .onFailure { powerFailed(it) }
+    }
+
+    @Volatile private var lastBrightnessError: String? = null
+
+    /** A brightness call failed: logged once per distinct error (the dimmer itself waits a minute before retrying). */
+    private fun brightnessFailed(e: Throwable) {
+        val msg = e.message ?: e::class.java.simpleName
+        if (msg == lastBrightnessError) return
+        lastBrightnessError = msg
+        log.warn("שינוי בהירות המסך נכשל: $msg")
     }
 
     private fun powerFailed(e: Throwable) {
