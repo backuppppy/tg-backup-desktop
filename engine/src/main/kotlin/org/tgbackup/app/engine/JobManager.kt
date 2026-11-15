@@ -71,6 +71,8 @@ class JobManager(
     private val latestTick: Long = 3_600_000,
     /** The wall clock of the run time; a test moves it by hand. */
     private val wallClock: () -> Long = System::currentTimeMillis,
+    /** The most of one clock segment that counts as run time: anything longer is the PC asleep. */
+    private val maxSegment: Long = MAX_TICKS_PER_SEGMENT * runTick,
     private val exports: () -> ExportManager,
 ) {
     private val _statuses = MutableStateFlow<Map<String, JobStatus>>(emptyMap())
@@ -129,7 +131,7 @@ class JobManager(
         val now = wallClock()
         // The clock writes every runTick, so a longer segment means the PC slept (or the program was frozen)
         // in between: that time is not run time. At most two ticks of it count (the part before the sleep is unknown).
-        val counted = (now - seg.since).coerceIn(0, MAX_TICKS_PER_SEGMENT * runTick)
+        val counted = (now - seg.since).coerceIn(0, maxSegment)
         store.saveProgress(jobId) { it.copy(runMillis = it.runMillis + counted) }
         if (goOn) runSegments[jobId] = Segment(seg.run, now) else runSegments.remove(jobId)
         val total = store.progress(jobId).runMillis

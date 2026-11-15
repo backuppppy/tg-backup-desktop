@@ -36,7 +36,9 @@ class JobManagerTest {
     private fun manager(store: Store, dir: File, latestTick: Long = 3_600_000): JobManager {
         val log = LogBus(dir)
         // No account is configured, so no job reaches the runner and exports is never invoked.
-        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50, latestTick = latestTick) { error("unused") }
+        // A slow CI machine can miss a 50 ms tick, so these real-time tests do not cap a segment at two ticks
+        // (that cap is tested with a hand-moved clock).
+        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50, latestTick = latestTick, maxSegment = 60_000) { error("unused") }
     }
 
     private fun waitUntil(what: String, timeoutMs: Long = 5_000, cond: () -> Boolean) {
