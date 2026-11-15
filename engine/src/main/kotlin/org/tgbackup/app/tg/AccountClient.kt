@@ -22,6 +22,7 @@ import dev.g000sha256.tdl.dto.File as TdFile
 import dev.g000sha256.tdl.dto.InputMessageContent
 import dev.g000sha256.tdl.dto.Message
 import dev.g000sha256.tdl.dto.UpdateAuthorizationState
+import dev.g000sha256.tdl.dto.UpdateChatHasProtectedContent
 import dev.g000sha256.tdl.dto.UpdateMessageSendFailed
 import dev.g000sha256.tdl.dto.UpdateMessageSendSucceeded
 import kotlinx.coroutines.CompletableDeferred
@@ -31,7 +32,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -60,6 +64,9 @@ sealed class SendOutcome {
     data class Failed(val code: Int, val message: String, val retryAfterSec: Int) : SendOutcome()
 }
 
+/** Telegram's notice that [chatId]'s forwarding protection is now [isProtected]. */
+data class ProtectionNotice(val chatId: Long, val isProtected: Boolean)
+
 fun <T> TdlResult<T>.getOrNull(): T? = (this as? TdlResult.Success)?.result
 fun TdlResult<*>.errorText(): String? = (this as? TdlResult.Failure)?.let { "${it.code}: ${it.message}" }
 
@@ -85,6 +92,11 @@ class AccountClient(
     private val earlySends = ConcurrentHashMap<Long, SendOutcome>()
     private val chatCache = ConcurrentHashMap<String, Chat>()
 
+    private val _protectionNotices = MutableSharedFlow<ProtectionNotice>(extraBufferCapacity = 64)
+
+    /** Every change of a chat's forwarding protection, as TDLib reports it (a running job follows its source's). */
+    val protectionNotices: SharedFlow<ProtectionNotice> = _protectionNotices.asSharedFlow()
+
     val tag: String get() = account.name.ifBlank { account.phone }
 
     fun start() {
@@ -93,6 +105,8 @@ class AccountClient(
             client.allUpdates.collect { update ->
                 when (update) {
                     is UpdateAuthorizationState -> onAuthState(update.authorizationState)
+                    is UpdateChatHasProtectedContent ->
+                        _protectionNotices.tryEmit(ProtectionNotice(update.chatId, update.hasProtectedContent))
                     is UpdateMessageSendSucceeded -> completeSend(update.oldMessageId, SendOutcome.Sent(update.message.id))
                     is UpdateMessageSendFailed -> completeSend(
                         update.oldMessageId,
@@ -195,7 +209,12 @@ class AccountClient(
      */
     suspend fun resolveChat(raw: String): Result<Chat> {
         val input = raw.trim()
-        chatCache[input]?.let { return Result.success(it) }
+        // The cache keeps how [raw] maps to a chat; the chat itself is read again, so its flags (protection) are current.
+        chatCache[input]?.let { cached ->
+            val fresh = client.getChat(cached.id).getOrNull() ?: cached
+            chatCache[input] = fresh
+            return Result.success(fresh)
+        }
         val chat = findChat(input)
         if (chat != null) chatCache[input] = chat
         return chat?.let { Result.success(it) }

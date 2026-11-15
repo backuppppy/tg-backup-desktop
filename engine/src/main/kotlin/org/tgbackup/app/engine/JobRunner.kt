@@ -10,6 +10,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -83,7 +85,7 @@ class JobRunner(
     private val clearStartFrom: () -> Unit,
 ) {
     private val tag = job.name.ifBlank { job.id }
-    private var protected = false
+    private val protection = SourceProtection(false)
     private val limiters = accounts.associate { it.account.id to RateLimiter(job.perMinuteLimit) }
 
     private class Pair2(val source: Chat, val target: Chat)
@@ -105,9 +107,22 @@ class JobRunner(
         // An opened chat keeps its loaded messages in TDLib memory, which copying relies on.
         accounts.forEachIndexed { i, ac -> ac.client.openChat(chats[i].source.id) }
         val source = chats[0].source
-        protected = source.hasProtectedContent
-        report.sourceInfo(source.id, source.title, protected)
-        if (protected) log.warn("[$tag] ערוץ המקור מוגן — מצב הורדה והעלאה מחדש")
+        protection.set(source.hasProtectedContent)
+        report.sourceInfo(source.id, source.title, protection.isProtected)
+        if (protection.isProtected) log.warn("[$tag] ערוץ המקור מוגן — מצב הורדה והעלאה מחדש")
+        // Telegram's notices while the job runs: protection removed → server-side copy, added → download + upload.
+        val watch = launch {
+            accounts[0].protectionNotices.collect { n ->
+                if (protection.onNotice(n.chatId, source.id, n.isProtected)) {
+                    report.sourceInfo(source.id, source.title, n.isProtected)
+                    if (n.isProtected) {
+                        log.warn("[$tag] ערוץ המקור הפך למוגן — עובר להורדה והעלאה")
+                    } else {
+                        log.info("[$tag] ערוץ המקור כבר לא מוגן — עובר להעתקה רגילה")
+                    }
+                }
+            }
+        }
 
         if (job.startFromId > 0) {
             store.saveProgress(job.id) { Progress(lastId = job.startFromId - 1).withTotalsOf(it) }
@@ -120,7 +135,11 @@ class JobRunner(
             "[$tag] פעיל: ${source.title} → ${chats[0].target.title} | ${job.mediaType.label} | " +
                 "${accounts.size} חשבונות | ${if (fast) "מהיר" else "מסודר"}",
         )
-        if (fast) runFast(chats) else runOrdered(chats)
+        try {
+            if (fast) runFast(chats) else runOrdered(chats)
+        } finally {
+            watch.cancel()
+        }
     }
 
     private suspend fun awaitNotPaused() {
@@ -176,7 +195,7 @@ class JobRunner(
 
             val wanted = batch.filter { it.content.matches(job.mediaType) && !isArabicSkipped(it) }
             val prefetch = HashMap<Long, Deferred<Result<Copier.Downloaded>>>()
-            val window = if (protected) maxOf(2, accounts.size * 2) else 0
+            val window = if (protection.isProtected) maxOf(2, accounts.size * 2) else 0
 
             for (msg in batch) {
                 ensureActive()
@@ -216,7 +235,7 @@ class JobRunner(
         }
     }
 
-    private fun needsUpload(m: Message) = (protected || !m.canBeSaved) && m.content.mainFile() != null
+    private fun needsUpload(m: Message) = (protection.isProtected || !m.canBeSaved) && m.content.mainFile() != null
 
     /**
      * Downloads the main file of [m] (which was read by [owner]) using account [ac].
@@ -314,6 +333,7 @@ class JobRunner(
 
     // ── Delivery of one message, with FloodWait handled by retrying the same message. ──
 
+    @OptIn(ExperimentalCoroutinesApi::class) // Deferred.getCompleted, for a prefetch that is not used
     private suspend fun deliver(
         sender: AccountClient,
         target: Long,
@@ -331,7 +351,7 @@ class JobRunner(
             while (true) {
                 awaitNotPaused()
                 val upload = needsUpload(msg) || (forceUpload && msg.content.mainFile() != null)
-                if (protected && !upload && msg.content !is MessageText) {
+                if (protection.isProtected && !upload && msg.content !is MessageText) {
                     log.warn("[$who] הודעה $sid מסוג שלא ניתן להעתיק מערוץ מוגן — דילוג")
                     return false
                 }
@@ -377,7 +397,7 @@ class JobRunner(
                         report.copied()
                         report.delivered(target, r.messageId.serverId())
                         log.success("[$who] הועתקה הודעה $sid")
-                        if (!protected) delay(Random.nextLong(1_400, 3_800))
+                        if (!protection.isProtected) delay(Random.nextLong(1_400, 3_800))
                         return true
                     }
                     is SendOutcome.Failed -> {
@@ -390,7 +410,7 @@ class JobRunner(
                         if (!upload && msg.content.mainFile() != null) {
                             forceUpload = true
                             if (Copier.isProtectedError(r.message)) {
-                                protected = true
+                                protection.set(true)
                                 log.warn("[$who] זוהה ערוץ מוגן — עובר למצב הורדה והעלאה")
                             } else {
                                 log.warn("[$who] העתקה ישירה של $sid נכשלה (${r.message}) — מנסה בהורדה והעלאה")
@@ -417,6 +437,13 @@ class JobRunner(
             }
         } finally {
             downloaded?.let { runCatching { it.owner.deleteLocal(it.fileId) } }
+            // Downloaded ahead while the source was protected, then copied server-side: drop it and its file.
+            if (downloaded == null && prefetched != null) {
+                prefetched.cancel()
+                if (prefetched.isCompleted && !prefetched.isCancelled) {
+                    prefetched.getCompleted().getOrNull()?.let { d -> runCatching { d.owner.deleteLocal(d.fileId) } }
+                }
+            }
             uploadCopy?.parentFile?.deleteRecursively()
         }
     }
