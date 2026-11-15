@@ -245,3 +245,18 @@ test('only offline.html is cached; /api/events and the app files are never answe
   await context.setOffline(false);
   expect(results).toEqual({ '/api/events': 'failed', '/api/state': 'failed', '/app.js': 'failed', '/app.css': 'failed' });
 });
+
+test('the login page goes straight to the app when the phone is still logged in', async ({ page }) => {
+  await login(page);
+  // As when the installed app opens on the login page: the cookie is there, so no password is asked.
+  await page.goto('/login.html');
+  await expect(page).not.toHaveURL(/login/);
+  await expect(page.locator('#title')).toContainText('TG Backup  v');
+});
+
+test('the login page stays when the phone is logged out', async ({ page }) => {
+  await page.goto('/login.html');
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/\/login\.html$/);
+  await expect(page.getByLabel('סיסמה')).toBeVisible();
+});

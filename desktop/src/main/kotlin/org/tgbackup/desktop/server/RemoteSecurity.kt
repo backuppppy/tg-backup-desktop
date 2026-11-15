@@ -196,7 +196,10 @@ private fun remoteCookie(value: String, maxAge: Int, secure: Boolean): String = 
         path = "/",
         secure = secure,
         httpOnly = true,
-        extensions = mapOf("SameSite" to "Strict"),
+        // Lax, not Strict: Android Chrome opens the installed app from the home screen as a cross-site navigation,
+        // which would leave a Strict cookie behind and ask for the password every time. Writes stay guarded by the
+        // Origin check above, and Lax never sends the cookie on another site's POST.
+        extensions = mapOf("SameSite" to "Lax"),
     ),
 )
 

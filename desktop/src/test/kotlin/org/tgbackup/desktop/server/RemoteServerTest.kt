@@ -111,14 +111,16 @@ class RemoteServerTest : RouteTestBase() {
     }
 
     @Test
-    fun loginSetsASecureHttpOnlyStrictCookie() = withRemote { client ->
+    fun loginSetsASecureHttpOnlyLaxCookie() = withRemote { client ->
         val r = client.login()
         r.assertOk()
         val set = r.headers.getAll(HttpHeaders.SetCookie).orEmpty().single { it.startsWith("$REMOTE_COOKIE=") }
         val parts = set.split(';').map { it.trim() }
         assertTrue("Secure" in parts, set)
         assertTrue("HttpOnly" in parts, set)
-        assertTrue("SameSite=Strict" in parts, set)
+        // Lax, not Strict: Android Chrome opens the installed app from the home screen as a cross-site navigation,
+        // which leaves a Strict cookie behind and asks for the password every time. Origin checks guard the writes.
+        assertTrue("SameSite=Lax" in parts, set)
         assertTrue("Max-Age=315360000" in parts, set)
         assertTrue("Path=/" in parts, set)
         assertEquals(64, r.session().length)

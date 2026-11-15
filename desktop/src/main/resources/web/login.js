@@ -41,5 +41,12 @@ form.addEventListener('submit', async (e) => {
 
 field.focus();
 
+// Still logged in (the installed app may open here): a same-origin request carries the cookie, so go to the app.
+fetch('/api/state', { cache: 'no-store' })
+  .then((res) => {
+    if (res.ok) location.replace('/');
+  })
+  .catch(() => {});
+
 // The phone's offline page (sw.js): only on the phone's server, which is the only one with this page.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
