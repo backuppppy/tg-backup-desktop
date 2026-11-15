@@ -4,7 +4,7 @@
 import { test, expect } from '@playwright/test';
 
 const AUTOSTART = 'הפעלה עם Windows (בלי חלון, ליד השעון)';
-const KEEP_AWAKE = 'מניעת שינה בזמן שמשימה או ייצוא רצים (המסך ממשיך להיכבות)';
+const KEEP_AWAKE = 'מניעת שינה בזמן שמשימה או ייצוא רצים (המסך מוחשך כשלא נוגעים במחשב)';
 
 /** The two background switches (the prefs also hold the phone access switch, tested below). */
 async function prefs(page) {

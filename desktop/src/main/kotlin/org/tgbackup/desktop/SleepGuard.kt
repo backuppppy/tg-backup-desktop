@@ -23,6 +23,9 @@ fun interface PowerRequests {
     /** At launch: puts back what a crashed run left changed (see [SleepOverride.recover]). True when it did. */
     fun recover(): Boolean = false
 
+    /** Every couple of seconds: dims the panel after the user's display timeout while [active], restores on input. */
+    fun idleTick(active: Boolean) {}
+
     companion object {
         /**
          * Windows: power requests plus, when [sleepOverride], the temporary "sleep after: never" saved in [dataDir]
@@ -35,9 +38,16 @@ fun interface PowerRequests {
             warn: (String) -> Unit = log,
         ): PowerRequests =
             if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) {
-                WindowsPowerRequests(
-                    if (sleepOverride) SleepOverride(File(dataDir, SleepOverride.FILE_NAME), WindowsPowerSettings(), log, warn) else null,
-                )
+                WindowsPowerSettings().let { settings ->
+                    WindowsPowerRequests(
+                        if (sleepOverride) SleepOverride(File(dataDir, SleepOverride.FILE_NAME), settings, log, warn) else null,
+                        if (sleepOverride) {
+                            ScreenDimmer(File(dataDir, ScreenDimmer.FILE_NAME), WmiBrightness(), WindowsIdleClock(settings), log)
+                        } else {
+                            null
+                        },
+                    )
+                }
             } else {
                 PowerRequests { }
             }
@@ -83,12 +93,16 @@ class SleepGuard(private val power: PowerRequests) {
 }
 
 /**
- * Power requests with a reason (`PowerCreateRequest`, shown by `powercfg /requests`): SystemRequired and
- * ExecutionRequired, never DisplayRequired, so the screen still turns off. Also `SetThreadExecutionState`, which is
+ * Power requests with a reason (`PowerCreateRequest`, shown by `powercfg /requests`): SystemRequired,
+ * ExecutionRequired and DisplayRequired. A Modern Standby PC sleeps within seconds of its screen turning off, whatever
+ * the other requests say, so the display is kept on and [dimmer] darkens the panel when nobody uses the PC. Also `SetThreadExecutionState`, which is
  * per thread, so every call runs on one dedicated daemon thread. Then [override] (Modern Standby PCs sleep despite
  * the requests): held while on, released when off. A failed call throws (with `GetLastError`); [SleepGuard] retries.
  */
-internal class WindowsPowerRequests(private val override: SleepOverride?) : PowerRequests {
+internal class WindowsPowerRequests(
+    private val override: SleepOverride?,
+    private val dimmer: ScreenDimmer? = null,
+) : PowerRequests {
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "tgb-power").apply { isDaemon = true }
     }
@@ -101,36 +115,50 @@ internal class WindowsPowerRequests(private val override: SleepOverride?) : Powe
     /** Whether our requests are set (PowerSetRequest counts: each set needs exactly one clear). */
     private var requestsSet = false
 
-    override fun keepAwake(on: Boolean): Unit = onPowerThread {
-        if (on) {
-            val h = request()
-            if (!requestsSet) {
-                win("PowerSetRequest(SystemRequired)", kernel32.PowerSetRequest(h, POWER_REQUEST_SYSTEM_REQUIRED))
-                if (!kernel32.PowerSetRequest(h, POWER_REQUEST_EXECUTION_REQUIRED)) {
-                    val error = Native.getLastError()
-                    kernel32.PowerClearRequest(h, POWER_REQUEST_SYSTEM_REQUIRED)
-                    throw IllegalStateException("PowerSetRequest(ExecutionRequired): error $error")
+    override fun keepAwake(on: Boolean) {
+        // The brightness comes back before the display request goes (PowerShell: off the power thread's 5 s bound).
+        if (!on) dimmer?.restore()
+        onPowerThread {
+            if (on) {
+                val h = request()
+                if (!requestsSet) {
+                    val done = mutableListOf<Int>()
+                    for (type in REQUESTS) {
+                        if (!kernel32.PowerSetRequest(h, type)) {
+                            val error = Native.getLastError()
+                            done.forEach { kernel32.PowerClearRequest(h, it) }
+                            throw IllegalStateException("PowerSetRequest(${REQUEST_NAMES.getValue(type)}): error $error")
+                        }
+                        done += type
+                    }
+                    requestsSet = true
                 }
-                requestsSet = true
+                executionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED or ES_DISPLAY_REQUIRED)
+                override?.hold()
+            } else {
+                request?.takeIf { requestsSet }?.let { h ->
+                    val failed = REQUESTS.mapNotNull { type ->
+                        if (kernel32.PowerClearRequest(h, type)) null else "${REQUEST_NAMES.getValue(type)}: error ${Native.getLastError()}"
+                    }
+                    requestsSet = false
+                    check(failed.isEmpty()) { "PowerClearRequest(${failed.joinToString()})" }
+                }
+                executionState(ES_CONTINUOUS)
+                override?.release()
             }
-            executionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED)
-            override?.hold()
-        } else {
-            request?.takeIf { requestsSet }?.let { h ->
-                val system = kernel32.PowerClearRequest(h, POWER_REQUEST_SYSTEM_REQUIRED)
-                val systemError = Native.getLastError()
-                val execution = kernel32.PowerClearRequest(h, POWER_REQUEST_EXECUTION_REQUIRED)
-                val executionError = Native.getLastError()
-                requestsSet = false
-                check(system) { "PowerClearRequest(SystemRequired): error $systemError" }
-                check(execution) { "PowerClearRequest(ExecutionRequired): error $executionError" }
-            }
-            executionState(ES_CONTINUOUS)
-            override?.release()
         }
     }
 
-    override fun recover(): Boolean = onPowerThread { override?.recover() ?: false }
+    /** The sleep settings and the brightness are both put back; neither stops the other. */
+    override fun recover(): Boolean {
+        val dimmed = runCatching { dimmer?.recover() ?: false }
+        val sleep = onPowerThread { override?.recover() ?: false }
+        return dimmed.getOrThrow() or sleep
+    }
+
+    override fun idleTick(active: Boolean) {
+        dimmer?.tick(active)
+    }
 
     /** The one power request of this run, created on first use. */
     private fun request(): HANDLE {
@@ -176,8 +204,16 @@ internal class WindowsPowerRequests(private val override: SleepOverride?) : Powe
     private companion object {
         const val ES_CONTINUOUS = 0x80000000.toInt()
         const val ES_SYSTEM_REQUIRED = 0x1
+        const val ES_DISPLAY_REQUIRED = 0x2
+        const val POWER_REQUEST_DISPLAY_REQUIRED = 0
         const val POWER_REQUEST_SYSTEM_REQUIRED = 1
         const val POWER_REQUEST_EXECUTION_REQUIRED = 3
+        val REQUESTS = listOf(POWER_REQUEST_SYSTEM_REQUIRED, POWER_REQUEST_EXECUTION_REQUIRED, POWER_REQUEST_DISPLAY_REQUIRED)
+        val REQUEST_NAMES = mapOf(
+            POWER_REQUEST_DISPLAY_REQUIRED to "DisplayRequired",
+            POWER_REQUEST_SYSTEM_REQUIRED to "SystemRequired",
+            POWER_REQUEST_EXECUTION_REQUIRED to "ExecutionRequired",
+        )
         const val REASON = "TG Backup: משימה פעילה"
     }
 }

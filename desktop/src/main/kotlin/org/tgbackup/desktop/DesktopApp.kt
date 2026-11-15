@@ -144,6 +144,14 @@ class DesktopApp(
             }
         }
 
+        // Dims the panel when nobody uses the PC while it is kept awake (the display stays on: see WindowsPowerRequests).
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(2_000)
+                runCatching { power.idleTick(sleepGuard.state == true) }.onFailure { powerFailed(it) }
+            }
+        }
+
         // The Run value follows the switch, now and on every change (a moved exe is rewritten at launch).
         scope.launch(Dispatchers.IO) {
             prefs.value.map { it.autostart }.distinctUntilChanged().collect { on ->

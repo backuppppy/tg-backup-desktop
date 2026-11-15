@@ -141,6 +141,9 @@ internal class WindowsPowerSettings : PowerSettings {
 
     override fun activeScheme(): String = withActiveScheme { it.text() }
 
+    /** The active scheme's "turn off the display after" (VIDEOIDLE), in seconds, for AC or DC; 0 = never. */
+    fun readVideoIdle(ac: Boolean): Int = withActiveScheme { scheme -> readIndex(scheme, VIDEOIDLE, ac, SUBGROUP_VIDEO) }
+
     override fun write(t: SleepTimeouts, scheme: String?) = withActiveScheme { active ->
         val target = scheme?.let { s -> schemes().firstOrNull { it.text() == s.trim('{', '}').lowercase() } } ?: active
         writeIndex(target, STANDBY, ac = true, t.acStandby)
@@ -177,12 +180,12 @@ internal class WindowsPowerSettings : PowerSettings {
         }
     }
 
-    private fun readIndex(scheme: GUID, setting: GUID, ac: Boolean): Int {
+    private fun readIndex(scheme: GUID, setting: GUID, ac: Boolean, subGroup: GUID = SUBGROUP_SLEEP): Int {
         val value = IntByReference()
         val rc = if (ac) {
-            powrprof.PowerReadACValueIndex(null, scheme, SUBGROUP_SLEEP, setting, value)
+            powrprof.PowerReadACValueIndex(null, scheme, subGroup, setting, value)
         } else {
-            powrprof.PowerReadDCValueIndex(null, scheme, SUBGROUP_SLEEP, setting, value)
+            powrprof.PowerReadDCValueIndex(null, scheme, subGroup, setting, value)
         }
         if (rc == ERROR_FILE_NOT_FOUND) return -1
         check(if (ac) "PowerReadACValueIndex" else "PowerReadDCValueIndex", rc)
@@ -223,6 +226,8 @@ internal class WindowsPowerSettings : PowerSettings {
         const val ERROR_NO_MORE_ITEMS = 259
         const val ACCESS_SCHEME = 16
         val SUBGROUP_SLEEP: GUID = GUID.fromString("{238C9FA8-0AAD-41ED-83F4-97BE242C8F20}")
+        val SUBGROUP_VIDEO: GUID = GUID.fromString("{7516B95F-F776-4464-8C53-06167F40CC99}")
+        val VIDEOIDLE: GUID = GUID.fromString("{3C0BC021-C8A8-4E07-A973-6B14CBCB2B7E}")
         val STANDBY: GUID = GUID.fromString("{29F6C1DB-86DA-48C5-9FDB-F2B67B1F44DA}")
         val HIBERNATE: GUID = GUID.fromString("{9D7815A6-7EE4-497E-8888-515A05F02364}")
     }
