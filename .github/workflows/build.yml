@@ -715,3 +715,28 @@ jobs:
         if: steps.install.outcome != 'success'
         shell: pwsh
         run: Write-Host "::warning::Tailscale could not be installed on the runner; the CLI flag check did not run"
+  release-build:
+    # Every green build of main gets its own pre-release with the installer (Releases page). Nothing is replaced.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [linux, windows, windows-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-webview2
+          path: dist
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(grep '^tgbVersion=' gradle.properties | cut -d= -f2)
+          tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          sha="${GITHUB_SHA::7}"
+          gh release create "$tag" dist/TGBackup-Setup.exe \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "גרסת בדיקה ${version} · בנייה ${GITHUB_RUN_NUMBER}" \
+            --notes "בנייה אוטומטית מ-${sha}. קובץ ההתקנה: TGBackup-Setup.exe"
+          echo "RELEASE_URL https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
