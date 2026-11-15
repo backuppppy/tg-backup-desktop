@@ -10,7 +10,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -86,6 +87,13 @@ class JobRunner(
 ) {
     private val tag = job.name.ifBlank { job.id }
     private val protection = SourceProtection(false)
+
+    /** The source as resolved by the first account, for the card's protection line. */
+    @Volatile private var sourceId = 0L
+    @Volatile private var sourceTitle = ""
+
+    /** Prefetched files nobody sends: each is awaited (TDLib finishes it anyway) and its file deleted. */
+    private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val limiters = accounts.associate { it.account.id to RateLimiter(job.perMinuteLimit) }
 
     private class Pair2(val source: Chat, val target: Chat)
@@ -107,11 +115,11 @@ class JobRunner(
         // An opened chat keeps its loaded messages in TDLib memory, which copying relies on.
         accounts.forEachIndexed { i, ac -> ac.client.openChat(chats[i].source.id) }
         val source = chats[0].source
-        protection.set(source.hasProtectedContent)
-        report.sourceInfo(source.id, source.title, protection.isProtected)
-        if (protection.isProtected) log.warn("[$tag] ערוץ המקור מוגן — מצב הורדה והעלאה מחדש")
+        sourceId = source.id
+        sourceTitle = source.title
         // Telegram's notices while the job runs: protection removed → server-side copy, added → download + upload.
-        val watch = launch {
+        // Subscribed before the flag is read, so a change in between is not missed.
+        val watch = launch(start = CoroutineStart.UNDISPATCHED) {
             accounts[0].protectionNotices.collect { n ->
                 if (protection.onNotice(n.chatId, source.id, n.isProtected)) {
                     report.sourceInfo(source.id, source.title, n.isProtected)
@@ -123,6 +131,9 @@ class JobRunner(
                 }
             }
         }
+        protection.set(source.hasProtectedContent)
+        report.sourceInfo(source.id, source.title, protection.isProtected)
+        if (protection.isProtected) log.warn("[$tag] ערוץ המקור מוגן — מצב הורדה והעלאה מחדש")
 
         if (job.startFromId > 0) {
             store.saveProgress(job.id) { Progress(lastId = job.startFromId - 1).withTotalsOf(it) }
@@ -216,11 +227,11 @@ class JobRunner(
                 store.saveProgress(job.id) { it.copy(lastId = last, copiedTotal = it.copiedTotal + sent) }
                 report.position(last)
             }
-            prefetch.values.forEach { it.cancel() }
+            prefetch.values.forEach { discard(it) }
         }
     }
 
-    private fun startPrefetch(
+    private suspend fun startPrefetch(
         scope: CoroutineScope,
         wanted: List<Message>,
         from: Int,
@@ -235,7 +246,36 @@ class JobRunner(
         }
     }
 
-    private fun needsUpload(m: Message) = (protection.isProtected || !m.canBeSaved) && m.content.mainFile() != null
+    /**
+     * Whether [m]'s file must be downloaded and uploaded again. [m] may have been read while the source was protected,
+     * when TDLib marks every message can't-be-saved; TDLib computes that when it builds the message, so it is read
+     * again before deciding.
+     */
+    private suspend fun needsUpload(m: Message, isProtected: Boolean = protection.isProtected): Boolean {
+        if (m.content.mainFile() == null) return false
+        if (isProtected) return true
+        if (m.canBeSaved) return false
+        val now = accounts[0].client.getMessage(m.chatId, m.id).getOrNull() ?: m
+        return !now.canBeSaved
+    }
+
+    /** A copy was refused for protection: the whole job switches only when TDLib says the source is protected now. */
+    private suspend fun protectionRefused(who: String, sid: Long) {
+        val now = accounts[0].refreshChat(sourceId)?.hasProtectedContent ?: true
+        if (!now) {
+            log.warn("[$who] הודעה $sid מוגנת — מוריד ומעלה רק אותה")
+        } else if (protection.set(true)) {
+            report.sourceInfo(sourceId, sourceTitle, true)
+            log.warn("[$who] זוהה ערוץ מוגן — עובר למצב הורדה והעלאה")
+        }
+    }
+
+    /** A prefetch that will not be sent: its file is deleted once TDLib has it. */
+    private fun discard(d: Deferred<Result<Copier.Downloaded>>) {
+        cleanup.launch {
+            runCatching { d.await() }.getOrNull()?.getOrNull()?.let { f -> runCatching { f.owner.deleteLocal(f.fileId) } }
+        }
+    }
 
     /**
      * Downloads the main file of [m] (which was read by [owner]) using account [ac].
@@ -333,7 +373,6 @@ class JobRunner(
 
     // ── Delivery of one message, with FloodWait handled by retrying the same message. ──
 
-    @OptIn(ExperimentalCoroutinesApi::class) // Deferred.getCompleted, for a prefetch that is not used
     private suspend fun deliver(
         sender: AccountClient,
         target: Long,
@@ -350,8 +389,10 @@ class JobRunner(
         try {
             while (true) {
                 awaitNotPaused()
-                val upload = needsUpload(msg) || (forceUpload && msg.content.mainFile() != null)
-                if (protection.isProtected && !upload && msg.content !is MessageText) {
+                // Read once: the watcher may change it between the two uses.
+                val isProtected = protection.isProtected
+                val upload = needsUpload(msg, isProtected) || (forceUpload && msg.content.mainFile() != null)
+                if (isProtected && !upload && msg.content !is MessageText) {
                     log.warn("[$who] הודעה $sid מסוג שלא ניתן להעתיק מערוץ מוגן — דילוג")
                     return false
                 }
@@ -410,8 +451,7 @@ class JobRunner(
                         if (!upload && msg.content.mainFile() != null) {
                             forceUpload = true
                             if (Copier.isProtectedError(r.message)) {
-                                protection.set(true)
-                                log.warn("[$who] זוהה ערוץ מוגן — עובר למצב הורדה והעלאה")
+                                protectionRefused(who, sid)
                             } else {
                                 log.warn("[$who] העתקה ישירה של $sid נכשלה (${r.message}) — מנסה בהורדה והעלאה")
                             }
@@ -437,13 +477,8 @@ class JobRunner(
             }
         } finally {
             downloaded?.let { runCatching { it.owner.deleteLocal(it.fileId) } }
-            // Downloaded ahead while the source was protected, then copied server-side: drop it and its file.
-            if (downloaded == null && prefetched != null) {
-                prefetched.cancel()
-                if (prefetched.isCompleted && !prefetched.isCancelled) {
-                    prefetched.getCompleted().getOrNull()?.let { d -> runCatching { d.owner.deleteLocal(d.fileId) } }
-                }
-            }
+            // Downloaded ahead while the source was protected, then copied server-side: its file is deleted.
+            if (downloaded == null && prefetched != null) discard(prefetched)
             uploadCopy?.parentFile?.deleteRecursively()
         }
     }
