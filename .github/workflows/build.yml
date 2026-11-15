@@ -735,8 +735,11 @@ jobs:
           version=$(grep '^tgbVersion=' gradle.properties | cut -d= -f2)
           tag="v${version}-build.${GITHUB_RUN_NUMBER}"
           sha="${GITHUB_SHA::7}"
-          gh release create "$tag" dist/TGBackup-Setup.exe \
+          # The file name carries the version and the build, so a downloaded copy says which one it is.
+          file="dist/TGBackup-Setup-${version}-build.${GITHUB_RUN_NUMBER}.exe"
+          mv dist/TGBackup-Setup.exe "$file"
+          gh release create "$tag" "$file" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
             --title "גרסת בדיקה ${version} · בנייה ${GITHUB_RUN_NUMBER}" \
-            --notes "בנייה אוטומטית מ-${sha}. קובץ ההתקנה: TGBackup-Setup.exe"
+            --notes "בנייה אוטומטית מ-${sha}. קובץ ההתקנה: $(basename "$file")"
           echo "RELEASE_URL https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
