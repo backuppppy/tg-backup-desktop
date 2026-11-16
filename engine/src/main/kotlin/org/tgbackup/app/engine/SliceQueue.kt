@@ -15,7 +15,7 @@ class SliceQueue(private val count: Int) {
     private val mutex = Mutex()
     private val queued = ArrayDeque<Int>()
     private val finished = BooleanArray(count)
-    private var doneCount = 0
+    @Volatile private var doneCount = 0
 
     /** Bumped on every change, so [next] wakes up. */
     private val version = MutableStateFlow(0)

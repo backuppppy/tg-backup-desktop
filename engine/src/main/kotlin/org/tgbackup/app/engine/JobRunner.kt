@@ -106,8 +106,16 @@ class JobRunner(
     @Volatile private var sourceId = 0L
     @Volatile private var sourceTitle = ""
 
+    /** Fast mode: until when an account is stuck (a long FloodWait); it skips its slice in the waves until then. */
+    private val stuckUntil = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+
     /** Prefetched files nobody sends: each is awaited (TDLib finishes it anyway) and its file deleted. */
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private companion object {
+        /** Fast mode: a FloodWait longer than this hands the rest of the account's slice to a free account. */
+        const val FAST_HAND_OFF_SEC = 60
+    }
     private val limiters = accounts.associate { it.account.id to RateLimiter(job.perMinuteLimit) }
 
     private class Pair2(val source: Chat, val target: Chat)
@@ -406,12 +414,61 @@ class JobRunner(
             }
             val wave = p
             report.phase("סבב ${wave.waveStart}–${wave.waveEnd}")
-            (0 until n).mapNotNull { i ->
-                val rs = wave.waveStart + i * chunk
-                if (rs > wave.waveEnd) return@mapNotNull null
+            // Slice k starts with account k. A stuck account (long FloodWait, not connected) hands the rest of its
+            // slice back, and the first free account takes it over: the wave never waits on one account.
+            val slices = (0 until n).count { wave.waveStart + it * chunk <= wave.waveEnd }
+            val queue = SliceQueue(slices)
+            // True when the slice is done; false when the account got stuck: it leaves this wave (it never holds it)
+            // and rejoins a later one once free (stuckUntil).
+            suspend fun work(i: Int, slice: Int): Boolean {
+                val rs = wave.waveStart + slice * chunk
                 val re = minOf(rs + chunk - 1, wave.waveEnd)
-                async { rangeWorker(i, chats[i], rs, re) }
+                return when (val end = rangeWorker(i, slice, chats[i], rs, re)) {
+                    SliceEnd.Done -> {
+                        queue.done(slice)
+                        true
+                    }
+                    is SliceEnd.Released -> {
+                        stuckUntil[i] = end.untilMs
+                        queue.release(slice)
+                        false
+                    }
+                }
+            }
+            (0 until n).map { i ->
+                async {
+                    val ac = accounts[i]
+                    val stuck = (stuckUntil[i] ?: 0L) > System.currentTimeMillis()
+                    if (i < slices) {
+                        if (!ac.isReady || stuck) {
+                            log.warn(
+                                "[$tag · ${ac.tag}] " + (if (stuck) "עדיין בהמתנת FloodWait" else "החשבון לא מחובר") +
+                                    " — החלק שלו עובר לחשבון פנוי",
+                            )
+                            queue.release(i)
+                            return@async
+                        }
+                        if (!work(i, i)) return@async
+                    } else if (!ac.isReady || stuck) {
+                        return@async
+                    }
+                    while (true) {
+                        val slice = queue.next() ?: break
+                        if (!ac.isReady) {
+                            queue.release(slice)
+                            break
+                        }
+                        log.info("[$tag · ${ac.tag}] ממשיך חלק של חשבון אחר בסבב")
+                        if (!work(i, slice)) break
+                    }
+                }
             }.awaitAll()
+            if (!queue.allDone) {
+                // Every account that could take the rest is stuck or offline: the same wave resumes shortly.
+                report.phase("ממתין לחשבון פנוי להמשך הסבב")
+                delay(15_000)
+                continue
+            }
             store.saveProgress(job.id) { it.copy(lastId = it.waveEnd, waveStart = 0, waveEnd = 0, workerLast = emptyMap()) }
             report.position(wave.waveEnd)
         }
@@ -424,9 +481,18 @@ class JobRunner(
         return text != null && containsArabic(text)
     }
 
-    private suspend fun rangeWorker(i: Int, chats: Pair2, rs: Long, re: Long) {
+    /** How a slice ended for the account that worked it. */
+    private sealed interface SliceEnd {
+        data object Done : SliceEnd
+
+        /** The account is stuck until [untilMs]; the rest of the slice goes to another account. */
+        data class Released(val untilMs: Long) : SliceEnd
+    }
+
+    /** Account [i] works slice [slice] (its messages [rs]..[re]) from where the slice got to, by anyone. */
+    private suspend fun rangeWorker(i: Int, slice: Int, chats: Pair2, rs: Long, re: Long): SliceEnd {
         val ac = accounts[i]
-        var last = maxOf(rs - 1, store.progress(job.id).workerLast[i] ?: 0)
+        var last = maxOf(rs - 1, store.progress(job.id).workerLast[slice] ?: 0)
         while (last < re) {
             awaitNotPaused()
             val batch = ac.historyAfter(chats.source.id, last).getOrElse { e ->
@@ -446,15 +512,28 @@ class JobRunner(
             if (inRange.isEmpty()) break
             for (msg in inRange) {
                 awaitNotPaused()
+                if (!ac.isReady) return SliceEnd.Released(System.currentTimeMillis())
                 var sent = 0
                 if (msg.content.matches(job.mediaType)) {
-                    if (isArabicSkipped(msg)) log.info("[$tag · ${ac.tag}] דילוג על ${msg.id.serverId()} (ערבית)")
-                    else if (deliver(ac, chats.target.id, msg, null) == Delivery.Sent) sent = 1
+                    if (isArabicSkipped(msg)) {
+                        log.info("[$tag · ${ac.tag}] דילוג על ${msg.id.serverId()} (ערבית)")
+                    } else {
+                        when (val d = deliver(ac, chats.target.id, msg, null, floodHandOffAboveSec = FAST_HAND_OFF_SEC)) {
+                            Delivery.Sent -> sent = 1
+                            is Delivery.FloodWait -> {
+                                // This message is not done: the account that takes the slice starts from it.
+                                log.warn("[$tag · ${ac.tag}] FloodWait ${d.seconds} שנ' — שאר החלק עובר לחשבון פנוי")
+                                return SliceEnd.Released(System.currentTimeMillis() + (d.seconds + 1) * 1000L)
+                            }
+                            Delivery.Skipped, Delivery.Failed -> Unit
+                        }
+                    }
                 }
                 last = msg.id.serverId()
-                store.saveProgress(job.id) { it.copy(workerLast = it.workerLast + (i to last), copiedTotal = it.copiedTotal + sent) }
+                store.saveProgress(job.id) { it.copy(workerLast = it.workerLast + (slice to last), copiedTotal = it.copiedTotal + sent) }
             }
         }
+        return SliceEnd.Done
     }
 
     // ── Delivery of one message, with FloodWait handled by retrying the same message. ──
