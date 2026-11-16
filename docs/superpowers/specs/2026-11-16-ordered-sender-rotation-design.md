@@ -45,7 +45,10 @@ Telegram's per-account limits (FloodWait, the per-minute cap) shared, while the 
 - Progress (`lastId`, `copiedTotal`) is saved after each message, as today. A message is never skipped by the
   rotation itself.
 - The per-account `RateLimiter` stays per account. With turns, the job's total rate can reach the sum.
-- The random 1.4-3.8 s pause after a server-side copy stays, per message.
+- The random 1.4-3.8 s pause after a server-side copy belongs to the account that sent (added by the user on
+  2026-11-16). That account rests, while the next account in turn already sends the next message. In
+  `SenderRotation` it is a "rests until" time per account, next to FloodWait's "busy until": `rest(index, untilMs)`.
+  A resting account is skipped like a busy one. With a single account the pause still holds the job, as today.
 - Log lines name the sending account, as `deliver` already does (`[$tag · ${sender.tag}]`).
 
 **Approaches considered.** (a) Round robin per message with hand-off on FloodWait and failure (chosen, approved).
@@ -100,7 +103,7 @@ for the whole wait.
 - A FloodWait above 60 s comes back from `deliver` as `Delivery.FloodWait`, the hand-off of part 1, with the threshold
   as a parameter. The worker then queues the rest of the slice: `workerLast[i]` is not advanced past the stuck
   message. The account sits out until its wait ends, then takes queued slices if any are left.
-- One slice is worked by one account at a time. Release happens only after the worker stopped touching the slice, so
+- Different slices run on different accounts at the same time; that is what makes fast mode fast. One slice is worked by one account at a time. Release happens only after the worker stopped touching the slice, so
   two accounts never send the same message.
 - The wave's end (`lastId = waveEnd`) is saved only when every slice reached its end.
 
