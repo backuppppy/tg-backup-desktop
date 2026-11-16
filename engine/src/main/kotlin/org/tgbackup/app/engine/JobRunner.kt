@@ -57,6 +57,20 @@ class RateLimiter(private val perMinute: Int) {
     }
 }
 
+/** How one message's delivery ended (see JobRunner.deliver). */
+sealed interface Delivery {
+    data object Sent : Delivery
+
+    /** Not sent on purpose: nothing to send, or a kind a protected source cannot give. */
+    data object Skipped : Delivery
+
+    /** A FloodWait handed back to the caller (hand-off mode), instead of waiting it out here. */
+    data class FloodWait(val seconds: Int) : Delivery
+
+    /** Every retry on this account was refused. */
+    data object Failed : Delivery
+}
+
 /** Callbacks from a runner to the UI-facing job status. */
 interface JobReporter {
     fun phase(text: String)
@@ -165,6 +179,8 @@ class JobRunner(
 
     private suspend fun runOrdered(chats: List<Pair2>) = coroutineScope {
         val sender = accounts[0]
+        // Several accounts send in turns, one message at a time (the order stays the source's); one account as before.
+        val rotation = if (accounts.size > 1) SenderRotation(accounts.size) else null
         val src = chats[0].source.id
         val dst = chats[0].target.id
         var last = store.progress(job.id).lastId
@@ -216,7 +232,13 @@ class JobRunner(
                 if (idx >= 0) {
                     if (window > 0) startPrefetch(this, wanted, idx, window, prefetch)
                     report.phase("מעתיק הודעה ${msg.id.serverId()}")
-                    if (deliver(sender, dst, msg, prefetch.remove(msg.id))) sent = 1
+                    val prefetched = prefetch.remove(msg.id)
+                    val ok = if (rotation == null) {
+                        deliver(sender, dst, msg, prefetched) == Delivery.Sent
+                    } else {
+                        deliverInTurns(rotation, chats, msg, prefetched)
+                    }
+                    if (ok) sent = 1
                 } else {
                     log.info(
                         "[$tag] דילוג על ${msg.id.serverId()} " +
@@ -228,6 +250,70 @@ class JobRunner(
                 report.position(last)
             }
             prefetch.values.forEach { discard(it) }
+        }
+    }
+
+    /**
+     * One message in ordered mode with several accounts: sent by the next free account in turn. A FloodWait or a
+     * refused send moves it to the next account (never two sends at once, so the order holds). The pause after a
+     * copy is the sender's own rest, while the next account already sends. True when sent.
+     */
+    private suspend fun deliverInTurns(
+        rotation: SenderRotation,
+        chats: List<Pair2>,
+        msg: Message,
+        prefetched: Deferred<Result<Copier.Downloaded>>?,
+    ): Boolean {
+        val sid = msg.id.serverId()
+        val tried = HashSet<Int>()
+        var pending = prefetched
+        try {
+            while (true) {
+                awaitNotPaused()
+                when (val pick = rotation.pick(usable = { accounts[it].isReady }, exclude = tried)) {
+                    is SenderRotation.Pick.Wait -> {
+                        report.phase("כל החשבונות בהמתנה — ${(pick.ms + 999) / 1000} שנ'")
+                        delay(pick.ms)
+                    }
+                    SenderRotation.Pick.None -> {
+                        report.failed()
+                        log.error("[$tag] הודעה $sid לא נשלחה — אף חשבון לא הצליח לשלוח אותה")
+                        return false
+                    }
+                    is SenderRotation.Pick.Account -> {
+                        val i = pick.index
+                        val ac = accounts[i]
+                        // Each TDLib instance sends its own copy of the message.
+                        val own = if (i == 0) msg else ac.client.getMessage(msg.chatId, msg.id).getOrNull()
+                        if (own == null) {
+                            log.warn("[$tag · ${ac.tag}] לא רואה את הודעה $sid — עובר לחשבון הבא")
+                            tried += i
+                            continue
+                        }
+                        // The prefetch goes to the first try only; deliver owns it from there (uses or discards it).
+                        val pre = pending
+                        pending = null
+                        when (val d = deliver(ac, chats[i].target.id, own, pre, floodHandOffAboveSec = 0, failHandOff = true, pauseAfter = false)) {
+                            Delivery.Sent -> {
+                                val base = if (protection.isProtected) 0L else Random.nextLong(1_400, 3_800)
+                                rotation.rest(i, System.currentTimeMillis() + rotation.restMs(i, base))
+                                return true
+                            }
+                            Delivery.Skipped -> return false
+                            is Delivery.FloodWait -> {
+                                rotation.busy(i, System.currentTimeMillis() + (d.seconds + 1) * 1000L)
+                                log.warn("[$tag · ${ac.tag}] FloodWait ${d.seconds} שנ' — הודעה $sid עוברת לחשבון הבא")
+                            }
+                            Delivery.Failed -> {
+                                tried += i
+                                log.warn("[$tag · ${ac.tag}] שליחת הודעה $sid נכשלה — מנסה בחשבון הבא")
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            pending?.let { discard(it) }
         }
     }
 
@@ -363,7 +449,7 @@ class JobRunner(
                 var sent = 0
                 if (msg.content.matches(job.mediaType)) {
                     if (isArabicSkipped(msg)) log.info("[$tag · ${ac.tag}] דילוג על ${msg.id.serverId()} (ערבית)")
-                    else if (deliver(ac, chats.target.id, msg, null)) sent = 1
+                    else if (deliver(ac, chats.target.id, msg, null) == Delivery.Sent) sent = 1
                 }
                 last = msg.id.serverId()
                 store.saveProgress(job.id) { it.copy(workerLast = it.workerLast + (i to last), copiedTotal = it.copiedTotal + sent) }
@@ -378,7 +464,13 @@ class JobRunner(
         target: Long,
         msg: Message,
         prefetched: Deferred<Result<Copier.Downloaded>>?,
-    ): Boolean {
+        /** A FloodWait longer than this goes back to the caller as [Delivery.FloodWait]; null: always waited out here. */
+        floodHandOffAboveSec: Int? = null,
+        /** The caller tries another account after [Delivery.Failed], and counts the failure itself. */
+        failHandOff: Boolean = false,
+        /** The random pause after a server-side copy is taken here (false: the caller rests this account instead). */
+        pauseAfter: Boolean = true,
+    ): Delivery {
         val sid = msg.id.serverId()
         val who = if (accounts.size > 1) "$tag · ${sender.tag}" else tag
         var attempts = 0
@@ -394,7 +486,7 @@ class JobRunner(
                 val upload = needsUpload(msg, isProtected) || (forceUpload && msg.content.mainFile() != null)
                 if (isProtected && !upload && msg.content !is MessageText) {
                     log.warn("[$who] הודעה $sid מסוג שלא ניתן להעתיק מערוץ מוגן — דילוג")
-                    return false
+                    return Delivery.Skipped
                 }
                 val content = if (upload) {
                     if (downloaded == null) {
@@ -407,8 +499,8 @@ class JobRunner(
                     val d = downloaded
                     if (d == null) {
                         if (++attempts >= 3) {
-                            report.failed()
-                            return false
+                            if (!failHandOff) report.failed()
+                            return Delivery.Failed
                         }
                         delay(5_000)
                         continue
@@ -417,8 +509,8 @@ class JobRunner(
                     // protected remote file and Telegram rejects it as "can't be forwarded".
                     val copy = uploadCopy ?: freshCopy(sender, sid, d.path).getOrElse { e ->
                         log.error("[$who] הכנת קובץ להעלאה נכשלה: ${e.message}")
-                        report.failed()
-                        return false
+                        if (!failHandOff) report.failed()
+                        return Delivery.Failed
                     }.also { uploadCopy = it }
                     Copier.uploadContent(msg, copy.absolutePath, job.stripLinks)
                 } else {
@@ -426,7 +518,7 @@ class JobRunner(
                 }
                 if (content == null) {
                     log.info("[$who] דילוג על $sid (ריק אחרי ניקוי קישורים)")
-                    return false
+                    return Delivery.Skipped
                 }
 
                 limiters.getValue(sender.account.id).acquire { ms ->
@@ -438,11 +530,14 @@ class JobRunner(
                         report.copied()
                         report.delivered(target, r.messageId.serverId())
                         log.success("[$who] הועתקה הודעה $sid")
-                        if (!protection.isProtected) delay(Random.nextLong(1_400, 3_800))
-                        return true
+                        if (pauseAfter && !protection.isProtected) delay(Random.nextLong(1_400, 3_800))
+                        return Delivery.Sent
                     }
                     is SendOutcome.Failed -> {
                         if (r.retryAfterSec > 0) {
+                            if (floodHandOffAboveSec != null && r.retryAfterSec > floodHandOffAboveSec) {
+                                return Delivery.FloodWait(r.retryAfterSec)
+                            }
                             log.warn("[$who] FloodWait ${r.retryAfterSec} שנ' — ממתין ומנסה שוב את הודעה $sid")
                             report.phase("FloodWait — ממתין ${r.retryAfterSec} שנ'")
                             delay((r.retryAfterSec + 1) * 1000L)
@@ -468,8 +563,8 @@ class JobRunner(
                         // Reload the source message in case TDLib dropped it from memory.
                         sender.client.getMessage(msg.chatId, msg.id)
                         if (++attempts >= 3) {
-                            report.failed()
-                            return false
+                            if (!failHandOff) report.failed()
+                            return Delivery.Failed
                         }
                         delay(3_000L * attempts)
                     }
