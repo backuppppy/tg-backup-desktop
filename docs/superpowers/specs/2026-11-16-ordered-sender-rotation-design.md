@@ -49,6 +49,12 @@ Telegram's per-account limits (FloodWait, the per-minute cap) shared, while the 
   2026-11-16). That account rests, while the next account in turn already sends the next message. In
   `SenderRotation` it is a "rests until" time per account, next to FloodWait's "busy until": `rest(index, untilMs)`.
   A resting account is skipped like a busy one. With a single account the pause still holds the job, as today.
+- "Hot" accounts get fewer turns (added by the user on 2026-11-16). After its FloodWait ends, an account stays hot for
+  as long as the wait was, between 5 and 30 minutes. A hot account is picked only when no account that is not hot is
+  free. So while the clean accounts can carry the job, they do the work. When they are all busy or resting, a hot
+  account still sends, so the job never stalls on it. In `SenderRotation`, `busy(index, untilMs)` also sets the
+  account's `hotUntil = untilMs + clamp(waitMs, 5 min, 30 min)`, and `pick` makes two passes: not hot first, then hot.
+  The numbers are my call: the user agreed to the idea, not to the values.
 - Log lines name the sending account, as `deliver` already does (`[$tag · ${sender.tag}]`).
 
 **Approaches considered.** (a) Round robin per message with hand-off on FloodWait and failure (chosen, approved).
