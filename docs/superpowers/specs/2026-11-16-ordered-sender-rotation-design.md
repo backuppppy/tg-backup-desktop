@@ -1,4 +1,4 @@
-# Ordered mode: accounts send in turns; the Android app gets the live protection fix
+# Ordered mode sends in turns; fast mode is not held by a stuck account; the Android app gets the live protection fix
 
 Approved by the user on 2026-11-16 in conversation ("כל מה שכתבת הבנת נכון", "לכלול גם את הערוץ מוגן באפליקציה").
 Applies to both engines: TG Backup Desktop (`engine/`, this repo) and the Android app (`backuppppy/tg-backup-apk`,
@@ -71,8 +71,48 @@ keeps the `Chat` snapshot, so `hasProtectedContent` never refreshes. A copy refu
 The Android `JobRunner` differs only in small places (no `report.latest`, no `copiedTotal`). The port keeps those
 differences.
 
+## 3. Fast mode: a stuck account does not hold the wave
+
+Approved by the user on 2026-11-16 ("כן מסכים כל מה שאמרת"). Applies to both engines.
+
+**Why.** `runFast` splits each wave into fixed slices of 25 messages. Slice `i` belongs to account `i`, and the next
+wave starts only after `awaitAll`. One account in a 20-minute FloodWait, or disconnected, holds every other account
+for the whole wait.
+
+**What the user wants.**
+- An account counts as stuck when it gets a FloodWait longer than 60 s, or when it is not connected. It hands back the
+  rest of its slice, including the message it was stuck on, and the first free account takes it over.
+- A short FloodWait (60 s or less) waits and continues in place, as today.
+- An account that is only slow (a big upload) is not stuck, and nothing is taken from it.
+- The wave ends when every message in it was handled, by whichever account. The stuck account joins the next wave once
+  it is free. No message is lost or sent twice by the hand-off.
+
+**Design.**
+- Slices stay as today. Slice `i` covers `ws + i*25 .. min(ws + i*25 + 24, we)`, and it starts with account `i`.
+  `Progress.workerLast` is already keyed by slice index, so the saved format does not change. Resume after a restart
+  works as today: each unfinished slice continues from `workerLast[i] + 1`.
+- Per wave: a queue of slices waiting for an account. A worker loop per account takes its own slice first, then any
+  queued slice, until no slice is queued and none is held. Then it ends.
+- A connected account whose slice is done takes the next queued slice. A slice whose account is not connected at
+  wave start is queued at once.
+- `rangeWorker` runs one slice for one account, on that account's own history reads (as today). Before each message
+  it checks the account is connected. If it is not, it queues the rest of the slice and stops.
+- A FloodWait above 60 s comes back from `deliver` as `Delivery.FloodWait`, the hand-off of part 1, with the threshold
+  as a parameter. The worker then queues the rest of the slice: `workerLast[i]` is not advanced past the stuck
+  message. The account sits out until its wait ends, then takes queued slices if any are left.
+- One slice is worked by one account at a time. Release happens only after the worker stopped touching the slice, so
+  two accounts never send the same message.
+- The wave's end (`lastId = waveEnd`) is saved only when every slice reached its end.
+
+**Approaches considered.** (a) Hand back the rest of the slice on a long FloodWait or a disconnect (chosen,
+approved). (b) Let a free account start the next wave while one is stuck: the saved progress would need several open
+waves, which is a schema change and riskier. (c) Time-based stealing from slow accounts: it would also split healthy
+slow uploads, which the user ruled out.
+
 ## Testing
 
+- The wave's slice queue (claim, release, done) is a pure class with unit tests: a released slice is taken by the next
+  free account; the wave ends only when all slices are done; a slice is never held by two accounts.
 - `SenderRotation` and `SourceProtection` are pure, with unit tests: the turn order; a FloodWait account skipped until
   free; all busy gives a wait; excluded and unusable accounts are skipped; one account never rotates.
 - The wiring needs live Telegram clients. It is checked by compiling and running the existing suites (desktop and
