@@ -69,10 +69,9 @@ internal class WindowsIdleClock(private val settings: WindowsPowerSettings) : Id
         return settings.readVideoIdle(onAc).coerceAtLeast(0) * 1000L
     }
 
-    /** QUNS_BUSY (3, a full-screen app), QUNS_RUNNING_D3D_FULL_SCREEN (4) or QUNS_PRESENTATION_MODE (5). */
     override fun presenting(): Boolean = runCatching {
         val state = IntByReference()
-        shell.SHQueryUserNotificationState(state) == 0 && state.value in 3..5
+        shell.SHQueryUserNotificationState(state) == 0 && isPresentingState(state.value)
     }.getOrDefault(false)
 
     private val shell: Shell32Quns by lazy { Native.load("shell32", Shell32Quns::class.java) }
@@ -122,3 +121,9 @@ private const val AOAC_OFFSET = 20L
 private interface PowrProfCaps : Library {
     fun CallNtPowerInformation(level: Int, input: com.sun.jna.Pointer?, inputLength: Int, output: com.sun.jna.Pointer, outputLength: Int): Int
 }
+
+/**
+ * QUERY_USER_NOTIFICATION_STATE: QUNS_BUSY (2, a full-screen app), QUNS_RUNNING_D3D_FULL_SCREEN (3) or
+ * QUNS_PRESENTATION_MODE (4). 5 (QUNS_ACCEPTS_NOTIFICATIONS) is the normal desktop.
+ */
+internal fun isPresentingState(state: Int): Boolean = state in 2..4
