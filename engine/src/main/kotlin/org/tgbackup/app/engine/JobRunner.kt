@@ -69,6 +69,9 @@ sealed interface Delivery {
 
     /** Every retry on this account was refused. */
     data object Failed : Delivery
+
+    /** No answer from Telegram: the message may still go out, so it is never sent again (no duplicates). */
+    data object Unknown : Delivery
 }
 
 /** Callbacks from a runner to the UI-facing job status. */
@@ -308,6 +311,8 @@ class JobRunner(
                                 return true
                             }
                             Delivery.Skipped -> return false
+                            // May have gone out: never handed to another account.
+                            Delivery.Unknown -> return false
                             is Delivery.FloodWait -> {
                                 rotation.busy(i, System.currentTimeMillis() + (d.seconds + 1) * 1000L)
                                 log.warn("[$tag · ${ac.tag}] FloodWait ${d.seconds} שנ' — הודעה $sid עוברת לחשבון הבא")
@@ -416,8 +421,11 @@ class JobRunner(
             report.phase("סבב ${wave.waveStart}–${wave.waveEnd}")
             // Slice k starts with account k. A stuck account (long FloodWait, not connected) hands the rest of its
             // slice back, and the first free account takes it over: the wave never waits on one account.
-            val slices = (0 until n).count { wave.waveStart + it * chunk <= wave.waveEnd }
+            // From the wave's own range, not the account count: a wave saved with more accounts keeps all its slices.
+            val slices = ((wave.waveEnd - wave.waveStart) / chunk + 1).toInt()
             val queue = SliceQueue(slices)
+            // Slices beyond the accounts have no first holder: they wait for whoever is free.
+            for (extra in n until slices) queue.release(extra)
             // True when the slice is done; false when the account got stuck: it leaves this wave (it never holds it)
             // and rejoins a later one once free (stuckUntil).
             suspend fun work(i: Int, slice: Int): Boolean {
@@ -464,9 +472,12 @@ class JobRunner(
                 }
             }.awaitAll()
             if (!queue.allDone) {
-                // Every account that could take the rest is stuck or offline: the same wave resumes shortly.
-                report.phase("ממתין לחשבון פנוי להמשך הסבב")
-                delay(15_000)
+                // Every account that could take the rest is stuck or offline: the same wave resumes when the first
+                // stuck one is free (at most 5 minutes between checks, at least 15 s).
+                val now = System.currentTimeMillis()
+                val wait = (stuckUntil.values.filter { it > now }.minOrNull()?.minus(now) ?: 15_000L).coerceIn(15_000L, 300_000L)
+                report.phase("ממתין לחשבון פנוי להמשך הסבב — ${wait / 1000} שנ'")
+                delay(wait)
                 continue
             }
             store.saveProgress(job.id) { it.copy(lastId = it.waveEnd, waveStart = 0, waveEnd = 0, workerLast = emptyMap()) }
@@ -495,6 +506,8 @@ class JobRunner(
         var last = maxOf(rs - 1, store.progress(job.id).workerLast[slice] ?: 0)
         while (last < re) {
             awaitNotPaused()
+            // An account that went offline hands the rest over (also between batches and after failed reads).
+            if (!ac.isReady) return SliceEnd.Released(System.currentTimeMillis())
             val batch = ac.historyAfter(chats.source.id, last).getOrElse { e ->
                 log.error("[$tag · ${ac.tag}] קריאת היסטוריה נכשלה: ${e.message}")
                 delay(15_000)
@@ -525,7 +538,9 @@ class JobRunner(
                                 log.warn("[$tag · ${ac.tag}] FloodWait ${d.seconds} שנ' — שאר החלק עובר לחשבון פנוי")
                                 return SliceEnd.Released(System.currentTimeMillis() + (d.seconds + 1) * 1000L)
                             }
-                            Delivery.Skipped, Delivery.Failed -> Unit
+                            // A send that failed because the account went offline is not done: hand the rest over.
+                            Delivery.Failed -> if (!ac.isReady) return SliceEnd.Released(System.currentTimeMillis())
+                            Delivery.Skipped, Delivery.Unknown -> Unit
                         }
                     }
                 }
@@ -621,6 +636,15 @@ class JobRunner(
                             report.phase("FloodWait — ממתין ${r.retryAfterSec} שנ'")
                             delay((r.retryAfterSec + 1) * 1000L)
                             continue
+                        }
+                        if (r.code == AccountClient.SEND_TIMEOUT) {
+                            log.warn("[$who] אין תשובה מטלגרם על הודעה $sid — ייתכן שנשלחה; לא שולח שוב כדי לא ליצור כפילות")
+                            return Delivery.Unknown
+                        }
+                        if (r.code == AccountClient.SEND_DISCONNECTED) {
+                            log.warn("[$who] החשבון התנתק לפני שהודעה $sid נשלחה")
+                            if (!failHandOff) report.failed()
+                            return Delivery.Failed
                         }
                         if (!upload && msg.content.mainFile() != null) {
                             forceUpload = true

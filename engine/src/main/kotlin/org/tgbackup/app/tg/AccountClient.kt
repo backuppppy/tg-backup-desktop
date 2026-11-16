@@ -30,6 +30,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -40,6 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import org.tgbackup.app.BuildConfig
 import org.tgbackup.app.data.Account
@@ -338,8 +341,21 @@ class AccountClient(
             pendingSends.remove(tmp.id)
             return early
         }
-        return withTimeoutOrNull(3.hours) { waiter.await() }
-            ?: SendOutcome.Failed(-1, "timeout", 0).also { pendingSends.remove(tmp.id) }
+        // A logged-out or closed account never completes the send: that ends the wait too (its TDLib queue is gone,
+        // so the message will not go out later). A plain timeout is different: TDLib may still send it.
+        return withTimeoutOrNull(3.hours) {
+            coroutineScope {
+                val lost = async {
+                    auth.first { it !is AuthUi.Ready }
+                    SendOutcome.Failed(SEND_DISCONNECTED, "account disconnected", 0)
+                }
+                select<SendOutcome> {
+                    waiter.onAwait { it }
+                    lost.onAwait { it }
+                }.also { lost.cancel() }
+            }
+        }?.also { if (it is SendOutcome.Failed) pendingSends.remove(tmp.id) }
+            ?: SendOutcome.Failed(SEND_TIMEOUT, "timeout", 0).also { pendingSends.remove(tmp.id) }
     }
 
     private fun completeSend(oldId: Long, outcome: SendOutcome) {
@@ -364,6 +380,12 @@ class AccountClient(
     }
 
     companion object {
+        /** [SendOutcome.Failed] code: no answer for 3 hours; TDLib may still send the message (never resend it). */
+        const val SEND_TIMEOUT = -1
+
+        /** [SendOutcome.Failed] code: the account logged out or closed while the message was waiting (not sent). */
+        const val SEND_DISCONNECTED = -2
+
         private const val CHANNEL_SHIFT = 1_000_000_000_000L
         private val retryRegex = Regex("""retry after (\d+)""", RegexOption.IGNORE_CASE)
 
