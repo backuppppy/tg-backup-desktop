@@ -76,12 +76,14 @@ class DtoTest {
         val job = Job(
             id = "j", name = "n", source = "s", target = "t", mediaType = MediaType.PHOTO, mode = JobMode.FAST,
             accountIds = listOf("a"), startFromId = 9, stripLinks = false, skipArabic = true,
-            perMinuteLimit = 10, viaTakeout = true,
+            perMinuteLimit = 10, viaTakeout = true, mediaTypes = listOf(MediaType.PHOTO, MediaType.FILE), extensions = "pdf",
         )
         val o = TgbJson.encodeToJsonElement(JobDto.serializer(), job.toDto()).jsonObject
         assertEquals("PHOTO", o["mediaType"]!!.jsonPrimitive.content)
         assertEquals("FAST", o["mode"]!!.jsonPrimitive.content)
-        assertEquals(12, o.size, o.toString())
+        assertEquals("""["PHOTO","FILE"]""", o["mediaTypes"].toString())
+        assertEquals("pdf", o["extensions"]!!.jsonPrimitive.content)
+        assertEquals(14, o.size, o.toString())
     }
 
     @Test

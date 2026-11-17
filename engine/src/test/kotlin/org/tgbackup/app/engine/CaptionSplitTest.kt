@@ -70,4 +70,15 @@ class CaptionSplitTest {
         assertTrue(isCaptionTooLong("Message caption is too long"))
         assertTrue(!isCaptionTooLong("FLOOD_WAIT_10"))
     }
+
+    @Test
+    fun captionRetryTriesTheOriginalFirst() {
+        // A replaced caption on a server-side copy: the original first, then the split, then a plain failure.
+        assertEquals(CaptionStep.KeepOriginal, captionRetry(upload = false, replacedCaption = true, triedOriginal = false, alreadySplit = false))
+        assertEquals(CaptionStep.Split, captionRetry(upload = false, replacedCaption = false, triedOriginal = true, alreadySplit = false))
+        assertEquals(CaptionStep.GiveUp, captionRetry(upload = false, replacedCaption = false, triedOriginal = false, alreadySplit = true))
+        // Nothing replaced, or an upload: straight to the split.
+        assertEquals(CaptionStep.Split, captionRetry(upload = false, replacedCaption = false, triedOriginal = false, alreadySplit = false))
+        assertEquals(CaptionStep.Split, captionRetry(upload = true, replacedCaption = true, triedOriginal = false, alreadySplit = false))
+    }
 }

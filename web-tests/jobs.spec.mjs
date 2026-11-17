@@ -51,7 +51,10 @@ test('addJobFlow: שמור stays disabled until source, target and an account ar
   await dialog.getByLabel('יעד: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@dst_chan');
   await expect(save).toBeDisabled();
   // The defaults of a new job.
-  await expect(dialog.getByRole('radio', { name: 'וידאו + קבצים' })).toBeChecked();
+  for (const t of ['סרטונים', 'קבצים', 'מוזיקה', 'הודעות קוליות']) {
+    await expect(dialog.getByRole('checkbox', { name: t, exact: true })).toBeChecked();
+  }
+  await expect(dialog.getByRole('checkbox', { name: 'הכל', exact: true })).not.toBeChecked();
   await expect(dialog.getByLabel('תקרת הודעות לדקה לחשבון (0 = ללא)')).toHaveValue('25');
   await expect(dialog.getByLabel("התחל מהודעה מס' (ריק = להמשיך מאיפה שעצר)")).toHaveValue('');
   await expect(dialog.getByRole('switch', { name: 'הסר קישורים ותיוגים מהכיתוב' })).toBeChecked();
@@ -66,7 +69,7 @@ test('addJobFlow: שמור stays disabled until source, target and an account ar
   const c = card(page, name);
   await expect(c.locator('.job-title')).toHaveText(`⚪ ${name}`);
   await expect(c).toContainText('@src_chan  ←  @dst_chan');
-  await expect(c).toContainText(`וידאו + קבצים · מסודר · חשבונות: ${acc}`);
+  await expect(c).toContainText(`סרטונים + קבצים + מוזיקה + הודעות קוליות · מסודר · חשבונות: ${acc}`);
   await expect(c).toContainText('הועתקו: 0');
   const saved = (await state(page.request)).jobs.find((j) => j.name === name);
   expect(saved.perMinuteLimit).toBe(25);
@@ -115,18 +118,21 @@ test('editing a job opens עריכת משימה with its values and saves in pla
   await card(page, name).getByRole('button', { name: 'ערוך' }).click();
   const dialog = page.getByRole('dialog', { name: 'עריכת משימה' });
   await expect(dialog.getByLabel('שם המשימה')).toHaveValue(name);
-  await expect(dialog.getByRole('radio', { name: 'תמונות בלבד' })).toBeChecked();
+  // A job saved with the old single type opens with the box that means the same.
+  await expect(dialog.getByRole('checkbox', { name: 'תמונות', exact: true })).toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: 'הכל', exact: true })).not.toBeChecked();
   await expect(dialog.getByLabel('תקרת הודעות לדקה לחשבון (0 = ללא)')).toHaveValue('7');
   await expect(dialog.getByLabel("התחל מהודעה מס' (ריק = להמשיך מאיפה שעצר)")).toHaveValue('42');
   // Its own account is not "taken".
   await expect(dialog.getByRole('checkbox', { name: acc, exact: true })).toBeChecked();
-  await dialog.getByRole('radio', { name: 'טקסט בלבד' }).check();
+  await dialog.getByRole('checkbox', { name: 'תמונות', exact: true }).uncheck();
+  await dialog.getByRole('checkbox', { name: 'טקסט', exact: true }).check();
   // Digits only.
   await dialog.getByLabel('תקרת הודעות לדקה לחשבון (0 = ללא)').fill('1a2');
   await expect(dialog.getByLabel('תקרת הודעות לדקה לחשבון (0 = ללא)')).toHaveValue('12');
   await dialog.getByRole('button', { name: 'שמור' }).click();
   await expect(dialog).toBeHidden();
-  await expect(card(page, name)).toContainText(`טקסט בלבד · מסודר · חשבונות: ${acc}`);
+  await expect(card(page, name)).toContainText(`טקסט · מסודר · חשבונות: ${acc}`);
   const saved = (await state(page.request)).jobs.find((j) => j.id === id);
   expect(saved.perMinuteLimit).toBe(12);
 });
@@ -604,8 +610,8 @@ test('the dialog with no accounts shows the warning, and via-takeout shows its h
   await dialog.getByRole('switch', { name: '📡 העתקה בלי הורדה (דרך סשן הייצוא)' }).click();
   await expect(dialog.getByText(help)).toBeVisible();
   await expect(dialog.getByText('סוג תוכן', { exact: true })).toBeVisible();
-  for (const t of ['וידאו + קבצים', 'תמונות בלבד', 'כל המדיה (ללא מדבקות)', 'טקסט בלבד', 'הכל']) {
-    await expect(dialog.getByRole('radio', { name: t, exact: true })).toBeVisible();
+  for (const t of ['הכל', 'תמונות', 'סרטונים', 'קבצים', 'מוזיקה', 'הודעות קוליות', 'טקסט']) {
+    await expect(dialog.getByRole('checkbox', { name: t, exact: true })).toBeVisible();
   }
   await expect(dialog.getByText('חשבונות (חשבון אחד — למשימה אחת בלבד)')).toBeVisible();
 });
@@ -763,4 +769,65 @@ test("a start message id beyond what a number keeps exactly is refused: שמור
   } finally {
     await page.request.delete(`/api/accounts/${accId}`);
   }
+});
+
+test('content types: "הכל" clears the others and the extensions; with no type and no extension שמור is disabled', async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const name = `job-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  try {
+    await open(page);
+    await page.getByRole('button', { name: '➕ הוסף משימה' }).click();
+    const dialog = page.getByRole('dialog', { name: 'משימה חדשה' });
+    await dialog.getByLabel('שם המשימה').fill(name);
+    await dialog.getByLabel('מקור: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@a');
+    await dialog.getByLabel('יעד: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@b');
+    await dialog.getByRole('checkbox', { name: acc, exact: true }).check();
+    const box = (n) => dialog.getByRole('checkbox', { name: n, exact: true });
+    const ext = dialog.getByLabel('סיומות קבצים (לא חובה), למשל pdf, zip');
+    const save = dialog.getByRole('button', { name: 'שמור' });
+    // A new job starts as the old default "וידאו + קבצים".
+    for (const n of ['סרטונים', 'קבצים', 'מוזיקה', 'הודעות קוליות']) await expect(box(n)).toBeChecked();
+    await box('הכל').check();
+    for (const n of ['תמונות', 'סרטונים', 'קבצים', 'מוזיקה', 'הודעות קוליות', 'טקסט']) await expect(box(n)).not.toBeChecked();
+    await expect(ext).toBeDisabled();
+    await box('תמונות').check();
+    await expect(box('הכל')).not.toBeChecked();
+    await expect(ext).toBeEnabled();
+    await expect(dialog.getByText('קבצים עם הסיומות האלה יגובו בנוסף לסוגים שסימנת')).toBeVisible();
+    await box('תמונות').uncheck();
+    await expect(save).toBeDisabled();
+    await expect(dialog.getByText('בחר לפחות סוג תוכן אחד או סיומת')).toBeVisible();
+    await ext.fill('.PDF, zip');
+    await expect(save).toBeEnabled();
+    await box('תמונות').check();
+    await save.click();
+    await expect(dialog).toBeHidden();
+    await expect(card(page, name)).toContainText('תמונות + .pdf + .zip · מסודר');
+    const saved = (await state(page.request)).jobs.find((j) => j.name === name);
+    expect(saved.mediaTypes).toEqual(['PHOTO']);
+    expect(saved.extensions).toBe('.PDF, zip');
+    await page.request.delete(`/api/jobs/${saved.id}`);
+    // The server refuses a job that copies nothing.
+    const res = await page.request.post('/api/jobs', { data: { name: `n-${uid()}`, source: '@a', target: '@b', accountIds: [accId], mediaTypes: [], extensions: ' , ' } });
+    expect(res.ok()).toBeFalsy();
+    expect(await res.text()).toContain('בחר לפחות סוג תוכן אחד או סיומת');
+  } finally {
+    await page.request.delete(`/api/accounts/${accId}`);
+  }
+});
+
+test('the per-minute limit warns above 30 and at 0, never at 25 or 30', async ({ page }) => {
+  await open(page);
+  await page.getByRole('button', { name: '➕ הוסף משימה' }).click();
+  const dialog = page.getByRole('dialog', { name: 'משימה חדשה' });
+  const limit = dialog.getByLabel('תקרת הודעות לדקה לחשבון (0 = ללא)');
+  const warning = dialog.getByText('מומלץ 25 (לכל היותר 30). מספר גבוה יותר עלול לגרום לטלגרם להגביל את החשבון או למחוק אותו.', { exact: true });
+  await expect(limit).toHaveValue('25');
+  await expect(warning).toBeHidden();
+  for (const [v, shown] of [['40', true], ['30', false], ['0', true], ['31', true], ['25', false], ['', false]]) {
+    await limit.fill(v);
+    if (shown) await expect(warning).toBeVisible(); else await expect(warning).toBeHidden();
+  }
+  await dialog.getByRole('button', { name: 'ביטול' }).click();
 });

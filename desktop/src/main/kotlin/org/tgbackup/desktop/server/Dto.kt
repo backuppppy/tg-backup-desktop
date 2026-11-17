@@ -42,10 +42,13 @@ data class JobDto(
     val skipArabic: Boolean,
     val perMinuteLimit: Int,
     val viaTakeout: Boolean,
+    val mediaTypes: List<MediaType>?,
+    val extensions: String,
 )
 
 fun Job.toDto() = JobDto(
     id, name, source, target, mediaType, mode, accountIds, startFromId, stripLinks, skipArabic, perMinuteLimit, viaTakeout,
+    mediaTypes, extensions,
 )
 
 @Serializable

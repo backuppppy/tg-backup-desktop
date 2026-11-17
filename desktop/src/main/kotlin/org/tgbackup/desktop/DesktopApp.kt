@@ -91,7 +91,24 @@ class DesktopApp(
     val remoteAuth = RemoteAuth(dir)
 
     /** The phone access: follows the Settings switch from [start]. */
-    val remote = RemoteAccessController(prefs, remoteAuth, tailscale, startRemoteServer, log, scope)
+    val remote = RemoteAccessController(
+        prefs, remoteAuth, tailscale, startRemoteServer, log, scope,
+        watchdogEveryMs = 30_000,
+        onWatchdogRestart = { failure ->
+            SentryOnce.message("remote-watchdog|$VERSION|$failure", "The phone server stopped answering ($failure) and was restarted", SentryLevel.WARNING)
+        },
+    )
+
+    init {
+        // Ktor's own WARN and ERROR lines (through SLF4J): into our log, and errors to Sentry once per message.
+        KtorLogSink.sink = sink@{ level, logger, message, error ->
+            if (!logger.startsWith("io.ktor")) return@sink
+            log.warn("[שרת] $message" + (error?.let { " (${it::class.java.simpleName}: ${it.message})" } ?: ""))
+            if (level == org.slf4j.event.Level.ERROR && error != null) {
+                SentryOnce.exception("ktor|$VERSION|$logger|${error::class.java.name}", error) { s -> s.setTag("logger", logger) }
+            }
+        }
+    }
 
     /**
      * An export is active until its job completes: `exports.running` keeps a finished export until it is dismissed, so this follows the

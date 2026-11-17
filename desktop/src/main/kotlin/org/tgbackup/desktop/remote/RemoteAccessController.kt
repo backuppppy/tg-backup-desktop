@@ -3,6 +3,8 @@ package org.tgbackup.desktop.remote
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -69,6 +71,11 @@ class RemoteAccessController(
     private val scope: CoroutineScope,
     private val pollMs: Long = 10_000,
     private val runningPollMs: Long = 60_000,
+    /** The watchdog's period while running ([RemoteWatchdog]); null = no watchdog (tests). */
+    private val watchdogEveryMs: Long? = null,
+    private val probe: suspend () -> String? = { runInterruptible(Dispatchers.IO) { RemoteWatchdog.httpProbe(REMOTE_PORT) } },
+    /** Told of each restart by the watchdog, with the failure (DesktopApp: Sentry). */
+    private val onWatchdogRestart: (failure: String) -> Unit = {},
 ) : AutoCloseable {
     private val core = MutableStateFlow(OFF)
     private val hasPassword = MutableStateFlow(auth.hasPassword())
@@ -78,6 +85,14 @@ class RemoteAccessController(
     private var dnsName: String? = null
 
     private var server: AutoCloseable? = null
+
+    /** The watchdog's loop, while the state is Running. */
+    @Volatile
+    private var watch: Job? = null
+
+    /** Set by [close]: a restart in flight must not start the server again. */
+    @Volatile
+    private var closed = false
 
     val status: StateFlow<RemoteStatusDto> =
         combine(core, prefs.value.map { it.remoteAccess }, auth.devices, hasPassword) { c, on, devices, pw ->
@@ -129,6 +144,8 @@ class RemoteAccessController(
 
     /** Program exit: the server stops, serve stays (see the class). */
     override fun close() {
+        closed = true
+        watch?.cancel()
         stopServer()
     }
 
@@ -143,9 +160,46 @@ class RemoteAccessController(
         } catch (e: Exception) {
             Core("Error", detail = e.message ?: e::class.java.simpleName)
         }
-        if (next.state != "Running") io { stopServer() }
+        if (next.state != "Running") {
+            stopWatch()
+            io { stopServer() }
+        }
         publish(next)
+        if (next.state == "Running") startWatch()
         return next
+    }
+
+    /** Starts the watchdog unless it runs (only while Running: never while off or while the port is taken). */
+    private fun startWatch() {
+        val every = watchdogEveryMs ?: return
+        if (watch?.isActive == true) return
+        val dog = RemoteWatchdog(probe, ::restartServer, { failure ->
+            log.warn("שרת הגישה מהטלפון לא עונה ($failure) — מפעיל אותו מחדש")
+            runCatching { onWatchdogRestart(failure) }
+        }, every)
+        watch = scope.launch { dog.run() }
+    }
+
+    private suspend fun stopWatch() {
+        watch?.cancelAndJoin()
+        watch = null
+    }
+
+    /** The watchdog's restart: the same stop and start as switching off and on, while the switch is still on. */
+    private suspend fun restartServer() {
+        if (!prefs.value.value.remoteAccess) return
+        val name = dnsName
+        io { stopServer() }
+        dnsName = name
+        try {
+            io { synchronized(this) { if (server == null && !closed) server = startServer { dnsName?.let(::setOf).orEmpty() } } }
+            log.info("שרת הגישה מהטלפון הופעל מחדש")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The next look at Tailscale starts it again (or shows the port as taken).
+            log.warn("הפעלה מחדש של שרת הגישה מהטלפון נכשלה: ${e.message ?: e::class.java.simpleName}")
+        }
     }
 
     private suspend fun check(): Core {
@@ -161,7 +215,8 @@ class RemoteAccessController(
         dnsName = up.dnsName
         if (!serverRunning()) {
             try {
-                io { synchronized(this) { server = startServer { dnsName?.let(::setOf).orEmpty() } } }
+                // The watchdog may have started it meanwhile: never a second one (a false "port taken").
+                io { synchronized(this) { if (server == null) server = startServer { dnsName?.let(::setOf).orEmpty() } } }
             } catch (e: BindException) {
                 return Core("PortBusy")
             }
@@ -175,6 +230,7 @@ class RemoteAccessController(
      * name), however long Tailscale takes.
      */
     private suspend fun turnOff() {
+        stopWatch()
         io { stopServer() }
         publish(OFF)
         try {

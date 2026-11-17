@@ -13,12 +13,43 @@ const MEDIA_TYPES = [
   ['ALL', 'הכל'],
 ];
 const MEDIA_LABEL = Object.fromEntries(MEDIA_TYPES);
+/** The editor's content choices (multi-select); "הכל" excludes the others. */
+const CONTENT_CHOICES = [
+  ['ALL', 'הכל'],
+  ['PHOTO', 'תמונות'],
+  ['VIDEO', 'סרטונים'],
+  ['FILE', 'קבצים'],
+  ['MUSIC', 'מוזיקה'],
+  ['VOICE', 'הודעות קוליות'],
+  ['TEXT', 'טקסט'],
+];
+const CHOICE_LABEL = Object.fromEntries(CONTENT_CHOICES);
+/** A job saved before the multi-select opens with the boxes that mean the same. */
+const LEGACY_CHOICES = {
+  VIDEO_DOC: ['VIDEO', 'FILE', 'MUSIC', 'VOICE'],
+  ALL_MEDIA: ['PHOTO', 'VIDEO', 'FILE', 'MUSIC', 'VOICE'],
+};
+const jobChoices = (job) => job.mediaTypes ?? LEGACY_CHOICES[job.mediaType] ?? [job.mediaType];
+/** The engine's parseExtensions: comma or space separated, a leading dot optional, lower case. */
+const parseExtensions = (s) => [...new Set((s ?? '').split(/[,;\s\u00A0]+/).map((x) => x.trim().replace(/^\.+/, '').toLowerCase()).filter(Boolean))];
+/** The card's content line: the old label for an old job, else "תמונות + קבצים + .pdf". */
+function contentLabel(job) {
+  if (!job.mediaTypes) return MEDIA_LABEL[job.mediaType] ?? job.mediaType;
+  if (job.mediaTypes.includes('ALL')) return 'הכל';
+  return [...job.mediaTypes.map((t) => CHOICE_LABEL[t] ?? t), ...parseExtensions(job.extensions).map((e) => `.${e}`)].join(' + ');
+}
+const EXT_HINT = 'קבצים עם הסיומות האלה יגובו בנוסף לסוגים שסימנת';
+const NO_CONTENT = 'בחר לפחות סוג תוכן אחד או סיומת';
+const LIMIT_WARNING = 'מומלץ 25 (לכל היותר 30). מספר גבוה יותר עלול לגרום לטלגרם להגביל את החשבון או למחוק אותו.';
+/** The warning shows above 30 and at 0 (no limit); an empty field saves as 25, so no warning. */
+const limitWarns = (s) => { const n = toInt(s); return n !== null && (n === 0 || n > 30); };
 const MODES = [
   ['ORDERED', '📑 מסודר — שומר על הסדר של המקור'],
   ['FAST', '⚡ מהיר — כל חשבון מטפל בקטע משלו (סדר מבולגן)'],
 ];
 const NEW_JOB = {
-  id: '', name: '', source: '', target: '', mediaType: 'VIDEO_DOC', mode: 'ORDERED', accountIds: [],
+  id: '', name: '', source: '', target: '', mediaType: 'VIDEO_DOC', mediaTypes: ['VIDEO', 'FILE', 'MUSIC', 'VOICE'], extensions: '',
+  mode: 'ORDERED', accountIds: [],
   startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false,
 };
 const IDLE = { running: false, paused: false, phase: '', lastId: 0, sourceTitle: '', isProtected: false, copied: 0, failed: 0, lastLink: null, lastTargetLink: null, latestLink: null,
@@ -214,7 +245,7 @@ function jobCard(job, status, accounts, state) {
     .filter((n) => n && n.trim());
   const base = `/api/jobs/${encodeURIComponent(job.id)}`;
 
-  const details = `${MEDIA_LABEL[job.mediaType] ?? job.mediaType} · ${job.mode === 'FAST' ? 'מהיר' : 'מסודר'}`
+  const details = `${contentLabel(job)} · ${job.mode === 'FAST' ? 'מהיר' : 'מסודר'}`
     + `${job.viaTakeout ? ' · 📡 בלי הורדה' : ''} · חשבונות: ${(names.length ? names : ['—']).join(', ')}`;
   const note = job.viaTakeout ? '📡 קריאה דרך סשן הייצוא ושליחה בלי הורדה'
     : status.isProtected ? '🔒 ערוץ מוגן — הורדה והעלאה מחדש' : null;
@@ -323,7 +354,10 @@ function jobDialog(initial, state) {
   const accounts = state.accounts ?? [];
   const usedElsewhere = new Set((state.jobs ?? []).filter((j) => j.id !== initial.id).flatMap((j) => j.accountIds));
   const selected = new Set(initial.accountIds);
-  let mediaType = initial.mediaType;
+  const chosen = new Set(jobChoices(initial));
+  // An old job saved untouched keeps its old type ("כל המדיה" also takes polls and locations, which no box covers).
+  const oldChoices = initial.mediaTypes ? null : [...chosen].sort().join();
+  const keepsOldType = () => oldChoices !== null && [...chosen].sort().join() === oldChoices && blank(extensions.input.value);
   let mode = initial.mode;
 
   const name = textField('שם המשימה', initial.name);
@@ -364,6 +398,29 @@ function jobDialog(initial, state) {
   const limit = textField('תקרת הודעות לדקה לחשבון (0 = ללא)', String(initial.perMinuteLimit), { inputmode: 'numeric' });
   digitsOnly(startFrom.input);
   digitsOnly(limit.input);
+  const limitWarning = h('div', { class: 'error-text' }, LIMIT_WARNING);
+  const contentBoxes = CONTENT_CHOICES.map(([value, label]) => {
+    const input = h('input', {
+      type: 'checkbox',
+      value,
+      onchange: () => {
+        if (input.checked) {
+          // "הכל" clears every other choice, and any other choice clears "הכל".
+          if (value === 'ALL') chosen.clear(); else chosen.delete('ALL');
+          chosen.add(value);
+        } else {
+          chosen.delete(value);
+        }
+        for (const b of contentBoxes) b.input.checked = chosen.has(b.value);
+        update();
+      },
+    });
+    input.checked = chosen.has(value);
+    return { value, input, row: h('label', { class: 'check-row' }, input, h('span', {}, label)) };
+  });
+  const extensions = textField('סיומות קבצים (לא חובה), למשל pdf, zip', initial.extensions ?? '', { dir: 'ltr' });
+  const extHint = h('div', { class: 'small' }, EXT_HINT);
+  const noContent = h('div', { class: 'error-text' }, NO_CONTENT);
   const strip = toggle('  הסר קישורים ותיוגים מהכיתוב', initial.stripLinks);
   const arabic = toggle('  דלג על הודעות בערבית', initial.skipArabic);
 
@@ -372,7 +429,9 @@ function jobDialog(initial, state) {
       name: name.input.value.trim(),
       source: source.input.value,
       target: target.input.value,
-      mediaType,
+      mediaType: initial.mediaType ?? 'VIDEO_DOC',
+      mediaTypes: keepsOldType() ? null : CONTENT_CHOICES.map(([v]) => v).filter((v) => chosen.has(v)),
+      extensions: chosen.has('ALL') ? '' : extensions.input.value.trim(),
       mode,
       accountIds: accounts.map((a) => a.id).filter((id) => selected.has(id)),
       startFromId: toLong(startFrom.input.value) ?? 0,
@@ -402,7 +461,10 @@ function jobDialog(initial, state) {
       target.row,
       h('div', { class: 'section' },
         h('div', { class: 'section-label' }, 'סוג תוכן'),
-        radios('job-media', MEDIA_TYPES, mediaType, (v) => { mediaType = v; }),
+        contentBoxes.map((b) => b.row),
+        extensions.row,
+        extHint,
+        noContent,
       ),
       h('div', { class: 'section' },
         h('div', { class: 'section-label' }, 'חשבונות (חשבון אחד — למשימה אחת בלבד)'),
@@ -414,6 +476,7 @@ function jobDialog(initial, state) {
       modeSection,
       startFrom.row,
       limit.row,
+      limitWarning,
       strip.row,
       arabic.row,
     ],
@@ -422,11 +485,17 @@ function jobDialog(initial, state) {
   function update() {
     takeoutHelp.hidden = !takeout.input.checked;
     modeSection.hidden = selected.size <= 1;
+    limitWarning.hidden = !limitWarns(limit.input.value);
+    const all = chosen.has('ALL');
+    extensions.input.disabled = all;
+    extHint.hidden = all;
+    const nothing = chosen.size === 0 && parseExtensions(extensions.input.value).length === 0;
+    noContent.hidden = !nothing;
     // A start id beyond what a JSON number keeps exactly is refused, not saved as 0.
     const startBad = startFrom.input.value !== '' && toLong(startFrom.input.value) === null;
-    dialog.okButton.disabled = blank(source.input.value) || blank(target.input.value) || selected.size === 0 || startBad;
+    dialog.okButton.disabled = blank(source.input.value) || blank(target.input.value) || selected.size === 0 || startBad || nothing;
   }
-  for (const f of [source, target, startFrom]) f.input.addEventListener('input', update);
+  for (const f of [source, target, startFrom, extensions, limit]) f.input.addEventListener('input', update);
   update();
   return dialog;
 }

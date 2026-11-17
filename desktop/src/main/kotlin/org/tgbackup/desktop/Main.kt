@@ -39,7 +39,7 @@ fun main(args: Array<String>) {
     // The uninstaller: put back Windows' "sleep after" that a running or crashed program left at "never", and end.
     if ("--restore-power" in args) restorePowerAndExit()
     // First: TDLib extracts its DLLs to java.io.tmpdir, which must be ASCII.
-    NativeTmp.ensureAsciiTmpdir("org.tgbackup.desktop.MainKt", args)
+    NativeTmp.ensureAsciiTmpdir("org.tgbackup.desktop.MainKt", args, waitForChild = NativeTmp.waitsForChild(args))
     println("TGBackup $VERSION")
     val smoke = AppSmoke("--smoke" in args)
     smoke.startWatchdog()

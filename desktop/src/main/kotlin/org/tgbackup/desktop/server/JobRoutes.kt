@@ -21,11 +21,15 @@ import org.tgbackup.app.data.Config
 import org.tgbackup.app.data.Job
 import org.tgbackup.app.data.JobMode
 import org.tgbackup.app.data.MediaType
+import org.tgbackup.app.engine.copiesNothing
+import org.tgbackup.app.engine.legacyMediaType
+import org.tgbackup.app.engine.normalizeTypes
 import org.tgbackup.desktop.DesktopApp
 
 internal const val MSG_JOB_RUNNING = "לא ניתן לשנות משימה בזמן שהיא פועלת"
 internal const val MSG_NO_SOURCE_OR_TARGET = "חסר מקור או יעד"
 internal const val MSG_NO_ACCOUNTS = "לא נבחרו חשבונות למשימה"
+internal const val MSG_NO_CONTENT = "בחר לפחות סוג תוכן אחד או סיומת"
 
 /** The JobDialog's fields. Missing fields take the dialog's defaults. `id` is always ignored: the server makes ids. */
 @Serializable
@@ -42,6 +46,9 @@ data class JobInput(
     val skipArabic: Boolean = false,
     val perMinuteLimit: Int = 25,
     val viaTakeout: Boolean = false,
+    /** The editor's multi-select; null = an older client that sends only [mediaType]. */
+    val mediaTypes: List<MediaType>? = null,
+    val extensions: String = "",
 )
 
 /** A refused command: answered as `{"error": message}` with [status]. */
@@ -62,12 +69,15 @@ internal suspend fun RoutingContext.command(block: suspend () -> Unit) {
 /** The dialog's save: trimmed texts, the selected accounts in config order, `startFromId` 0 when not set. */
 internal fun JobInput.toJob(id: String, cfg: Config): Job {
     val selected = accountIds.toSet()
+    val types = mediaTypes?.let { normalizeTypes(it) }
     return Job(
         id = id,
         name = name.trim(),
         source = source.trim(),
         target = target.trim(),
-        mediaType = mediaType,
+        mediaType = legacyMediaType(types ?: listOf(mediaType)),
+        mediaTypes = types,
+        extensions = if (types != null && MediaType.ALL in types) "" else extensions.trim(),
         mode = mode,
         accountIds = cfg.accounts.filter { it.id in selected }.map { it.id },
         startFromId = startFromId.coerceAtLeast(0),
@@ -83,6 +93,10 @@ internal fun JobInput.toJob(id: String, cfg: Config): Job {
 internal fun validateJob(job: Job, cfg: Config) {
     if (job.source.isBlank() || job.target.isBlank()) throw Refusal(HttpStatusCode.BadRequest, MSG_NO_SOURCE_OR_TARGET)
     if (job.accountIds.isEmpty()) throw Refusal(HttpStatusCode.BadRequest, MSG_NO_ACCOUNTS)
+    val types = job.mediaTypes
+    if (types != null && copiesNothing(types, job.extensions)) {
+        throw Refusal(HttpStatusCode.BadRequest, MSG_NO_CONTENT)
+    }
     val taken = cfg.jobs.filter { it.id != job.id }.flatMap { it.accountIds }.toSet()
     val clash = cfg.accounts.filter { it.id in job.accountIds && it.id in taken }
     if (clash.isNotEmpty()) {

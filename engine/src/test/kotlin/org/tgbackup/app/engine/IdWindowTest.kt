@@ -22,4 +22,20 @@ class IdWindowTest {
     fun serverIdsBecomeTdlibIds() {
         assertEquals(listOf(5L shl 20, 6L shl 20), tdlibIds(5L..6L).toList())
     }
+
+    @Test
+    fun sliceSizeFollowsTheLimit() {
+        assertEquals(25, sliceSize(25))
+        assertEquals(40, sliceSize(40))
+        assertEquals(25, sliceSize(0))
+        assertEquals(100, sliceSize(500))
+        assertEquals(25, sliceSize(-3))
+        assertEquals(1, sliceSize(1))
+    }
+
+    @Test
+    fun aSavedWaveKeepsItsSize() {
+        assertEquals(25, waveSliceSize(0))
+        assertEquals(40, waveSliceSize(40))
+    }
 }

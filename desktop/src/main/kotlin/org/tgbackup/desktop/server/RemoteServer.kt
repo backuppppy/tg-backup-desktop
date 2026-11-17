@@ -8,6 +8,7 @@ import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.cio.CIOApplicationEngine
 import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -28,6 +29,9 @@ const val REMOTE_PORT = 47800
 
 /** Loopback only: the phone reaches it through `tailscale serve`, never directly. */
 private const val HOST = "127.0.0.1"
+
+/** The phone server's idle timeout: longer than `tailscale serve`'s keep-alive (about 90 s). */
+private const val IDLE_TIMEOUT_SEC = 180
 
 /**
  * The phone's server: the same routes and screens as the window's [ApiServer], on `127.0.0.1:`[port] only (Tailscale
@@ -54,7 +58,14 @@ class RemoteServer(
         // A taken port fails here, on this thread: CIO reports it from its accept coroutine, where it would also
         // reach the uncaught-exception handler.
         ServerSocket().use { it.bind(InetSocketAddress(InetAddress.getByName(HOST), port)) }
-        val created = embeddedServer(CIO, port = port, host = HOST) {
+        val created = embeddedServer(CIO, configure = {
+            connector {
+                host = HOST
+                port = this@RemoteServer.port
+            }
+            // Longer than `tailscale serve`'s keep-alive, so a connection it reuses is not already closed here.
+            connectionIdleTimeoutSeconds = IDLE_TIMEOUT_SEC
+        }) {
             remoteModule(app, auth, allowedNames, port, secureCookie, handles, locks)
         }
         try {

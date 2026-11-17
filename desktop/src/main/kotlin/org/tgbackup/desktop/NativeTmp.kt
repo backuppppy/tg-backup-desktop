@@ -48,9 +48,10 @@ object NativeTmp {
      * `UnsatisfiedLinkError ... libcrypto-3-x64.dll: Can't find dependent libraries` (CI run 41725414413).
      * Java 17 fixes `java.io.tmpdir` when the JVM starts, so changing the property later has no effect.
      * Call this first in `main`: when the temp dir is not ASCII, it starts the same program again with
-     * TEMP/TMP set to [choose]'s directory, waits for it and exits with its exit code.
+     * TEMP/TMP set to [choose]'s directory and exits. With [waitForChild] it waits for it and exits with its exit
+     * code (smoke runs, whose exit code CI reads); otherwise it exits at once, so only one TGBackup runs.
      */
-    fun ensureAsciiTmpdir(mainClass: String, args: Array<String>) {
+    fun ensureAsciiTmpdir(mainClass: String, args: Array<String>, waitForChild: Boolean = true) {
         val os = System.getProperty("os.name")
         val tmpdir = System.getProperty("java.io.tmpdir")
         if (!needsRelaunch(tmpdir, os, System.getenv())) {
@@ -79,8 +80,12 @@ object NativeTmp {
         pb.environment()["TEMP"] = dir.toString()
         pb.environment()["TMP"] = dir.toString()
         pb.environment()[RELAUNCHED_ENV] = "1"
-        exitProcess(pb.start().waitFor())
+        val child = pb.start()
+        exitProcess(if (waitForChild) child.waitFor() else 0)
     }
+
+    /** The window program waits for its restarted copy only in a smoke run (CI reads its exit code). */
+    fun waitsForChild(args: Array<String>): Boolean = "--smoke" in args
 
     fun needsRelaunch(tmpdir: String, os: String, env: Map<String, String>): Boolean =
         os.startsWith("Windows", ignoreCase = true) && !isAscii(tmpdir) && env[RELAUNCHED_ENV] != "1"

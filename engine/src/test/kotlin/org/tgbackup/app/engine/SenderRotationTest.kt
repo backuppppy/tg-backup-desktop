@@ -83,4 +83,14 @@ class SenderRotationTest {
         r.rest(0, t + 300)
         assertEquals(SenderRotation.Pick.Wait(300), r.pick())
     }
+
+    @Test
+    fun aShortWaitDoesNotCutALongHotWindow() {
+        var t = 0L
+        val r = SenderRotation(1) { t }
+        r.busy(0, 20 * 60_000L)
+        r.busy(0, 3_000L)
+        t = 30 * 60_000L
+        kotlin.test.assertTrue(r.isHot(0))
+    }
 }

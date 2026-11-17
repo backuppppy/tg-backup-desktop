@@ -147,4 +147,11 @@ class NativeTmpTest {
             cmd,
         )
     }
+
+    @Test
+    fun theWindowWaitsForItsCopyOnlyInASmokeRun() {
+        kotlin.test.assertTrue(NativeTmp.waitsForChild(arrayOf("--smoke")))
+        assertFalse(NativeTmp.waitsForChild(arrayOf()))
+        assertFalse(NativeTmp.waitsForChild(arrayOf("--minimized")))
+    }
 }
