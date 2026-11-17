@@ -14,7 +14,7 @@
 
 - Warning text, exact: `מומלץ 25 (לכל היותר 30). מספר גבוה יותר עלול לגרום לטלגרם להגביל את החשבון או למחוק אותו.` It shows when the limit is above 30 or 0, never at 25 and never up to 30.
 - Slice size: `perMinuteLimit` clamped to 1..100, 0 → 25. A saved wave keeps its `waveChunk` (0 = 25).
-- New `MediaType`: `NO_PHOTO` "הכל בלי תמונות", `VIDEO` "רק סרטונים" (video, animation, round video), `FILE` "רק קבצים" (document, audio, voice). Existing values unchanged.
+- Content types (spec §3): multi-select `Job.mediaTypes` of `ALL` (exclusive), `PHOTO`, `VIDEO` (video, animation, round), `FILE` (document only), `MUSIC` (audio), `VOICE` (voice), `TEXT`; empty list = legacy `mediaType`. Optional `Job.extensions`; copied when it matches a type OR an extension; "הכל" disables extensions; neither → editor refuses to save.
 - Hot: the same numbers as ordered mode (`SenderRotation`: hot window clamp(wait, 5..30 min), rest ×3, at least 5 s).
 - `connectionIdleTimeoutSeconds = 180` on the phone server only.
 - Watchdog: every 30 s, 5 s timeout, restart after 2 failures in a row; any HTTP status line counts as alive.
@@ -30,13 +30,14 @@
 
 ---
 
-### Task 1: New content types (engine + desktop UI)
+### Task 1: Content types multi-select + file extensions (engine + desktop UI)
 
-**Files:** `engine/.../data/Models.kt` (MediaType), `engine/.../engine/Copier.kt` (`matches`), `engine/.../engine/TakeoutJobRunner.kt` (`CopyKind.matches`), `desktop/src/main/resources/web/screens/jobs.js` (MEDIA_TYPES); test `engine/src/test/.../engine/MediaTypeTest.kt`.
+**Files:** `engine/.../data/Models.kt` (MediaType new values `VIDEO`, `FILE`, `MUSIC`, `VOICE`; labels per spec; `Job.mediaTypes`, `Job.extensions`), new `engine/.../engine/ContentFilter.kt` (pure: `effectiveTypes(job)`, `parseExtensions(s)`, `ContentFilter(job).accepts(kind, fileName)`), `Copier.kt` (`MessageContent.fileName()`, `matches` via the filter), `TakeoutJobRunner.kt` (`CopyKind` + file name), `export-core/.../TakeoutCopier.kt` (`fileNameOf(m)` from `DocumentAttributeFilename`), every `matches(job.mediaType)` call site, labels in the job log line, desktop `Dto.kt`/`JobRoutes.kt` (new fields + validation), `jobs.js` (checkboxes, "הכל" exclusive, extension field + hint, save refusal); tests `ContentFilterTest`, `web-tests/jobs.spec.mjs`.
 
-- [ ] Test first: for each `MediaType`, which kinds match, for both the TDLib contents (built with tdl dto constructors) and `CopyKind`. The cases: `NO_PHOTO` rejects only photos; `VIDEO` takes video, animation and round video only; `FILE` takes document, audio and voice only. Run it and see it fail.
-- [ ] Add the enum values with the exact labels, both `matches` functions, and the three entries in the web UI list. Tests green; `./gradlew :engine:test :desktop:test --offline`.
-- [ ] Commit `engine: content types — everything but photos, only videos, only files`.
+- [ ] Tests first: legacy `VIDEO_DOC`/`ALL_MEDIA`/`PHOTO`/`TEXT`/`ALL` give today's results; each new type matches exactly its kinds; `FILE` rejects voice and audio; photos + `pdf` takes photos and `x.PDF`, rejects `x.zip`; no types + `pdf` takes only pdf; `ALL` ignores extensions; `parseExtensions(" .PDF, zip  rar")` = {pdf, zip, rar}.
+- [ ] Implement; route every filter call through `ContentFilter`. Desktop server rejects a job with no types and no extensions.
+- [ ] UI: checkboxes; ticking "הכל" clears the others, ticking another clears "הכל"; extension input disabled under "הכל"; an old job opens with the equivalent boxes. Playwright covers these.
+- [ ] `./gradlew :engine:test :desktop:test --offline` green; commit `engine: content types multi-select and a file-extension filter`.
 
 ### Task 2: Slice size from the per-minute limit + warning (engine + desktop UI)
 
@@ -82,5 +83,5 @@
 
 - [ ] Fresh reviewer on the whole desktop diff (Review Focus above); fix Critical and Important.
 - [ ] Push desktop, wait for CI, get the pre-release link.
-- [ ] Android (`/root/tg-backup-apk`, `main`): copy the engine changes with the known Android differences (MediaType + Models `waveChunk`, Copier, JobRunner, TakeoutJobRunner via patch, IdWindow). `JobsScreen.kt`: the warning under the limit field (same text, same rule). The new types appear by themselves (`MediaType.entries`). Version 2.2.27; build with the local Gradle 8.14.3; commit, push, CI, release, APK to `Download/TG Backup`.
-- [ ] Live (`/root/tg-live`): a fast run with limit 25 and with limit 40, checking slice sizes in the "סבב" log lines; a run with `FILE` or `VIDEO`.
+- [ ] Android (`/root/tg-backup-apk`, `main`): copy the engine changes with the known Android differences (MediaType + Models `waveChunk`, Copier, JobRunner, TakeoutJobRunner via patch, IdWindow). `JobsScreen.kt`: the warning under the limit field (same text, same rule). Content types become checkboxes with the same rules ("הכל" exclusive, extension field disabled under it, refusal to save with neither), and the extension field with its hint. Version 2.2.27; build with the local Gradle 8.14.3; commit, push, CI, release, APK to `Download/TG Backup`.
+- [ ] Live (`/root/tg-live`): a fast run with limit 25 and with limit 40, checking slice sizes in the "סבב" log lines; a run with `FILE` and with photos + an extension.

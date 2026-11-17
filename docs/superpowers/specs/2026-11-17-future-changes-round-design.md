@@ -24,24 +24,44 @@ caption (links stripped) is refused as too long first tries again keeping the **
 today. Links are not stripped in those messages. Uploads (protected sources) and takeout keep today's split, because
 there the message is always new.
 
-## 3. More content types (both)
+## 3. Content types: multi-select, and a file-extension field (both)
 
-**User:** "להבדיל בין קבצים לסרטונים ותמונות וכדומה": files apart from videos and photos.
+**User (17/11, replacing the earlier draft):**
+- "Only files" means real files (documents). Voice messages are not files, and music is not files.
+- Add "only music".
+- Content types are a multi-select. "הכל" is exclusive: choosing it clears every other choice, and choosing another
+  type clears "הכל".
+- An optional file-extension field ("סיומות קבצים", e.g. `pdf, zip`). It can be combined with types, e.g. photos +
+  `pdf`.
 
-**Design.** New `MediaType` values:
+**Design.**
+- New field `Job.mediaTypes: List<MediaType>` (empty = not set yet: use the old `mediaType`, so saved jobs behave
+  exactly as before). The editors show only these choices:
 
-| Value | Label | Matches |
+| Value | Label | Matches (TDLib / takeout `CopyKind`) |
 |---|---|---|
-| `NO_PHOTO` | הכל בלי תמונות | everything copyable except photos |
-| `VIDEO` | רק סרטונים | video, GIF (animation), round video |
-| `FILE` | רק קבצים | document, audio, voice message |
+| `ALL` | הכל | everything copyable, as today (exclusive) |
+| `PHOTO` | תמונות | photo |
+| `VIDEO` | סרטונים | video, GIF (animation), round video |
+| `FILE` | קבצים | document only |
+| `MUSIC` | מוזיקה | audio (music) |
+| `VOICE` | הודעות קוליות | voice message |
+| `TEXT` | טקסט | text |
 
-The existing values stay as they are: `PHOTO` ("תמונות בלבד") is "only photos". The TDLib filter
-(`MessageContent.matches`) and the takeout filter (`CopyKind.matches`) get the same meaning. A saved job with an old
-value reads as before. A config written by the new version and opened by an old one may fail on a new value; that is
-acceptable.
-
-My call: voice messages count as files, and GIFs count as videos.
+  `VIDEO_DOC` and `ALL_MEDIA` stay in the enum only for reading old jobs; opening such a job in the editor shows the
+  equivalent boxes (`VIDEO_DOC` → videos, files, music, voice; `ALL_MEDIA` → photos, videos, files, music, voice) and
+  saving writes the new list.
+- New field `Job.extensions: String = ""`. Parsed as a comma/space separated list, case-insensitive, with or without a
+  leading dot. It matches when the message carries a file whose name ends with `.ext` (document, video, audio,
+  animation; TDLib `fileName`, takeout `DocumentAttributeFilename`).
+- **Rule:** a message is copied when it matches one of the chosen types **or** one of the extensions.
+  - "הכל" selected → the extension field is disabled (everything is copied anyway).
+  - No type selected, extensions filled → only those extensions.
+  - No type and no extension → the editor refuses to save ("בחר לפחות סוג תוכן אחד או סיומת").
+- A line under the field explains it: "קבצים עם הסיומות האלה יגובו בנוסף לסוגים שסימנת".
+- My call: voice messages get their own choice ("הודעות קוליות"), since they are neither files nor music. Photos and
+  normal videos have no file name in Telegram, so an extension like `jpg` will not catch them (checked in the live
+  test).
 
 ## 5. Fast mode: slice size = the per-minute limit (both)
 
