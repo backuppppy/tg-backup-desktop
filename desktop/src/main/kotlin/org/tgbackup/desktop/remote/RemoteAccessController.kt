@@ -76,6 +76,8 @@ class RemoteAccessController(
     private val probe: suspend () -> String? = { runInterruptible(Dispatchers.IO) { RemoteWatchdog.httpProbe(REMOTE_PORT) } },
     /** Told of each restart by the watchdog, with the failure (DesktopApp: Sentry). */
     private val onWatchdogRestart: (failure: String) -> Unit = {},
+    /** Told once when Windows has no free port left (DesktopApp: Sentry). */
+    private val onOutOfPorts: (failure: String) -> Unit = {},
 ) : AutoCloseable {
     private val core = MutableStateFlow(OFF)
     private val hasPassword = MutableStateFlow(auth.hasPassword())
@@ -85,6 +87,8 @@ class RemoteAccessController(
     private var dnsName: String? = null
 
     private var server: AutoCloseable? = null
+
+    private val outOfPorts = OutOfPortsNotice()
 
     /** The watchdog's loop, while the state is Running. */
     @Volatile
@@ -175,8 +179,13 @@ class RemoteAccessController(
         if (watch?.isActive == true) return
         val dog = RemoteWatchdog(probe, ::restartServer, { failure ->
             log.warn("שרת הגישה מהטלפון לא עונה ($failure) — מפעיל אותו מחדש")
+            // The restart stays (it is harmless), but it cannot help here: say once what does.
+            if (outOfPorts.onFailure(failure)) {
+                log.error("נגמרו ל-Windows חיבורי הרשת — הפעל מחדש את המחשב")
+                runCatching { onOutOfPorts(failure) }
+            }
             runCatching { onWatchdogRestart(failure) }
-        }, every)
+        }, every, onHealthy = outOfPorts::onHealthy)
         watch = scope.launch { dog.run() }
     }
 

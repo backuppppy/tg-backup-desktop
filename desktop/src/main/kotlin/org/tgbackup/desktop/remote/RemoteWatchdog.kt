@@ -17,6 +17,8 @@ class RemoteWatchdog(
     private val report: (failure: String) -> Unit,
     private val everyMs: Long = 30_000,
     private val failuresToRestart: Int = 2,
+    /** Told of each answered probe. */
+    private val onHealthy: () -> Unit = {},
 ) {
     private var failures = 0
 
@@ -31,6 +33,7 @@ class RemoteWatchdog(
         }
         if (failure == null) {
             failures = 0
+            onHealthy()
             return false
         }
         if (++failures < failuresToRestart) return false
@@ -50,6 +53,15 @@ class RemoteWatchdog(
     }
 
     companion object {
+        /**
+         * The probe could not even open a connection because Windows has no free local port (17/11: 20,537 TIME_WAIT
+         * connections that Windows never purged). Restarting the server cannot help; restarting the PC does.
+         */
+        fun isOutOfPorts(failure: String): Boolean =
+            failure.startsWith("BindException") ||
+                failure.contains("No buffer space available") ||
+                failure.contains("Cannot assign requested address")
+
         /**
          * The real probe: a request to the server on 127.0.0.1:[port]. Any HTTP status line counts as alive (the
          * Host check may answer 4xx: the server still accepts). Null when alive, else the failure.
@@ -72,5 +84,26 @@ class RemoteWatchdog(
         } catch (e: java.io.IOException) {
             e::class.java.simpleName + ": " + (e.message ?: "")
         }
+    }
+}
+
+/**
+ * Says "Windows ran out of ports" once per episode: the first out-of-ports failure is told, the next ones are not, until
+ * the server answers again.
+ */
+class OutOfPortsNotice {
+    private var told = false
+
+    /** True when this failure should be told now. */
+    @Synchronized
+    fun onFailure(failure: String): Boolean {
+        if (!RemoteWatchdog.isOutOfPorts(failure) || told) return false
+        told = true
+        return true
+    }
+
+    @Synchronized
+    fun onHealthy() {
+        told = false
     }
 }

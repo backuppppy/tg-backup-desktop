@@ -64,4 +64,23 @@ class RemoteWatchdogTest {
         val free = ServerSocket(0).use { it.localPort }
         assertEquals("refused", RemoteWatchdog.httpProbe(free, 1_000))
     }
+
+    @Test
+    fun outOfPortsIsToldOncePerEpisode() {
+        val n = OutOfPortsNotice()
+        assertFalse(n.onFailure("refused"))
+        assertTrue(n.onFailure("BindException: Address already in use: getsockopt"))
+        assertFalse(n.onFailure("BindException: Address already in use: getsockopt"))
+        assertTrue(RemoteWatchdog.isOutOfPorts("SocketException: No buffer space available (maximum connections reached?): connect"))
+        n.onHealthy()
+        assertTrue(n.onFailure("BindException: Address already in use: getsockopt"))
+    }
+
+    @Test
+    fun anAnsweredProbeIsReported() = runBlocking {
+        var healthy = 0
+        val d = RemoteWatchdog(probe = { null }, restart = {}, report = {}, onHealthy = { healthy++ })
+        d.check()
+        assertEquals(1, healthy)
+    }
 }

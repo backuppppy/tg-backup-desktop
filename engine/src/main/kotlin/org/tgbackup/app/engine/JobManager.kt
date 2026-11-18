@@ -116,6 +116,8 @@ class JobManager(
             it.copy(
                 lastId = p.lastId, copiedTotal = p.copiedTotal, runMillis = p.runMillis, latestId = p.latestId,
                 runningSince = since,
+                // After a restart the source's chat is known from the saved progress, so the numbers are links.
+                sourceChatId = if (it.sourceChatId == 0L) p.sourceId else it.sourceChatId,
             )
         }
     }
@@ -357,6 +359,8 @@ class JobManager(
     /** A full reset: the position and the run totals (copied, run time, latest id). */
     fun resetProgress(jobId: String) = synchronized(clockLock) {
         store.clearProgress(jobId)
+        // The chats shown belong to the old position (an edited job may have a new source): no links into them.
+        setStatus(jobId) { it.copy(sourceChatId = 0, sourceTitle = "", targetChatId = 0, lastTargetId = 0) }
         // A running clock starts over from now.
         runSegments[jobId]?.let { runSegments[jobId] = Segment(it.run, wallClock()) }
         showSavedProgress(jobId)
@@ -393,9 +397,13 @@ class JobManager(
         val source = job.source
         if (source.isBlank()) return null
         val ac = job.accountIds.mapNotNull { accounts[it] }.firstOrNull { it.isReady } ?: return null
+        var chatId = 0L
+        var chatTitle = ""
         val latest = try {
             withTimeoutOrNull(30_000) {
                 val chat = ac.resolveChat(source).getOrNull() ?: return@withTimeoutOrNull null
+                chatId = chat.id
+                chatTitle = chat.title
                 ac.latestServerId(chat.id)?.takeIf { it > 0 } ?: chat.lastMessage?.id?.serverId()
             }
         } catch (e: CancellationException) {
@@ -403,7 +411,7 @@ class JobManager(
         } catch (e: Throwable) {
             null
         } ?: return null
-        return saveRefreshed(jobId, source, latest)
+        return saveRefreshed(jobId, source, latest, chatId, chatTitle)
     }
 
     /**
@@ -411,10 +419,20 @@ class JobManager(
      * may have reported a newer one while the refresh read). Nothing is saved when the job was deleted or its
      * source is no longer [source]. Returns the saved latest id, or null when nothing was saved.
      */
-    internal fun saveRefreshed(jobId: String, source: String, id: Long): Long? = synchronized(clockLock) {
+    internal fun saveRefreshed(
+        jobId: String,
+        source: String,
+        id: Long,
+        /** The source's chat, as the refresh found it: a stopped job's card links its numbers into it. */
+        chatId: Long = 0,
+        chatTitle: String = "",
+    ): Long? = synchronized(clockLock) {
         if (id <= 0) return@synchronized null
         val job = store.config.value.jobs.firstOrNull { it.id == jobId } ?: return@synchronized null
         if (job.source != source) return@synchronized null
+        if (chatId != 0L) {
+            setStatus(jobId) { it.copy(sourceChatId = chatId, sourceTitle = chatTitle.ifBlank { it.sourceTitle }) }
+        }
         val best = maxOf(store.progress(jobId).latestId, id)
         saveLatest(jobId, best)
         best

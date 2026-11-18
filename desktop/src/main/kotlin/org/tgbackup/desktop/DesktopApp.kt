@@ -94,6 +94,15 @@ class DesktopApp(
     val remote = RemoteAccessController(
         prefs, remoteAuth, tailscale, startRemoteServer, log, scope,
         watchdogEveryMs = 30_000,
+        onOutOfPorts = { failure ->
+            // Off the watchdog: netstat may be slow with tens of thousands of connections.
+            scope.launch(Dispatchers.IO) {
+                val timeWait = runCatching { countTimeWait() }.getOrNull()
+                SentryOnce.message("out-of-ports|$VERSION", "Windows ran out of local ports ($failure)", SentryLevel.WARNING) { s ->
+                    timeWait?.let { s.setExtra("time_wait", it.toString()) }
+                }
+            }
+        },
         onWatchdogRestart = { failure ->
             SentryOnce.message("remote-watchdog|$VERSION|$failure", "The phone server stopped answering ($failure) and was restarted", SentryLevel.WARNING)
         },
@@ -306,4 +315,20 @@ internal fun activeWhileRunning(job: Job): Flow<Boolean> = callbackFlow {
         channel.close()
     }
     awaitClose { handle.dispose() }
+}
+
+/** The number of TCP connections in TIME_WAIT (netstat), for the out-of-ports report; null when it cannot be read. */
+internal fun countTimeWait(): Int? {
+    val p = ProcessBuilder("netstat", "-an", "-p", "tcp").redirectErrorStream(true).start()
+    // The output is read on its own thread, so the 20 s limit holds even while netstat still writes.
+    val count = java.util.concurrent.CompletableFuture.supplyAsync {
+        p.inputStream.bufferedReader().useLines { lines -> lines.count { it.contains("TIME_WAIT") } }
+    }
+    return try {
+        count.get(20, java.util.concurrent.TimeUnit.SECONDS)
+    } catch (e: Exception) {
+        null
+    } finally {
+        if (p.isAlive) p.destroyForcibly()
+    }
 }

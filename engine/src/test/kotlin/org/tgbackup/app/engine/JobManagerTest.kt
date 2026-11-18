@@ -461,6 +461,25 @@ class JobManagerTest {
     }
 
     @Test
+    fun aStoppedJobKnowsItsSourceChatForTheLinksAndAResetForgetsIt() {
+        val dir = dataDir()
+        // After a restart: the saved progress names the source's chat.
+        val store = storeWithIdleJob(dir, Progress(lastId = 7, sourceId = -100123))
+        val jobs = manager(store, dir)
+        assertEquals(-100123L, jobs.status().sourceChatId)
+
+        // A refresh finds the chat (and its title) too.
+        jobs.saveRefreshed("j1", "src", 50, chatId = -100777, chatTitle = "מקור")
+        assertEquals(-100777L, jobs.status().sourceChatId)
+        assertEquals("מקור", jobs.status().sourceTitle)
+
+        // A reset (a new source) leaves no link into the old chats.
+        jobs.resetProgress("j1")
+        assertEquals(0L, jobs.status().sourceChatId)
+        assertEquals(0L, jobs.status().targetChatId)
+    }
+
+    @Test
     fun onlyARunningJobRefreshesItsLatestIdPeriodically() {
         val dir = dataDir()
         val store = storeWithIdleJob(dir)

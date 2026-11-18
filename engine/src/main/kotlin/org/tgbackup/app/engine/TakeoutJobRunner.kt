@@ -344,18 +344,20 @@ class TakeoutJobRunner(
             val slices = TakeoutDiagnostics.slices(wave.waveStart, wave.waveEnd, n, chunk)
             log.info(
                 "[$tag] סבב ${wave.waveStart}–${wave.waveEnd} | " +
-                    slices.joinToString(", ") { "${workers[it.index].account.tag}: ${it.start}–${it.end}" },
+                    slices.joinToString(", ") { "${workers[it.index % n].account.tag}: ${it.start}–${it.end}" },
             )
             if (!fastStartSent) {
                 fastStartSent = true
                 reportFastStart(workers, wave, slices, latestKnown, latestError, resumed)
             }
-            val results = slices.map { sl ->
-                async { sl to rangeWorker(sl.index, workers[sl.index], sl.start, sl.end, resumed) }
-            }.awaitAll()
+            // Slice k goes to worker k % n; a worker with more than one slice (a wave saved with more accounts) does
+            // them one after the other. Progress is kept per slice, so a resumed slice starts where it stopped.
+            val results = slices.groupBy { it.index % n }.map { (wi, mine) ->
+                async { mine.map { sl -> sl to rangeWorker(sl.index, workers[wi], sl.start, sl.end, resumed) } }
+            }.awaitAll().flatten()
             for ((sl, r) in results) {
                 if (TakeoutDiagnostics.incompleteSlice(r.last, sl.end, r.endedNormally)) {
-                    anomaly("incomplete-slice", workers[sl.index].account.tag, sl.start, sl.end, r.firstId, r.last, r.last, r.processed)
+                    anomaly("incomplete-slice", workers[sl.index % n].account.tag, sl.start, sl.end, r.firstId, r.last, r.last, r.processed)
                 }
             }
             prevWaveEnd = wave.waveEnd
@@ -542,7 +544,7 @@ class TakeoutJobRunner(
                 "accounts" to workers.joinToString(",") { it.account.tag },
                 "first_wave" to "${wave.waveStart}-${wave.waveEnd}",
                 "resumed" to resumed.toString(),
-                "slices" to slices.joinToString(",") { "${workers[it.index].account.tag}:${it.start}-${it.end}" },
+                "slices" to slices.joinToString(",") { "${workers[it.index % workers.size].account.tag}:${it.start}-${it.end}" },
                 "latest" to latest.toString(),
                 "latest_error" to latestError,
                 "last_id" to wave.lastId.toString(), "wave_start" to wave.waveStart.toString(), "wave_end" to wave.waveEnd.toString(),
