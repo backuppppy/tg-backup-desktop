@@ -82,14 +82,7 @@ class MtpClient(
 
     val mainDc: Int get() = storage.mainDc
 
-    private fun builtIn(dc: Int): DcOption = when (dc) {
-        1 -> DcOption(1, "149.154.175.50")
-        2 -> DcOption(2, "149.154.167.51")
-        3 -> DcOption(3, "149.154.175.100")
-        4 -> DcOption(4, "149.154.167.91")
-        5 -> DcOption(5, "149.154.171.5")
-        else -> throw MtpException("unknown DC $dc")
-    }
+    private fun builtIn(dc: Int): DcOption = builtInAddresses(dc).first()
 
     /** The config's plain-TCP options for [dc]: IPv4, not CDN, not TCPO-only, without a secret. */
     private fun configOptions(dc: Int): List<MTPDdcOption> =
@@ -100,13 +93,13 @@ class MtpClient(
         val candidates = configOptions(dc)
         val ordered = if (kind == Kind.Media) candidates.filter { it.is_media_only } + candidates.filter { !it.is_media_only }
         else candidates.filter { !it.is_media_only }
-        return (ordered.map { DcOption(dc, it.vip_address, it.vport) } + builtIn(dc)).distinctBy { it.host to it.port }
+        return (ordered.map { DcOption(dc, it.vip_address, it.vport) } + builtInAddresses(dc)).distinctBy { it.host to it.port }
     }
 
     /** Where to create [dc]'s auth key: the built-in address, then the config's non-media options. */
     private fun keyAddresses(dc: Int): List<DcOption> =
-        (listOf(builtIn(dc)) + configOptions(dc).filter { !it.is_media_only }.map { DcOption(dc, it.vip_address, it.vport) })
-            .distinctBy { it.host to it.port }
+        (listOf(builtIn(dc)) + configOptions(dc).filter { !it.is_media_only }.map { DcOption(dc, it.vip_address, it.vport) } +
+            builtInAddresses(dc)).distinctBy { it.host to it.port }
 
     /** Creates [dc]'s auth key at the first of [keyAddresses] that answers; each read waits at most 15 s. */
     private suspend fun createAuthKey(dc: Int): AuthKeyResult {
@@ -115,7 +108,8 @@ class MtpClient(
                 return withContext(Dispatchers.IO) {
                     val t = ObfuscatedTcp(address.host, address.port, dc)
                     try {
-                        t.connect(readTimeoutMs = 15_000)
+                        // A blocked address fails fast enough to try the others (see builtInAddresses).
+                        t.connect(timeoutMs = 8_000, readTimeoutMs = 15_000)
                         AuthKeyCreator(t, dc).create()
                     } finally {
                         t.close()
@@ -215,4 +209,26 @@ class MtpClient(
             sessions.clear()
         }
     }
+}
+
+/** Telegram's built-in addresses of each DC (as its desktop app keeps them), the first one being the main one. */
+private val BUILT_IN_HOSTS: Map<Int, List<String>> = mapOf(
+    1 to listOf("149.154.175.50", "149.154.175.53"),
+    2 to listOf("149.154.167.51", "95.161.76.100"),
+    3 to listOf("149.154.175.100"),
+    4 to listOf("149.154.167.91"),
+    5 to listOf("149.154.171.5", "91.108.56.130"),
+)
+
+/** The ports Telegram's servers answer on, the usual one first. */
+private val DC_PORTS = listOf(443, 80, 5222)
+
+/**
+ * Every built-in address of [dc], best first: each host on port 443, then each host on 80 and 5222. On 17-18/11 the
+ * first login of a new account failed because 149.154.167.51:443 did not answer, from the phone and from the PC,
+ * while TDLib (which tries other addresses and ports) connected.
+ */
+fun builtInAddresses(dc: Int): List<DcOption> {
+    val hosts = BUILT_IN_HOSTS[dc] ?: throw MtpException("unknown DC $dc")
+    return DC_PORTS.flatMap { port -> hosts.map { DcOption(dc, it, port) } }
 }
