@@ -26,6 +26,8 @@ class SenderRotation(
     /** The account whose turn it is, and how many messages it sent in it; -1 = no turn going on. */
     private var holder = -1
     private var used = 0
+    /** The rest each account is owed when its turn ends (the last one [sent] gave). */
+    private val owedRest = LongArray(size)
 
     /** The next free account in turn; else how long until the first one is free; else [Pick.None]. */
     @Synchronized
@@ -44,6 +46,8 @@ class SenderRotation(
             if (freeAt <= t) {
                 cursor = (i + 1) % size
                 if (i != holder) {
+                    // A turn cut short (its account failed a message) still ends with the account's rest.
+                    if (holder >= 0 && used > 0) restUntil[holder] = maxOf(restUntil[holder], t + owedRest[holder])
                     holder = i
                     used = 0
                 }
@@ -76,6 +80,7 @@ class SenderRotation(
             used = 0
         }
         used++
+        owedRest[index] = restMs
         if (used >= turnSize) {
             restUntil[index] = now() + restMs
             holder = -1

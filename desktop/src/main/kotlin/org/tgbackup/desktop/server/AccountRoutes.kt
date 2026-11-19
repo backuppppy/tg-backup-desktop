@@ -68,11 +68,13 @@ internal fun AccountInput.toAccount(
     storedToken: String = "",
     /** The first regular account: a bot without its own API ID / hash uses its ones. */
     apiFrom: Account? = null,
+    /** PUT: whether the stored account is a bot. An edit never changes a regular account into a bot or back. */
+    storedIsBot: Boolean? = null,
 ): Account {
     val idText = if (apiId is JsonNull) "" else apiId.content.trim()
     val parsedId = if (idText.isNotEmpty() && idText.all { it in '0'..'9' }) idText.toIntOrNull() else null
     val hash = if (storedHash != null && apiHash == MASKED_HASH) storedHash else apiHash.trim()
-    if (isBot || botToken.isNotBlank()) {
+    if (storedIsBot ?: (isBot || botToken.isNotBlank())) {
         val token = botToken.trim().ifBlank { storedToken }
         if (!isBotToken(token)) throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_BOT_TOKEN)
         val (botId, botHash) = if (parsedId != null && hash.length >= 16) parsedId to hash
@@ -130,7 +132,7 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks, handles: ChatHandl
                     val old = find(id)
                     val acc = input.toAccount(
                         id, storedHash = old.apiHash, storedToken = old.botToken,
-                        apiFrom = store.config.value.accounts.firstOrNull { !it.isBot },
+                        apiFrom = store.config.value.accounts.firstOrNull { !it.isBot }, storedIsBot = old.isBot,
                     )
                     store.updateConfig { it.withAccount(acc) }
                 }

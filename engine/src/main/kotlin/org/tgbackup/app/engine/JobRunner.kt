@@ -605,9 +605,17 @@ class JobRunner(
             }
             val inRange = read.getOrElse { e ->
                 log.error("[$tag · ${ac.tag}] קריאת הודעות נכשלה: ${e.message}")
+                // A bot that cannot read the source never will: the slice goes to a regular account.
+                if (ac.account.isBot) return SliceEnd.Released(System.currentTimeMillis() + READ_STUCK_MS)
                 delay(15_000)
                 null
             } ?: continue
+            // A bot that gets nothing back may not see the source: a regular account reads the slice (and passes
+            // deleted messages), so nothing is skipped unseen.
+            if (inRange.isEmpty() && ac.account.isBot) {
+                log.warn("[$tag · ${ac.tag}] הבוט לא קיבל הודעות ${ids.first}–${ids.last} — החלק עובר לחשבון רגיל")
+                return SliceEnd.Released(System.currentTimeMillis() + READ_STUCK_MS)
+            }
             for (msg in inRange) {
                 awaitNotPaused()
                 if (!ac.isReady) return SliceEnd.Released(System.currentTimeMillis())

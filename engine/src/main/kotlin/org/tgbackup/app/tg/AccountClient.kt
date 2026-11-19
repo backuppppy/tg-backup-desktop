@@ -72,6 +72,10 @@ sealed class SendOutcome {
 data class ProtectionNotice(val chatId: Long, val isProtected: Boolean)
 
 fun <T> TdlResult<T>.getOrNull(): T? = (this as? TdlResult.Success)?.result
+/** Telegram's answer to a bot token it does not know (as opposed to a network error or a FloodWait). */
+internal fun isBadBotToken(error: String): Boolean =
+    error.startsWith("401") || error.contains("TOKEN", ignoreCase = true) || error.startsWith("400")
+
 fun TdlResult<*>.errorText(): String? = (this as? TdlResult.Failure)?.let { "${it.code}: ${it.message}" }
 
 /** One TDLib instance bound to one Telegram account, with its own database directory. */
@@ -133,11 +137,18 @@ class AccountClient(
             is AuthorizationStateWaitPhoneNumber -> if (account.isBot) {
                 // A bot has no phone or code: it logs in with its token at once.
                 scope.launch {
-                    val error = client.checkAuthenticationBotToken(account.botToken.trim()).errorText()
-                    _lastError.value = error
-                    if (error != null) {
-                        _auth.value = AuthUi.Unsupported("טוקן הבוט לא תקין ($error)")
-                        log.error("[$tag] התחברות הבוט נכשלה: $error")
+                    while (true) {
+                        val error = client.checkAuthenticationBotToken(account.botToken.trim()).errorText()
+                        _lastError.value = error
+                        if (error == null) break
+                        // A wrong token is final; a network error or a FloodWait is tried again in half a minute.
+                        if (isBadBotToken(error)) {
+                            _auth.value = AuthUi.Unsupported("טוקן הבוט לא תקין ($error)")
+                            log.error("[$tag] התחברות הבוט נכשלה: $error")
+                            break
+                        }
+                        log.warn("[$tag] התחברות הבוט נכשלה ($error) — מנסה שוב בעוד 30 שנ'")
+                        delay(30_000)
                     }
                 }
             } else {

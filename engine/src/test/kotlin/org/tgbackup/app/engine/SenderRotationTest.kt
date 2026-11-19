@@ -153,4 +153,23 @@ class SenderRotationTest {
         assertEquals(25, senderLimit(25, isBot = false))
         assertEquals(0, senderLimit(0, isBot = false))
     }
+
+    @Test
+    fun aTurnCutShortByAFailureStillEndsWithTheRest() {
+        var now = 0L
+        val r = SenderRotation(2, now = { now }, turnSize = 3)
+        assertEquals(SenderRotation.Pick.Account(0), r.pick()); r.sent(0, 5_000)
+        // Account 0 failed the next message: account 1 takes it, and account 0 rests before it sends again.
+        assertEquals(SenderRotation.Pick.Account(1), r.pick(exclude = setOf(0))); r.sent(1, 5_000)
+        r.busy(1, 60_000)
+        assertEquals(SenderRotation.Pick.Wait(5_000), r.pick())
+    }
+
+    @Test
+    fun aWrongBotTokenIsFinalANetworkErrorIsNot() {
+        kotlin.test.assertTrue(org.tgbackup.app.tg.isBadBotToken("401: ACCESS_TOKEN_INVALID"))
+        kotlin.test.assertTrue(org.tgbackup.app.tg.isBadBotToken("400: ACCESS_TOKEN_EXPIRED"))
+        kotlin.test.assertFalse(org.tgbackup.app.tg.isBadBotToken("500: Request aborted"))
+        kotlin.test.assertFalse(org.tgbackup.app.tg.isBadBotToken("429: Too Many Requests: retry after 10"))
+    }
 }

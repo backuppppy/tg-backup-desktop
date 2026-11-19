@@ -121,7 +121,8 @@ function busyText(state) {
 
 function updateSetup(state) {
   const v = view;
-  const accounts = state.accounts ?? [];
+  // A bot has no export session: only regular accounts export.
+  const accounts = (state.accounts ?? []).filter((a) => !a.isBot);
   const ready = new Set((state.accountStates ?? []).filter((x) => x.auth?.type === 'Ready').map((x) => x.id));
   const radios = accounts.map((a) => ({ id: a.id, label: accLabel(a), ready: ready.has(a.id) }));
   patch(v, 'radios', JSON.stringify([radios, s.accountId]), v.radios, () => radios.map((r) =>
