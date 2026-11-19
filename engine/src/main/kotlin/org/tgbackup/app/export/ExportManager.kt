@@ -174,6 +174,8 @@ class ExportManager(
             scope.setExtra("pendingCount", s.pendingCount.toString())
             scope.setExtra("oldestRequestAgeMs", s.oldestRequestAgeMs.toString())
             scope.setExtra("maxResends", s.maxResends.toString())
+            scope.setExtra("refused", s.refused.take(4000))
+            scope.setExtra("pendingNames", s.pendingNames.take(500))
         }
     }
 
