@@ -426,8 +426,9 @@ button.chat-card:hover { background: var(--surface-variant); }
       grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
       gap: 12px;
     }
-    .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full) { grid-column: 1 / -1; }
-    .accounts > button.full { align-self: start; }
+    .jobs > :not(.job-card):not(button.full), .accounts > :not(.account-card):not(button.full):not(.accounts-add) { grid-column: 1 / -1; }
+    /* The add buttons (➕ חשבון, 🤖 בוט) take one cell together. */
+    .accounts > button.full, .accounts > .accounts-add { align-self: start; }
     /* Task 10c: the add button on its own row, about a card wide; jobs.js puts it above the cards from 900 px (plan 3b). */
     .jobs > button.full { grid-column: 1 / -1; justify-self: start; width: min(100%, 420px); }
   }
