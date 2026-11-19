@@ -93,4 +93,64 @@ class SenderRotationTest {
         t = 30 * 60_000L
         kotlin.test.assertTrue(r.isHot(0))
     }
+
+    @Test
+    fun eachAccountSendsItsTurnInARowThenRests() {
+        var now = 0L
+        val r = SenderRotation(3, now = { now }, turnSize = 3)
+        val order = mutableListOf<Int>()
+        repeat(9) {
+            val i = (r.pick() as SenderRotation.Pick.Account).index
+            order += i
+            r.sent(i, restMs = 2_000)
+        }
+        assertEquals(listOf(0, 0, 0, 1, 1, 1, 2, 2, 2), order)
+        // All three rest now: the first is free again after its rest.
+        assertEquals(SenderRotation.Pick.Wait(2_000), r.pick())
+        now = 2_000
+        assertEquals(SenderRotation.Pick.Account(0), r.pick())
+    }
+
+    @Test
+    fun aFloodWaitInTheMiddleOfATurnPassesItOn() {
+        var now = 0L
+        val r = SenderRotation(2, now = { now }, turnSize = 3)
+        assertEquals(SenderRotation.Pick.Account(0), r.pick())
+        r.sent(0, 2_000)
+        r.busy(0, 60_000)
+        assertEquals(SenderRotation.Pick.Account(1), r.pick())
+        r.sent(1, 2_000)
+        assertEquals(SenderRotation.Pick.Account(1), r.pick())
+    }
+
+    @Test
+    fun aFailedAccountIsSkippedEvenInItsTurn() {
+        val r = SenderRotation(2, now = { 0L }, turnSize = 3)
+        r.pick(); r.sent(0, 1_000)
+        assertEquals(SenderRotation.Pick.Account(1), r.pick(exclude = setOf(0)))
+    }
+
+    @Test
+    fun turnOfOneIsTheOldRoundRobin() {
+        var now = 0L
+        val r = SenderRotation(2, now = { now }, turnSize = 1)
+        assertEquals(SenderRotation.Pick.Account(0), r.pick()); r.sent(0, 0)
+        assertEquals(SenderRotation.Pick.Account(1), r.pick()); r.sent(1, 0)
+        assertEquals(SenderRotation.Pick.Account(0), r.pick())
+    }
+
+    @Test
+    fun botRules() {
+        val user = org.tgbackup.app.data.Account(id = "u", phone = "+1")
+        val bot = org.tgbackup.app.data.Account(id = "b", botToken = "1:x")
+        kotlin.test.assertNull(botRule(listOf(user, bot), viaTakeout = false))
+        kotlin.test.assertNotNull(botRule(listOf(bot), viaTakeout = false))
+        kotlin.test.assertNotNull(botRule(listOf(user, bot), viaTakeout = true))
+        kotlin.test.assertNull(botRule(listOf(user), viaTakeout = true))
+        assertEquals(20, senderLimit(25, isBot = true))
+        assertEquals(20, senderLimit(0, isBot = true))
+        assertEquals(10, senderLimit(10, isBot = true))
+        assertEquals(25, senderLimit(25, isBot = false))
+        assertEquals(0, senderLimit(0, isBot = false))
+    }
 }

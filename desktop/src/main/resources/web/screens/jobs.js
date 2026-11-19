@@ -49,7 +49,7 @@ const MODES = [
 ];
 const NEW_JOB = {
   id: '', name: '', source: '', target: '', mediaType: 'VIDEO_DOC', mediaTypes: ['VIDEO', 'FILE', 'MUSIC', 'VOICE'], extensions: '',
-  mode: 'ORDERED', accountIds: [],
+  mode: 'ORDERED', accountIds: [], messagesPerTurn: 3,
   startFromId: 0, stripLinks: true, skipArabic: false, perMinuteLimit: 25, viaTakeout: false,
 };
 const IDLE = { running: false, paused: false, phase: '', lastId: 0, sourceTitle: '', isProtected: false, copied: 0, failed: 0, lastLink: null, lastTargetLink: null, latestLink: null,
@@ -381,17 +381,22 @@ function jobDialog(initial, state) {
       },
     });
     input.checked = selected.has(acc.id);
-    const label = (blank(acc.name) ? acc.phone : acc.name) + (taken ? ' (משויך למשימה אחרת)' : '');
+    const label = (acc.isBot ? '🤖 ' : '') + (blank(acc.name) ? (acc.isBot ? 'בוט' : acc.phone) : acc.name)
+      + (taken ? ' (משויך למשימה אחרת)' : '');
     return h('label', { class: `check-row${taken ? ' taken' : ''}` }, input, h('span', {}, label));
   });
 
   const takeout = toggle('  📡 העתקה בלי הורדה (דרך סשן הייצוא)', initial.viaTakeout, () => update());
   const takeoutHelp = h('div', { class: 'small' },
     'עובד גם בערוצים מוגנים וחסומים. ' + 'בפעם הראשונה טלגרם עשוי לבקש לאשר את הייצוא בהודעת שירות.');
+  const perTurn = textField('הודעות בכל תור (כל חשבון שולח כמה הודעות ברצף, 1–10)', String(initial.messagesPerTurn ?? 3), { inputmode: 'numeric' });
+  digitsOnly(perTurn.input);
+  const botNote = h('div', { class: 'error-text' });
   // The mode is kept (not reset) while the section is hidden.
   const modeSection = h('div', { class: 'section' },
     h('div', { class: 'section-label' }, 'מצב עבודה'),
-    radios('job-mode', MODES, mode, (v) => { mode = v; }),
+    radios('job-mode', MODES, mode, (v) => { mode = v; update(); }),
+    perTurn.row,
   );
 
   const startFrom = textField("התחל מהודעה מס' (ריק = להמשיך מאיפה שעצר)", initial.startFromId > 0 ? String(initial.startFromId) : '', { inputmode: 'numeric' });
@@ -439,6 +444,7 @@ function jobDialog(initial, state) {
       skipArabic: arabic.input.checked,
       perMinuteLimit: toInt(limit.input.value) ?? 25,
       viaTakeout: takeout.input.checked,
+      messagesPerTurn: Math.min(10, Math.max(1, toInt(perTurn.input.value) ?? 3)),
     };
     try {
       if (initial.id) await api('PUT', `/api/jobs/${encodeURIComponent(initial.id)}`, body);
@@ -473,6 +479,7 @@ function jobDialog(initial, state) {
       ),
       takeout.row,
       takeoutHelp,
+      botNote,
       modeSection,
       startFrom.row,
       limit.row,
@@ -485,6 +492,16 @@ function jobDialog(initial, state) {
   function update() {
     takeoutHelp.hidden = !takeout.input.checked;
     modeSection.hidden = selected.size <= 1;
+    perTurn.row.hidden = mode !== 'ORDERED';
+    // The server's botRule, shown before saving.
+    const chosenAccounts = accounts.filter((a) => selected.has(a.id));
+    const bots = chosenAccounts.filter((a) => a.isBot);
+    botNote.textContent = bots.length && bots.length === chosenAccounts.length
+      ? 'משימה עם בוט צריכה גם חשבון רגיל אחד לפחות — הוא זה שקורא את המקור'
+      : bots.length && takeout.input.checked
+        ? 'העתקה בלי הורדה לא עובדת עם בוטים — הסר את הבוט או כבה את "בלי הורדה"'
+        : '';
+    botNote.hidden = !botNote.textContent;
     limitWarning.hidden = !limitWarns(limit.input.value);
     const all = chosen.has('ALL');
     extensions.input.disabled = all;
@@ -493,7 +510,7 @@ function jobDialog(initial, state) {
     noContent.hidden = !nothing;
     // A start id beyond what a JSON number keeps exactly is refused, not saved as 0.
     const startBad = startFrom.input.value !== '' && toLong(startFrom.input.value) === null;
-    dialog.okButton.disabled = blank(source.input.value) || blank(target.input.value) || selected.size === 0 || startBad || nothing;
+    dialog.okButton.disabled = blank(source.input.value) || blank(target.input.value) || selected.size === 0 || startBad || nothing || !botNote.hidden;
   }
   for (const f of [source, target, startFrom, extensions, limit]) f.input.addEventListener('input', update);
   update();

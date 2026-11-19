@@ -556,3 +556,41 @@ test('with an account there is no how-to card, the short note stays', async ({ p
     await page.request.delete(`/api/accounts/${id}`);
   }
 });
+
+test('a bot: 🤖 הוסף בוט takes a name and a token, uses the first account API ID, and its card has no export session', async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const bot = `bot-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  let botId = null;
+  try {
+    await open(page);
+    await page.getByRole('button', { name: '🤖 הוסף בוט' }).click();
+    const dialog = page.getByRole('dialog', { name: 'בוט חדש' });
+    const save = dialog.getByRole('button', { name: 'שמור' });
+    await dialog.getByLabel('שם').fill(bot);
+    await expect(save).toBeDisabled();
+    await dialog.getByLabel('טוקן הבוט (מ-@BotFather)').fill('123');
+    await expect(save).toBeDisabled();
+    await dialog.getByLabel('טוקן הבוט (מ-@BotFather)').fill('123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(dialog).toBeHidden();
+    const s = await state(page.request);
+    const saved = s.accounts.find((a) => a.name === bot);
+    botId = saved.id;
+    expect(saved.isBot).toBe(true);
+    expect(saved.phone).toBe('');
+    expect(saved.apiId).toBe(s.accounts.find((a) => a.id === accId).apiId);
+    expect(JSON.stringify(s)).not.toContain('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    const c = card(page, bot);
+    await expect(c.locator('.account-title')).toHaveText(`🤖 ${bot}`);
+    await expect(c.getByRole('button', { name: 'חבר סשן ייצוא' })).toHaveCount(0);
+    await expect(c.getByRole('button', { name: 'התחבר (שלח קוד)' })).toHaveCount(0);
+    // A bad token is refused by the server too.
+    const res = await page.request.post('/api/accounts', { data: { name: 'x', botToken: 'nope', isBot: true } });
+    expect(res.ok()).toBeFalsy();
+  } finally {
+    if (botId) await page.request.delete(`/api/accounts/${botId}`);
+    await page.request.delete(`/api/accounts/${accId}`);
+  }
+});

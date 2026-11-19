@@ -101,7 +101,7 @@ class AccountClient(
     /** Every change of a chat's forwarding protection, as TDLib reports it (a running job follows its source's). */
     val protectionNotices: SharedFlow<ProtectionNotice> = _protectionNotices.asSharedFlow()
 
-    val tag: String get() = account.name.ifBlank { account.phone }
+    val tag: String get() = account.name.ifBlank { account.phone.ifBlank { if (account.isBot) "בוט" else "" } }
 
     /** TDLib's connection to Telegram over time (for the slow chat-finding report). */
     val connection = ConnectionLog()
@@ -130,7 +130,19 @@ class AccountClient(
     private fun onAuthState(state: AuthorizationState) {
         when (state) {
             is AuthorizationStateWaitTdlibParameters -> scope.launch { sendParameters() }
-            is AuthorizationStateWaitPhoneNumber -> _auth.value = AuthUi.NeedPhone
+            is AuthorizationStateWaitPhoneNumber -> if (account.isBot) {
+                // A bot has no phone or code: it logs in with its token at once.
+                scope.launch {
+                    val error = client.checkAuthenticationBotToken(account.botToken.trim()).errorText()
+                    _lastError.value = error
+                    if (error != null) {
+                        _auth.value = AuthUi.Unsupported("טוקן הבוט לא תקין ($error)")
+                        log.error("[$tag] התחברות הבוט נכשלה: $error")
+                    }
+                }
+            } else {
+                _auth.value = AuthUi.NeedPhone
+            }
             is AuthorizationStateWaitCode -> _auth.value = AuthUi.NeedCode
             is AuthorizationStateWaitPassword -> _auth.value = AuthUi.NeedPassword(state.passwordHint)
             is AuthorizationStateReady -> scope.launch {
@@ -258,6 +270,8 @@ class AccountClient(
 
     private suspend fun chatByIds(ids: List<Long>): Chat? {
         for (id in ids) chatById(id)?.let { return it }
+        // A bot has no chat lists to load: it knows the chats it is in.
+        if (account.isBot) return null
         // The chat may simply not be loaded into TDLib yet: load the chat lists page by page and stop as soon as it
         // is there. Loading every page first took minutes for an account with many chats, and made TDLib fetch the
         // full info of each one (dozens of requests to Telegram, FLOOD_WAITs).

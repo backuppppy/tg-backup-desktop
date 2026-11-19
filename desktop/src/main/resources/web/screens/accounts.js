@@ -39,7 +39,9 @@ export function render(root, state) {
       list: h('div', { class: 'accounts' }),
       note: h('p', { class: 'small accounts-note' }, 'API ID ו-API Hash מקבלים בכתובת my.telegram.org ← API development tools.'),
       howto: howtoCard(),
-      add: h('button', { type: 'button', class: 'full', onclick: () => accountDialog(null) }, '➕ הוסף חשבון'),
+      add: h('div', { class: 'accounts-add' },
+        h('button', { type: 'button', class: 'full', onclick: () => accountDialog(null) }, '➕ הוסף חשבון'),
+        h('button', { type: 'button', class: 'full outlined', onclick: () => botDialog(null) }, '🤖 הוסף בוט')),
       order: null,
     };
     root.replaceChildren(view.list);
@@ -209,12 +211,13 @@ function update(c, acc, state) {
   const authKey = JSON.stringify(auth);
   if (authKey !== c.authKey) {
     c.authKey = authKey;
-    if (ready) checkSession(c);
+    // A bot has no export session.
+    if (ready && !acc.isBot) checkSession(c);
     else { c.gen += 1; c.exportLoggedIn = null; }
   }
   c.authType = auth.type;
 
-  const line = ready ? exportLine(c, state.exportPrefs?.availableAt?.[acc.id]) : null;
+  const line = ready && !acc.isBot ? exportLine(c, state.exportPrefs?.availableAt?.[acc.id]) : null;
   const shown = { acc, auth, error, exportLine: line, busy: c.busy, exportBusy: c.exportBusy, exportLoggedIn: c.exportLoggedIn };
   const key = JSON.stringify(shown);
   if (c.shownKey === key) return;
@@ -222,11 +225,13 @@ function update(c, acc, state) {
   c.shown = shown;
 
   // A Latin display name keeps its own order (`(@user)`) inside the RTL line.
-  const authText = ready ? ['✅ סשן רגיל: מחובר כ-', h('bdi', {}, auth.display ?? '')] : `📱 סשן רגיל: ${auth.label}`;
+  const authText = acc.isBot
+    ? (ready ? ['🤖 בוט מחובר כ-', h('bdi', {}, auth.display ?? '')] : `🤖 בוט: ${auth.label}`)
+    : ready ? ['✅ סשן רגיל: מחובר כ-', h('bdi', {}, auth.display ?? '')] : `📱 סשן רגיל: ${auth.label}`;
   const authCls = ready ? 'ok-color' : auth.type === 'Unsupported' ? 'error-color' : '';
   c.top.replaceChildren(...[
-    h('h3', { class: 'account-title' }, blank(acc.name) ? 'ללא שם' : acc.name),
-    h('div', { class: 'small account-phone', dir: 'rtl' }, h('bdi', {}, acc.phone)),
+    h('h3', { class: 'account-title' }, `${acc.isBot ? '🤖 ' : ''}${blank(acc.name) ? (acc.isBot ? 'בוט' : 'ללא שם') : acc.name}`),
+    acc.isBot ? null : h('div', { class: 'small account-phone', dir: 'rtl' }, h('bdi', {}, acc.phone)),
     h('div', { class: `account-auth ${authCls}` }, authText),
     error != null ? h('div', { class: 'small account-error error-color' }, error) : null,
     line ? h('div', { class: `small account-export ${line.cls}` }, line.text) : null,
@@ -256,7 +261,9 @@ function update(c, acc, state) {
     }
   };
   let exportButton = null;
-  if (ready && c.exportLoggedIn === false) {
+  if (acc.isBot) {
+    exportButton = null;
+  } else if (ready && c.exportLoggedIn === false) {
     exportButton = h('button', { type: 'button', class: 'outlined', disabled: c.exportBusy, onclick: () => exportLogin(c) },
       c.exportBusy ? 'מחבר…' : 'חבר סשן ייצוא');
   } else if (ready && c.exportLoggedIn === true) {
@@ -265,7 +272,7 @@ function update(c, acc, state) {
   }
   c.bottom.replaceChildren(...[
     h('div', { class: 'row' },
-      h('button', { type: 'button', class: 'outlined', onclick: () => accountDialog(acc) }, 'ערוך'),
+      h('button', { type: 'button', class: 'outlined', onclick: () => (acc.isBot ? botDialog(acc) : accountDialog(acc)) }, 'ערוך'),
       canLogout
         ? h('button', { type: 'button', class: 'outlined', disabled: c.busy, onclick: () => act(c, () => api('POST', `/api/accounts/${enc(acc.id)}/logout`)) }, 'התנתק')
         : null,
@@ -342,6 +349,45 @@ function accountDialog(initial) {
     dialog.okButton.disabled = toInt(apiId.input.value) === null || !hashOk() || blank(phone.input.value);
   };
   for (const f of [apiId, apiHash, phone]) f.input.addEventListener('input', updateOk);
+  updateOk();
+  return dialog;
+}
+
+/** A token as @BotFather gives it: the bot's id, a colon, and the secret. */
+const BOT_TOKEN = /^\d{5,}:[A-Za-z0-9_-]{30,}$/;
+
+/**
+ * The bot dialog: a name and the token from @BotFather. The API ID / hash come from the first regular account (the
+ * server copies them). On an edit a blank token keeps the stored one (the token is never sent to the page).
+ */
+function botDialog(initial) {
+  const editing = !!initial;
+  const name = textField('שם', initial?.name ?? '');
+  const token = textField(editing ? 'טוקן הבוט (ריק = להשאיר את הקיים)' : 'טוקן הבוט (מ-@BotFather)', '', { spellcheck: 'false', dir: 'ltr' });
+  const help = h('div', { class: 'small' },
+    'הבוט עוזר רק בשליחה: במשימה צריך גם חשבון רגיל, שקורא את המקור. ',
+    'מוסיפים את הבוט כמנהל בערוץ היעד, וכחבר או מנהל בערוץ המקור. בוט לא עובד עם "בלי הורדה".');
+  const tokenOk = () => BOT_TOKEN.test(token.input.value.trim()) || (editing && blank(token.input.value));
+  const save = async () => {
+    const body = { name: name.input.value.trim(), botToken: token.input.value.trim(), isBot: true };
+    try {
+      if (editing) await api('PUT', `/api/accounts/${enc(initial.id)}`, body);
+      else await api('POST', '/api/accounts', body);
+      return true;
+    } catch (e) {
+      toast(e.message);
+      return false;
+    }
+  };
+  const dialog = formDialog({
+    title: editing ? 'עריכת בוט' : 'בוט חדש',
+    okText: 'שמור',
+    okClass: '',
+    onOk: save,
+    content: [name.row, token.row, help],
+  });
+  const updateOk = () => { dialog.okButton.disabled = !tokenOk(); };
+  token.input.addEventListener('input', updateOk);
   updateOk();
   return dialog;
 }

@@ -83,7 +83,7 @@ class DtoTest {
         assertEquals("FAST", o["mode"]!!.jsonPrimitive.content)
         assertEquals("""["PHOTO","FILE"]""", o["mediaTypes"].toString())
         assertEquals("pdf", o["extensions"]!!.jsonPrimitive.content)
-        assertEquals(14, o.size, o.toString())
+        assertEquals(15, o.size, o.toString())
     }
 
     @Test

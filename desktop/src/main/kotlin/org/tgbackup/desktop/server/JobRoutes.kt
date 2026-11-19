@@ -21,6 +21,8 @@ import org.tgbackup.app.data.Config
 import org.tgbackup.app.data.Job
 import org.tgbackup.app.data.JobMode
 import org.tgbackup.app.data.MediaType
+import org.tgbackup.app.engine.MAX_MESSAGES_PER_TURN
+import org.tgbackup.app.engine.botRule
 import org.tgbackup.app.engine.copiesNothing
 import org.tgbackup.app.engine.legacyMediaType
 import org.tgbackup.app.engine.normalizeTypes
@@ -49,6 +51,7 @@ data class JobInput(
     /** The editor's multi-select; null = an older client that sends only [mediaType]. */
     val mediaTypes: List<MediaType>? = null,
     val extensions: String = "",
+    val messagesPerTurn: Int = 3,
 )
 
 /** A refused command: answered as `{"error": message}` with [status]. */
@@ -79,6 +82,7 @@ internal fun JobInput.toJob(id: String, cfg: Config): Job {
         mediaTypes = types,
         extensions = if (types != null && MediaType.ALL in types) "" else extensions.trim(),
         mode = mode,
+        messagesPerTurn = messagesPerTurn.coerceIn(1, MAX_MESSAGES_PER_TURN),
         accountIds = cfg.accounts.filter { it.id in selected }.map { it.id },
         startFromId = startFromId.coerceAtLeast(0),
         stripLinks = stripLinks,
@@ -93,6 +97,7 @@ internal fun JobInput.toJob(id: String, cfg: Config): Job {
 internal fun validateJob(job: Job, cfg: Config) {
     if (job.source.isBlank() || job.target.isBlank()) throw Refusal(HttpStatusCode.BadRequest, MSG_NO_SOURCE_OR_TARGET)
     if (job.accountIds.isEmpty()) throw Refusal(HttpStatusCode.BadRequest, MSG_NO_ACCOUNTS)
+    botRule(cfg.accounts.filter { it.id in job.accountIds }, job.viaTakeout)?.let { throw Refusal(HttpStatusCode.BadRequest, it) }
     val types = job.mediaTypes
     if (types != null && copiesNothing(types, job.extensions)) {
         throw Refusal(HttpStatusCode.BadRequest, MSG_NO_CONTENT)

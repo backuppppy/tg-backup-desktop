@@ -24,9 +24,17 @@ import org.tgbackup.export.ProcessingState
 /** The engine state as JSON. Nothing here carries a secret: accounts expose [AccountDto.hasApiHash] only. */
 
 @Serializable
-data class AccountDto(val id: String, val name: String, val apiId: Int, val hasApiHash: Boolean, val phone: String)
+data class AccountDto(
+    val id: String,
+    val name: String,
+    val apiId: Int,
+    val hasApiHash: Boolean,
+    val phone: String,
+    /** A bot (its token is never sent to the screens). */
+    val isBot: Boolean = false,
+)
 
-fun Account.toDto() = AccountDto(id, name, apiId, apiHash.isNotBlank(), phone)
+fun Account.toDto() = AccountDto(id, name, apiId, apiHash.isNotBlank(), phone, isBot)
 
 @Serializable
 data class JobDto(
@@ -44,11 +52,12 @@ data class JobDto(
     val viaTakeout: Boolean,
     val mediaTypes: List<MediaType>?,
     val extensions: String,
+    val messagesPerTurn: Int,
 )
 
 fun Job.toDto() = JobDto(
     id, name, source, target, mediaType, mode, accountIds, startFromId, stripLinks, skipArabic, perMinuteLimit, viaTakeout,
-    mediaTypes, extensions,
+    mediaTypes, extensions, messagesPerTurn,
 )
 
 @Serializable

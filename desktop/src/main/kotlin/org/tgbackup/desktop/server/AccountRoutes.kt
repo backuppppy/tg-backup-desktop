@@ -39,7 +39,17 @@ data class AccountInput(
     val apiId: JsonPrimitive = JsonNull,
     val apiHash: String = "",
     val phone: String = "",
+    /** A bot's token; on PUT, blank keeps the stored one. A bot needs no phone. */
+    val botToken: String = "",
+    /** True for the "🤖 הוסף בוט" dialog (also when its token field is left blank on an edit). */
+    val isBot: Boolean = false,
 )
+
+internal const val MSG_BAD_BOT_TOKEN = "טוקן הבוט לא תקין — הוא נראה כך: 123456789:AA... (מ-@BotFather)"
+internal const val MSG_BOT_NO_API = "לבוט צריך API ID ו-API Hash — הוסף קודם חשבון רגיל, והבוט ישתמש בשלו"
+
+/** A token as @BotFather gives it: the bot's id, a colon, and the secret. */
+internal fun isBotToken(s: String): Boolean = Regex("""^\d{5,}:[A-Za-z0-9_-]{30,}$""").matches(s.trim())
 
 @Serializable
 data class CodeInput(val code: String = "")
@@ -51,10 +61,24 @@ data class PasswordInput(val password: String = "")
  * The dialog's save rule: `apiId` is digits that fit an Int, `apiHash.length >= 16`, `phone` not blank. Texts
  * are trimmed like the dialog does. [storedHash] replaces [MASKED_HASH] (PUT only).
  */
-internal fun AccountInput.toAccount(id: String, storedHash: String?): Account {
+internal fun AccountInput.toAccount(
+    id: String,
+    storedHash: String?,
+    /** The stored token of the bot being edited (a blank field keeps it). */
+    storedToken: String = "",
+    /** The first regular account: a bot without its own API ID / hash uses its ones. */
+    apiFrom: Account? = null,
+): Account {
     val idText = if (apiId is JsonNull) "" else apiId.content.trim()
     val parsedId = if (idText.isNotEmpty() && idText.all { it in '0'..'9' }) idText.toIntOrNull() else null
     val hash = if (storedHash != null && apiHash == MASKED_HASH) storedHash else apiHash.trim()
+    if (isBot || botToken.isNotBlank()) {
+        val token = botToken.trim().ifBlank { storedToken }
+        if (!isBotToken(token)) throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_BOT_TOKEN)
+        val (botId, botHash) = if (parsedId != null && hash.length >= 16) parsedId to hash
+        else apiFrom?.let { it.apiId to it.apiHash } ?: throw Refusal(HttpStatusCode.BadRequest, MSG_BOT_NO_API)
+        return Account(id = id, name = name.trim(), apiId = botId, apiHash = botHash, botToken = token)
+    }
     if (parsedId == null || hash.length < 16 || phone.isBlank()) throw Refusal(HttpStatusCode.BadRequest, MSG_BAD_ACCOUNT)
     return Account(id = id, name = name.trim(), apiId = parsedId, apiHash = hash, phone = phone.trim())
 }
@@ -91,7 +115,8 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks, handles: ChatHandl
             val input = call.receive<AccountInput>()
             command {
                 locks.config {
-                    val acc = input.toAccount(newAccountId(store.config.value), storedHash = null)
+                    val cfg = store.config.value
+                    val acc = input.toAccount(newAccountId(cfg), storedHash = null, apiFrom = cfg.accounts.firstOrNull { !it.isBot })
                     store.updateConfig { it.withAccount(acc) }
                 }
             }
@@ -102,7 +127,11 @@ fun Route.accountRoutes(app: DesktopApp, locks: CommandLocks, handles: ChatHandl
                 val id = idParam()
                 val input = call.receive<AccountInput>()
                 locks.config {
-                    val acc = input.toAccount(id, storedHash = find(id).apiHash)
+                    val old = find(id)
+                    val acc = input.toAccount(
+                        id, storedHash = old.apiHash, storedToken = old.botToken,
+                        apiFrom = store.config.value.accounts.firstOrNull { !it.isBot },
+                    )
                     store.updateConfig { it.withAccount(acc) }
                 }
             }

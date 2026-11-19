@@ -831,3 +831,49 @@ test('the per-minute limit warns above 30 and at 0, never at 25 or 30', async ({
   }
   await dialog.getByRole('button', { name: 'ביטול' }).click();
 });
+
+test('turns and bots: הודעות בכל תור shows in ordered mode; a bot alone or with בלי הורדה cannot be saved', async ({ page }) => {
+  const acc = `acc-${uid()}`;
+  const acc2 = `acc-${uid()}`;
+  const accId = await addAccount(page.request, acc);
+  const acc2Id = await addAccount(page.request, acc2);
+  const botRes = await page.request.post('/api/accounts', { data: { name: `bot-${uid()}`, botToken: '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', isBot: true } });
+  expect(botRes.ok(), await botRes.text()).toBeTruthy();
+  const bot = (await state(page.request)).accounts.find((a) => a.isBot);
+  try {
+    await open(page);
+    await page.getByRole('button', { name: '➕ הוסף משימה' }).click();
+    const dialog = page.getByRole('dialog', { name: 'משימה חדשה' });
+    await dialog.getByLabel('מקור: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@a');
+    await dialog.getByLabel('יעד: מזהה (עם או בלי ‎-100) / @username / קישור').fill('@b');
+    const save = dialog.getByRole('button', { name: 'שמור' });
+    const perTurn = dialog.getByLabel('הודעות בכל תור (כל חשבון שולח כמה הודעות ברצף, 1–10)');
+    await dialog.getByRole('checkbox', { name: `🤖 ${bot.name}`, exact: true }).check();
+    await expect(dialog.getByText('משימה עם בוט צריכה גם חשבון רגיל אחד לפחות — הוא זה שקורא את המקור')).toBeVisible();
+    await expect(save).toBeDisabled();
+    await dialog.getByRole('checkbox', { name: acc, exact: true }).check();
+    await expect(save).toBeEnabled();
+    await expect(perTurn).toBeVisible();
+    await expect(perTurn).toHaveValue('3');
+    await dialog.getByRole('radio', { name: '⚡ מהיר — כל חשבון מטפל בקטע משלו (סדר מבולגן)' }).check();
+    await expect(perTurn).toBeHidden();
+    await dialog.getByRole('radio', { name: '📑 מסודר — שומר על הסדר של המקור' }).check();
+    await dialog.getByRole('switch', { name: '📡 העתקה בלי הורדה (דרך סשן הייצוא)' }).check();
+    await expect(dialog.getByText('העתקה בלי הורדה לא עובדת עם בוטים — הסר את הבוט או כבה את "בלי הורדה"')).toBeVisible();
+    await expect(save).toBeDisabled();
+    await dialog.getByRole('switch', { name: '📡 העתקה בלי הורדה (דרך סשן הייצוא)' }).uncheck();
+    await perTurn.fill('5');
+    await save.click();
+    await expect(dialog).toBeHidden();
+    const job = (await state(page.request)).jobs.find((j) => j.accountIds.includes(bot.id));
+    expect(job.messagesPerTurn).toBe(5);
+    await page.request.delete(`/api/jobs/${job.id}`);
+    // The server refuses a job of bots only.
+    const r = await page.request.post('/api/jobs', { data: { name: `n-${uid()}`, source: '@a', target: '@b', accountIds: [bot.id] } });
+    expect(r.ok()).toBeFalsy();
+  } finally {
+    await page.request.delete(`/api/accounts/${bot.id}`);
+    await page.request.delete(`/api/accounts/${accId}`);
+    await page.request.delete(`/api/accounts/${acc2Id}`);
+  }
+});
