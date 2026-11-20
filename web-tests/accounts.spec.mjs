@@ -567,6 +567,7 @@ test('a bot: 🤖 הוסף בוט takes a name and a token, uses the first accou
     await page.getByRole('button', { name: '🤖 הוסף בוט' }).click();
     const dialog = page.getByRole('dialog', { name: 'בוט חדש' });
     const save = dialog.getByRole('button', { name: 'שמור' });
+    await expect(dialog.getByText('⚠️ בוט לא יכול לעבוד לבד: בכל משימה עם בוט חובה לצרף גם חשבון רגיל.', { exact: false })).toBeVisible();
     await dialog.getByLabel('שם').fill(bot);
     await expect(save).toBeDisabled();
     await dialog.getByLabel('טוקן הבוט (מ-@BotFather)').fill('123');
@@ -584,6 +585,7 @@ test('a bot: 🤖 הוסף בוט takes a name and a token, uses the first accou
     expect(JSON.stringify(s)).not.toContain('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
     const c = card(page, bot);
     await expect(c.locator('.account-title')).toHaveText(`🤖 ${bot}`);
+    await expect(c.locator('.bot-note')).toHaveText('⚠️ חובה לצרף גם חשבון רגיל למשימה');
     await expect(c.getByRole('button', { name: 'חבר סשן ייצוא' })).toHaveCount(0);
     await expect(c.getByRole('button', { name: 'התחבר (שלח קוד)' })).toHaveCount(0);
     // A bad token is refused by the server too.

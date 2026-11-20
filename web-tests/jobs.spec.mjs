@@ -849,7 +849,7 @@ test('turns and bots: הודעות בכל תור shows in ordered mode; a bot al
     const save = dialog.getByRole('button', { name: 'שמור' });
     const perTurn = dialog.getByLabel('הודעות בכל תור (כל חשבון שולח כמה הודעות ברצף, 1–10)');
     await dialog.getByRole('checkbox', { name: `🤖 ${bot.name}`, exact: true }).check();
-    await expect(dialog.getByText('משימה עם בוט צריכה גם חשבון רגיל אחד לפחות — הוא זה שקורא את המקור')).toBeVisible();
+    await expect(dialog.getByText('חובה לצרף גם חשבון רגיל למשימה — בוט לבד לא יכול לקרוא את המקור')).toBeVisible();
     await expect(save).toBeDisabled();
     await dialog.getByRole('checkbox', { name: acc, exact: true }).check();
     await expect(save).toBeEnabled();

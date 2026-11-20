@@ -75,6 +75,23 @@ class JobManagerTest {
     }
 
     @Test
+    fun startRejectsAJobWithBotsOnly() {
+        val dir = dataDir()
+        val store = Store(dir)
+        store.updateConfig {
+            it.copy(
+                accounts = listOf(org.tgbackup.app.data.Account(id = "b", botToken = "1:x")),
+                jobs = listOf(Job(id = "j1", source = "src", target = "dst", accountIds = listOf("b"))),
+            )
+        }
+        val jobs = manager(store, dir)
+
+        assertEquals(MSG_BOT_NEEDS_REGULAR, jobs.start("j1"))
+        assertTrue(store.config.value.autoResume.isEmpty())
+        assertFalse(jobs.isRunning("j1"))
+    }
+
+    @Test
     fun startRejectsMissingSourceOrTarget() {
         val dir = dataDir()
         val store = Store(dir)

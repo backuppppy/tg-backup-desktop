@@ -231,7 +231,9 @@ function update(c, acc, state) {
   const authCls = ready ? 'ok-color' : auth.type === 'Unsupported' ? 'error-color' : '';
   c.top.replaceChildren(...[
     h('h3', { class: 'account-title' }, `${acc.isBot ? '🤖 ' : ''}${blank(acc.name) ? (acc.isBot ? 'בוט' : 'ללא שם') : acc.name}`),
-    acc.isBot ? null : h('div', { class: 'small account-phone', dir: 'rtl' }, h('bdi', {}, acc.phone)),
+    acc.isBot
+      ? h('div', { class: 'small bot-note' }, '⚠️ חובה לצרף גם חשבון רגיל למשימה')
+      : h('div', { class: 'small account-phone', dir: 'rtl' }, h('bdi', {}, acc.phone)),
     h('div', { class: `account-auth ${authCls}` }, authText),
     error != null ? h('div', { class: 'small account-error error-color' }, error) : null,
     line ? h('div', { class: `small account-export ${line.cls}` }, line.text) : null,
@@ -364,8 +366,10 @@ function botDialog(initial) {
   const editing = !!initial;
   const name = textField('שם', initial?.name ?? '');
   const token = textField(editing ? 'טוקן הבוט (ריק = להשאיר את הקיים)' : 'טוקן הבוט (מ-@BotFather)', '', { spellcheck: 'false', dir: 'ltr' });
+  // Someone who adds a bot may think a bot alone is enough: the rule comes first, before the fields.
+  const must = h('div', { class: 'bot-note bot-note-strong' },
+    '⚠️ בוט לא יכול לעבוד לבד: בכל משימה עם בוט חובה לצרף גם חשבון רגיל. החשבון הרגיל קורא את המקור, והבוט עוזר לו לשלוח.');
   const help = h('div', { class: 'small' },
-    'הבוט עוזר רק בשליחה: במשימה צריך גם חשבון רגיל, שקורא את המקור. ',
     'מוסיפים את הבוט כמנהל בערוץ היעד, וכחבר או מנהל בערוץ המקור. בוט לא עובד עם "בלי הורדה".');
   const tokenOk = () => BOT_TOKEN.test(token.input.value.trim()) || (editing && blank(token.input.value));
   const save = async () => {
@@ -384,7 +388,7 @@ function botDialog(initial) {
     okText: 'שמור',
     okClass: '',
     onOk: save,
-    content: [name.row, token.row, help],
+    content: [must, name.row, token.row, help],
   });
   const updateOk = () => { dialog.okButton.disabled = !tokenOk(); };
   token.input.addEventListener('input', updateOk);

@@ -497,7 +497,7 @@ function jobDialog(initial, state) {
     const chosenAccounts = accounts.filter((a) => selected.has(a.id));
     const bots = chosenAccounts.filter((a) => a.isBot);
     botNote.textContent = bots.length && bots.length === chosenAccounts.length
-      ? 'משימה עם בוט צריכה גם חשבון רגיל אחד לפחות — הוא זה שקורא את המקור'
+      ? 'חובה לצרף גם חשבון רגיל למשימה — בוט לבד לא יכול לקרוא את המקור'
       : bots.length && takeout.input.checked
         ? 'העתקה בלי הורדה לא עובדת עם בוטים — הסר את הבוט או כבה את "בלי הורדה"'
         : '';
