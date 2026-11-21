@@ -33,12 +33,12 @@ class JobManagerTest {
     private fun dataDir(): File =
         Files.createTempDirectory("jobs").resolve("תיקייה עם רווח").toFile().apply { mkdirs() }
 
-    private fun manager(store: Store, dir: File, latestTick: Long = 3_600_000): JobManager {
+    private fun manager(store: Store, dir: File, latestTick: Long = 3_600_000, latestRetry: Long = 20_000): JobManager {
         val log = LogBus(dir)
         // No account is configured, so no job reaches the runner and exports is never invoked.
         // A slow CI machine can miss a 50 ms tick, so these real-time tests do not cap a segment at two ticks
         // (that cap is tested with a hand-moved clock).
-        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50, latestTick = latestTick, maxSegment = 60_000) { error("unused") }
+        return JobManager(store, AccountManager(dir, log), log, scope, runTick = 50, latestTick = latestTick, latestRetry = latestRetry, maxSegment = 60_000) { error("unused") }
     }
 
     private fun waitUntil(what: String, timeoutMs: Long = 5_000, cond: () -> Boolean) {
@@ -502,7 +502,7 @@ class JobManagerTest {
         val store = storeWithIdleJob(dir)
         val jobs = manager(store, dir, latestTick = 50)
         val refreshes = AtomicInteger()
-        jobs.periodicRefresh = { id -> assertEquals("j1", id); refreshes.incrementAndGet() }
+        jobs.periodicRefresh = { id -> assertEquals("j1", id); refreshes.incrementAndGet().toLong() }
 
         Thread.sleep(300)
         assertEquals(0, refreshes.get(), "a stopped job is not refreshed")
@@ -515,6 +515,39 @@ class JobManagerTest {
         val atStop = refreshes.get()
         Thread.sleep(300)
         assertEquals(atStop, refreshes.get(), "the refresh ends with the run")
+    }
+
+    @Test
+    fun everyRunReadsItsLatestIdAtItsStartEvenWhenOneIsSaved() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir, Progress(lastId = 40, latestId = 40))
+        val jobs = manager(store, dir)
+        val refreshes = AtomicInteger()
+        jobs.periodicRefresh = { refreshes.incrementAndGet().toLong() }
+
+        assertNull(jobs.start("j1"))
+        waitUntil("the run read the latest id at its start, not an hour later") { refreshes.get() == 1 }
+        Thread.sleep(300)
+        assertEquals(1, refreshes.get(), "one successful read at the start is enough")
+        jobs.stop("j1")
+        waitUntil("job stopped") { !jobs.status().running }
+    }
+
+    @Test
+    fun aFailedReadAtTheStartIsTriedAgainAFewTimes() {
+        val dir = dataDir()
+        val store = storeWithIdleJob(dir)
+        val jobs = manager(store, dir, latestRetry = 50)
+        val refreshes = AtomicInteger()
+        // No account ready yet twice, then the read succeeds.
+        jobs.periodicRefresh = { if (refreshes.incrementAndGet() < 3) null else 99L }
+
+        assertNull(jobs.start("j1"))
+        waitUntil("tried until the read succeeded") { refreshes.get() == 3 }
+        Thread.sleep(300)
+        assertEquals(3, refreshes.get(), "no more tries after a successful read")
+        jobs.stop("j1")
+        waitUntil("job stopped") { !jobs.status().running }
     }
 
     @Test
